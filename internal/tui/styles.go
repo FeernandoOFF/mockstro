@@ -1,0 +1,108 @@
+package tui
+
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+)
+
+var (
+	colAccent = lipgloss.AdaptiveColor{Light: "#5B4BDB", Dark: "#A59BFF"}
+	colMuted  = lipgloss.AdaptiveColor{Light: "#6B6B76", Dark: "#8A8A96"}
+	colOK     = lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#56D364"}
+	colBad    = lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#FF7B72"}
+	colWarn   = lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#E3B341"}
+	colBorder = lipgloss.AdaptiveColor{Light: "#D0D0D8", Dark: "#3A3A46"}
+
+	sTitle     = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+	sMuted     = lipgloss.NewStyle().Foreground(colMuted)
+	sOK        = lipgloss.NewStyle().Foreground(colOK)
+	sBad       = lipgloss.NewStyle().Foreground(colBad)
+	sWarn      = lipgloss.NewStyle().Foreground(colWarn)
+	sBold      = lipgloss.NewStyle().Bold(true)
+	sSel       = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
+	sTab       = lipgloss.NewStyle().Padding(0, 1).Foreground(colMuted)
+	sTabActive = lipgloss.NewStyle().Padding(0, 1).Foreground(colAccent).Bold(true).Underline(true)
+	sPanel     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colBorder).Padding(0, 1)
+	sHelp      = lipgloss.NewStyle().Foreground(colMuted)
+)
+
+func panel(title, body string, w, h int) string {
+	if w < 10 {
+		w = 10
+	}
+	if h < 3 {
+		h = 3
+	}
+	inner := h - 3
+	lines := strings.Split(body, "\n")
+	if len(lines) > inner {
+		lines = lines[:inner]
+	}
+	for i, l := range lines {
+		lines[i] = truncate(l, w-4)
+	}
+	content := sTitle.Render(title) + "\n" + strings.Join(lines, "\n")
+	return sPanel.Width(w - 2).Height(h - 2).Render(content)
+}
+
+func truncate(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	// ANSI-aware: keeps colours on the part that fits.
+	return ansi.Truncate(s, w, "…")
+}
+
+func stripANSI(s string) string {
+	var b strings.Builder
+	in := false
+	for _, r := range s {
+		switch {
+		case r == 0x1b:
+			in = true
+		case in && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'):
+			in = false
+		case !in:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func statusStyle(pass bool, stage string) string {
+	if pass {
+		return sOK.Render("PASS")
+	}
+	switch stage {
+	case "UNSTARTED", "INTERRUPTED", "CANCELLED":
+		return sWarn.Render(stage)
+	}
+	return sBad.Render("FAIL")
+}
+
+// window returns the [start,end) slice of n items keeping cursor visible in height rows.
+func window(n, cursor, height int) (int, int) {
+	if height <= 0 || n <= height {
+		return 0, n
+	}
+	start := cursor - height/2
+	if start < 0 {
+		start = 0
+	}
+	if start+height > n {
+		start = n - height
+	}
+	return start, start + height
+}
+
+func pad(s string, w int) string {
+	if gap := w - lipgloss.Width(s); gap > 0 {
+		return s + strings.Repeat(" ", gap)
+	}
+	return truncate(s, w)
+}
