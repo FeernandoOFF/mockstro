@@ -7,16 +7,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/feernandooff/trun/internal/execx"
+	"github.com/feernandooff/trun/internal/fsx"
 	"github.com/feernandooff/trun/internal/ojson"
 	"github.com/feernandooff/trun/internal/project"
 	"github.com/feernandooff/trun/internal/registry"
-	"github.com/feernandooff/trun/internal/wiremock"
 )
 
 var iosEnvKeys = []string{"E2E_API_URL", "E2E_RUN_ID", "E2E_REMOTE_CONFIG", "E2E_EXPIRES_AT"}
@@ -36,8 +37,6 @@ type simDevice struct {
 	State       string `json:"state"`
 	IsAvailable bool   `json:"isAvailable"`
 }
-
-func (i *IOS) Name() string { return "ios" }
 
 func (i *IOS) simctl(ctx context.Context, args ...string) (string, error) {
 	return i.Exec.Output(ctx, execx.Cmd{Name: "xcrun", Args: append([]string{"simctl"}, args...)})
@@ -101,7 +100,7 @@ func (i *IOS) Bootable(ctx context.Context) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, s := range i.sims(ctx, false) {
-		if contains(des, s.Name) && !seen[s.Name] && s.State != "Booted" {
+		if slices.Contains(des, s.Name) && !seen[s.Name] && s.State != "Booted" {
 			seen[s.Name] = true
 			out = append(out, s.Name)
 		}
@@ -202,7 +201,7 @@ func (i *IOS) Build(ctx context.Context, artifactDir string, out io.Writer) (str
 // A bundle is a directory, so hash its executable.
 func (i *IOS) ArtifactSHA(path string) (string, error) {
 	exe := filepath.Join(path, strings.TrimSuffix(filepath.Base(path), ".app"))
-	sum, err := wiremock.FileSHA256(exe)
+	sum, err := fsx.SHA256(exe)
 	if err != nil {
 		return "unhashed", nil
 	}
@@ -257,12 +256,56 @@ func (i *IOS) AssertNoProxy(context.Context, string) error { return nil }
 func (i *IOS) DeviceProxy(context.Context, string) string { return "" }
 func (i *IOS) ClearProxy(context.Context, string) error   { return nil }
 
-func fbrcJSON(m map[string]string) string {
-	obj := ojson.NewObject()
-	for _, k := range sorted(keys(m)) {
-		obj.Set(k, m[k])
+// The on-screen keyboard follows the Simulator's per-device "Connect Hardware Keyboard"
+// preference: connected (YES, the Simulator default) hides it.
+func simulatorPlist() string {
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, "Library", "Preferences", "com.apple.iphonesimulator.plist")
+}
+
+func (i *IOS) Keyboard(ctx context.Context, serial string) string {
+	out, err := i.Exec.Output(ctx, execx.Cmd{Name: "plutil", Args: []string{"-extract", "DevicePreferences." + serial + ".ConnectHardwareKeyboard", "raw", simulatorPlist()}})
+	if err == nil && strings.TrimSpace(out) == "false" {
+		return "shown"
 	}
-	b, _ := ojson.Marshal(obj)
+	return "hidden"
+}
+
+// SetKeyboard writes the preference and reboots a booted simulator so it takes effect.
+func (i *IOS) SetKeyboard(ctx context.Context, serial string, show bool) error {
+	if (i.Keyboard(ctx, serial) == "shown") == show {
+		return nil
+	}
+	plist := simulatorPlist()
+	plutil := func(args ...string) error {
+		_, err := i.Exec.Output(ctx, execx.Cmd{Name: "plutil", Args: append(args, plist)})
+		return err
+	}
+	// Parents may not exist yet; inserting an existing key fails harmlessly.
+	_ = plutil("-insert", "DevicePreferences", "-dictionary")
+	_ = plutil("-insert", "DevicePreferences."+serial, "-dictionary")
+	connect := "YES"
+	if show {
+		connect = "NO"
+	}
+	if err := plutil("-replace", "DevicePreferences."+serial+".ConnectHardwareKeyboard", "-bool", connect); err != nil {
+		return fmt.Errorf("could not set the keyboard preference for %s: %w", serial, err)
+	}
+	for _, s := range i.sims(ctx, true) {
+		if s.UDID == serial && s.State == "Booted" {
+			_, _ = i.simctl(ctx, "shutdown", serial)
+			_, _ = i.simctl(ctx, "boot", serial)
+			if _, err := i.simctl(ctx, "bootstatus", serial, "-b"); err != nil {
+				return fmt.Errorf("simulator %s did not come back after the keyboard change", serial)
+			}
+			i.sims(ctx, true)
+		}
+	}
+	return nil
+}
+
+func fbrcJSON(m map[string]string) string {
+	b, _ := ojson.Marshal(nonNil(m))
 	return string(b)
 }
 
@@ -276,12 +319,12 @@ func (i *IOS) WriteOverride(ctx context.Context, serial string, o Override) erro
 	}
 	fbrc := fbrcJSON(o.FBRC)
 	exp := strconv.FormatInt(o.ExpiresAt, 10)
-	obj := ojson.NewObject()
-	obj.Set("e2eApiUrl", o.APIURL())
-	obj.Set("e2eRunId", o.RunID)
-	obj.Set("e2eRemoteConfig", fbrc)
-	obj.Set("e2eExpiresAt", exp)
-	b, _ := ojson.Marshal(obj)
+	b, _ := ojson.Marshal(struct {
+		APIURL       string `json:"e2eApiUrl"`
+		RunID        string `json:"e2eRunId"`
+		RemoteConfig string `json:"e2eRemoteConfig"`
+		ExpiresAt    string `json:"e2eExpiresAt"`
+	}{o.APIURL(), o.RunID, fbrc, exp})
 	if err := os.WriteFile(filepath.Join(bundle, "e2e-config.json"), b, 0o644); err != nil {
 		return fmt.Errorf("could not write the override into %s: %w", bundle, err)
 	}

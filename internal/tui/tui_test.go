@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -262,4 +264,28 @@ func TestTruncateKeepsColour(t *testing.T) {
 	if w := lipgloss.Width(out); w > 20 {
 		t.Fatalf("width %d", w)
 	}
+}
+
+func TestHistoryFlowsScrollToCursor(t *testing.T) {
+	a := testApp(t)
+	var lines []string
+	for i := 0; i < 80; i++ {
+		lines = append(lines, fmt.Sprintf("result|home|flow-%02d.yaml|PASS|0|3s|", i))
+	}
+	dir := filepath.Join(a.p.RunsRoot(), "20260923T100000Z-1-abc")
+	write(t, filepath.Join(dir, "result.tsv"), "meta|2026-09-23T10:00:00Z|60\n"+strings.Join(lines, "\n")+"\n")
+	key(a, "4")
+	key(a, "enter") // drill into the run's flows
+	for i := 0; i < 70; i++ {
+		key(a, "down")
+	}
+	v := a.View()
+	if !strings.Contains(v, "flow-70.yaml") || strings.Contains(v, "flow-00.yaml") {
+		t.Fatalf("flows panel did not follow the cursor:\n%s", v)
+	}
+}
+
+// start2ForTest puts the model into a running state without an engine.
+func (r *runModel) start2ForTest() {
+	*r = runModel{a: r.a, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[*engine.Result]outputMark{}}
 }

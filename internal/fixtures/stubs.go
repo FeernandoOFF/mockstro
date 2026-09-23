@@ -313,11 +313,10 @@ func validateFaultDelay(resp *ojson.Object) error {
 			return fmt.Errorf("chunkedDribbleDelay")
 		}
 		n, ok1 := ojson.AsFloat(mustGet(d, "numberOfChunks"))
-		t, ok2 := nonNegNumber(mustGet(d, "totalDuration"))
+		_, ok2 := nonNegNumber(mustGet(d, "totalDuration"))
 		if !ok1 || n <= 0 || !ojson.IsInt(mustGet(d, "numberOfChunks")) || !ok2 || !ojson.IsInt(mustGet(d, "totalDuration")) {
 			return fmt.Errorf("chunkedDribbleDelay values")
 		}
-		_ = t
 	}
 	return nil
 }

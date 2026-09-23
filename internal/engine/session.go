@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/feernandooff/trun/internal/fixtures"
+	"github.com/feernandooff/trun/internal/fsx"
 )
 
 // Run executes the selected flows, single-device or parallel, and always returns a summary
@@ -229,29 +230,18 @@ func (e *Engine) persist(s *Summary, dir string) {
 	for _, r := range s.Results {
 		b.WriteString("result|" + r.TSV() + "\n")
 	}
-	_ = writeAtomic(filepath.Join(dir, "result.tsv"), []byte(b.String()))
+	_ = fsx.WriteAtomic(filepath.Join(dir, "result.tsv"), []byte(b.String()))
 	last := e.P.LastRunPath()
-	_ = writeAtomic(last, []byte(b.String()))
-	_ = writeAtomic(filepath.Join(filepath.Dir(last), "last-run.link"), []byte(filepath.Base(dir)+"\n"))
+	_ = fsx.WriteAtomic(last, []byte(b.String()))
+	_ = fsx.WriteAtomic(filepath.Join(filepath.Dir(last), "last-run.link"), []byte(filepath.Base(dir)+"\n"))
 	writeArtifacts(dir, s.Results)
 	junit := JUnit(s, e.P.Root)
-	_ = writeAtomic(filepath.Join(dir, "junit.xml"), junit)
+	_ = fsx.WriteAtomic(filepath.Join(dir, "junit.xml"), junit)
 	if e.Opts.JUnitPath != "" {
-		if err := writeAtomic(e.Opts.JUnitPath, junit); err != nil {
+		if err := fsx.WriteAtomic(e.Opts.JUnitPath, junit); err != nil {
 			e.Warnf("could not write JUnit report: %v", err)
 		}
 	}
-}
-
-func writeAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }
 
 // JUnit renders a summary as a JUnit XML report, one testcase per flow.
@@ -387,7 +377,7 @@ func writeArtifacts(dir string, results []*Result) {
 		return
 	}
 	b, _ := json.MarshalIndent(list, "", "  ")
-	_ = writeAtomic(filepath.Join(dir, "artifacts.json"), b)
+	_ = fsx.WriteAtomic(filepath.Join(dir, "artifacts.json"), b)
 }
 
 // LoadArtifacts reads artifacts.json, keyed by "feature/file".

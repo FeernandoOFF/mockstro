@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -56,7 +58,7 @@ func adbDevices(c execx.Cmd, avds map[string]string) (string, bool) {
 	}
 	if args == "devices" {
 		out := "List of devices attached\n"
-		for _, s := range sortedKeys(avds) {
+		for _, s := range slices.Sorted(maps.Keys(avds)) {
 			out += s + "\tdevice\n"
 		}
 		return out, true
@@ -578,5 +580,75 @@ func TestDeleteRemovesLinkedMaestroOutput(t *testing.T) {
 		if _, err := os.Stat(d); err != nil {
 			t.Fatalf("deleted output another run still references: %s", d)
 		}
+	}
+}
+
+func TestKeyboardAndroid(t *testing.T) {
+	setting, hw := "1", true
+	h := func(c execx.Cmd) (string, error) {
+		a := strings.Join(c.Args, " ")
+		switch {
+		case strings.HasSuffix(a, "dumpsys input"):
+			if hw {
+				return "  KeyboardType: Alphabetic", nil
+			}
+			return "  KeyboardType: None", nil
+		case strings.Contains(a, "settings get secure show_ime_with_hard_keyboard"):
+			return setting, nil
+		case strings.Contains(a, "settings put secure show_ime_with_hard_keyboard"):
+			setting = c.Args[len(c.Args)-1]
+		}
+		return "", nil
+	}
+	e, _ := testEngine(t, "agent", h)
+	ctx := context.Background()
+	if got := e.Plat.Keyboard(ctx, "emulator-5554"); got != "shown" {
+		t.Fatalf("state %s", got)
+	}
+	if err := e.Plat.SetKeyboard(ctx, "emulator-5554", false); err != nil || e.Plat.Keyboard(ctx, "emulator-5554") != "hidden" {
+		t.Fatalf("hide: %v", err)
+	}
+	hw = false
+	if e.Plat.Keyboard(ctx, "emulator-5554") != "always" {
+		t.Fatal("no hardware keyboard must report always")
+	}
+	if err := e.Plat.SetKeyboard(ctx, "emulator-5554", false); err == nil || !strings.Contains(err.Error(), "hw.keyboard") {
+		t.Fatalf("hiding without a hardware keyboard must explain why: %v", err)
+	}
+}
+
+func TestKeyboardIOSWritesPerSimulatorPreference(t *testing.T) {
+	var calls []string
+	value := "true"
+	h := func(c execx.Cmd) (string, error) {
+		a := strings.Join(c.Args, " ")
+		calls = append(calls, c.Name+" "+a)
+		switch {
+		case c.Name == "plutil" && strings.HasPrefix(a, "-extract"):
+			return value, nil
+		case c.Name == "plutil" && strings.HasPrefix(a, "-replace"):
+			value = map[string]string{"YES": "true", "NO": "false"}[c.Args[3]]
+		case c.Name == "xcrun" && strings.Contains(a, "list devices"):
+			return `{"devices":{"r":[{"udid":"UDID-1","name":"iPhone","state":"Booted","isAvailable":true}]}}`, nil
+		}
+		return "", nil
+	}
+	e, _ := testEngine(t, "agent", h)
+	e.Plat = platform.New(e.P, "ios", e.Exec)
+	ctx := context.Background()
+	if e.Plat.Keyboard(ctx, "UDID-1") != "hidden" {
+		t.Fatal("hardware keyboard connected means the on-screen one is hidden")
+	}
+	if err := e.Plat.SetKeyboard(ctx, "UDID-1", true); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(calls, "\n")
+	for _, want := range []string{"-replace DevicePreferences.UDID-1.ConnectHardwareKeyboard -bool NO", "simctl shutdown UDID-1", "simctl boot UDID-1"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in:\n%s", want, joined)
+		}
+	}
+	if e.Plat.Keyboard(ctx, "UDID-1") != "shown" {
+		t.Fatal("state not updated")
 	}
 }

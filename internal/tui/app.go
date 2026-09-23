@@ -206,6 +206,14 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.dash.booting = ""
 		return a, a.refreshStatus()
+	case keyboardSetMsg:
+		a.dash.clearing = ""
+		if m.err != nil {
+			a.log("error", "keyboard: %v", m.err)
+		} else {
+			a.log("info", "on-screen keyboard %s on %s", m.state, m.serial)
+		}
+		return a, a.refreshStatus()
 	case proxyClearedMsg:
 		a.dash.clearing = ""
 		if m.err != nil {

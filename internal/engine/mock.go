@@ -107,12 +107,6 @@ type MockSession struct {
 
 func (m *MockSession) Stop() { m.Run.Cleanup() }
 
-// Switch serves another target on the same server (TUI convenience).
-func (m *MockSession) Switch(ctx context.Context, t *MockTarget) error {
-	m.Target = t
-	return m.Run.Activate(ctx, t.Profile, t.FBRC, t.Overrides)
-}
-
 // StartMock starts server-only mock on 18080, or attaches the explicitly selected device.
 func (e *Engine) StartMock(ctx context.Context, t *MockTarget) (*MockSession, error) {
 	run := e.newRun("mock", 0)

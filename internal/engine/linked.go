@@ -89,7 +89,7 @@ func LinkedExternal(dirs []string) []string {
 			if rec == "" || strings.HasPrefix(rec, d+string(os.PathSeparator)) {
 				continue
 			}
-			for _, p := range []string{rec, strings.TrimSuffix(rec, ".mp4") + ".raw.mp4"} {
+			for _, p := range []string{rec, rawPath(rec)} {
 				if _, err := os.Stat(p); err == nil {
 					out = append(out, p)
 				}
@@ -107,10 +107,7 @@ func (e *Engine) Linked(rd RunDir) ([]string, int64) {
 	paths := LinkedExternal(rd.group())
 	var size int64
 	for _, p := range paths {
-		size += DirSize(p)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			size += st.Size()
-		}
+		size += DirSize(p) // also counts a single file
 	}
 	return paths, size
 }
@@ -118,11 +115,7 @@ func (e *Engine) Linked(rd RunDir) ([]string, int64) {
 func removeGroup(rd RunDir) int64 {
 	var freed int64
 	for _, p := range LinkedExternal(rd.group()) {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			freed += st.Size()
-		} else {
-			freed += DirSize(p)
-		}
+		freed += DirSize(p)
 		os.RemoveAll(p)
 	}
 	for _, w := range rd.Workers {

@@ -57,23 +57,6 @@ func truncate(s string, w int) string {
 	// ANSI-aware: keeps colours on the part that fits.
 	return ansi.Truncate(s, w, "…")
 }
-
-func stripANSI(s string) string {
-	var b strings.Builder
-	in := false
-	for _, r := range s {
-		switch {
-		case r == 0x1b:
-			in = true
-		case in && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'):
-			in = false
-		case !in:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
 func statusStyle(pass bool, stage string) string {
 	if pass {
 		return sOK.Render("PASS")
@@ -105,4 +88,13 @@ func pad(s string, w int) string {
 		return s + strings.Repeat(" ", gap)
 	}
 	return truncate(s, w)
+}
+
+// visibleLines keeps line `focus` on screen within height rows, returning the lines to draw.
+func visibleLines(lines []string, focus, height int) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
+	}
+	start := min(max(0, focus-height/2), len(lines)-height)
+	return lines[start : start+height]
 }

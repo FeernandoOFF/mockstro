@@ -18,15 +18,13 @@ type Object struct {
 
 func NewObject() *Object { return &Object{vals: map[string]any{}} }
 
-func (o *Object) Keys() []string { return o.keys }
-func (o *Object) Len() int       { return len(o.keys) }
+func (o *Object) Keys() []string    { return o.keys }
+func (o *Object) Has(k string) bool { _, ok := o.vals[k]; return ok }
 
 func (o *Object) Get(k string) (any, bool) {
 	v, ok := o.vals[k]
 	return v, ok
 }
-
-func (o *Object) Has(k string) bool { _, ok := o.vals[k]; return ok }
 
 func (o *Object) Set(k string, v any) {
 	if _, ok := o.vals[k]; !ok {
@@ -228,13 +226,9 @@ func MarshalIndent(v any) ([]byte, error) {
 // Number helpers.
 func AsFloat(v any) (float64, bool) {
 	switch t := v.(type) {
-	case json.Number:
+	case json.Number: // Parse uses UseNumber, so numbers are always json.Number
 		f, err := t.Float64()
 		return f, err == nil
-	case float64:
-		return t, true
-	case int:
-		return float64(t), true
 	}
 	return 0, false
 }

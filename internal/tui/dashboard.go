@@ -23,6 +23,11 @@ type dashModel struct {
 	clearing     string
 }
 
+type keyboardSetMsg struct {
+	serial, state string
+	err           error
+}
+
 type proxyClearedMsg struct {
 	serial, was string
 	err         error
@@ -83,6 +88,28 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 				d.confirmProxy = dv.Serial
 			}
 		}
+	case "v":
+		if d.cursor < nDev {
+			dv := a.status.Devices[d.cursor]
+			switch {
+			case dv.LockedBy != nil:
+				a.log("warn", "%s is held by run %s; not changing its keyboard", dv.Serial, *dv.LockedBy)
+			case dv.Keyboard == "always":
+				a.log("warn", "%s has no hardware keyboard (AVD hw.keyboard=no), so the on-screen keyboard cannot be hidden", dv.Serial)
+			case dv.Keyboard == "":
+				a.log("warn", "%s: keyboard setting not supported", dv.Serial)
+			default:
+				show := dv.Keyboard == "hidden"
+				state := map[bool]string{true: "shown", false: "hidden"}[show]
+				d.clearing = dv.Serial
+				a.log("info", "setting on-screen keyboard %s on %s…", state, dv.Serial)
+				return func() tea.Msg {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+					defer cancel()
+					return keyboardSetMsg{dv.Serial, state, a.query.Plat.SetKeyboard(ctx, dv.Serial, show)}
+				}
+			}
+		}
 	case "b", "enter":
 		i := d.cursor - nDev
 		if d.booting != "" || i < 0 || i >= len(boot) {
@@ -134,9 +161,15 @@ func (d *dashModel) view(w, h int) (string, string) {
 				des = sTitle.Render(" ★")
 			}
 			fmt.Fprintf(&dev, "%s%s %s%s  %s\n", cur, pad(x.Serial, 16), pad(x.Name, 22), des, state)
+			switch x.Keyboard {
+			case "shown", "hidden":
+				dev.WriteString(sMuted.Render("    ⌨ keyboard "+x.Keyboard) + "\n")
+			case "always":
+				dev.WriteString(sMuted.Render("    ⌨ keyboard always shown (no hardware keyboard)") + "\n")
+			}
 			switch {
 			case x.Serial == d.clearing:
-				dev.WriteString(sWarn.Render("    clearing proxy…") + "\n")
+				dev.WriteString(sWarn.Render("    applying…") + "\n")
 			case x.Proxy != "":
 				dev.WriteString(sBad.Render("    ⚠ proxy "+x.Proxy) + sMuted.Render("  (p to clear)") + "\n")
 			}
@@ -208,7 +241,7 @@ func (d *dashModel) view(w, h int) (string, string) {
 			panel("Project", info.String(), rightW, 7),
 			panel("Active runs (all projects)", runs.String(), rightW, topH-7)))
 	body := lipgloss.JoinVertical(lipgloss.Left, top, panel("Activity", act.String(), w, botH))
-	help := "↑↓ select · p clear device proxy · b boot · S sweep stale locks"
+	help := "↑↓ select · p clear device proxy · v toggle keyboard · b boot · S sweep stale locks"
 	if d.confirmProxy != "" {
 		help = sWarn.Render(fmt.Sprintf("Remove the device-wide proxy on %s (Proxyman/Charles setting)? [y/N]", d.confirmProxy))
 	}

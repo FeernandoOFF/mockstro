@@ -4,13 +4,10 @@ package wiremock
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -20,6 +17,7 @@ import (
 	"time"
 
 	"github.com/feernandooff/trun/internal/execx"
+	"github.com/feernandooff/trun/internal/fsx"
 	"github.com/feernandooff/trun/internal/ojson"
 	"github.com/feernandooff/trun/internal/paths"
 )
@@ -36,23 +34,10 @@ func JarPath() string {
 	return filepath.Join(paths.CacheRoot(), "wiremock", "wiremock-standalone-"+Version+".jar")
 }
 
-func FileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 // EnsureJar returns a SHA-verified jar, reusing a project's copy before downloading.
 func EnsureJar(ctx context.Context, projectCopy string, logf func(string, ...any)) (string, error) {
 	jar := JarPath()
-	if sum, err := FileSHA256(jar); err == nil {
+	if sum, err := fsx.SHA256(jar); err == nil {
 		if sum == SHA256 {
 			return jar, nil
 		}
@@ -65,8 +50,8 @@ func EnsureJar(ctx context.Context, projectCopy string, logf func(string, ...any
 	tmp := fmt.Sprintf("%s.download.%d", jar, os.Getpid())
 	defer os.Remove(tmp)
 	if projectCopy != "" {
-		if sum, err := FileSHA256(projectCopy); err == nil && sum == SHA256 {
-			if err := copyFile(projectCopy, tmp); err == nil {
+		if sum, err := fsx.SHA256(projectCopy); err == nil && sum == SHA256 {
+			if err := fsx.CopyAtomic(projectCopy, tmp); err == nil {
 				return jar, publish(tmp, jar)
 			}
 		}
@@ -98,7 +83,7 @@ func EnsureJar(ctx context.Context, projectCopy string, logf func(string, ...any
 	if lastErr != nil {
 		return "", fmt.Errorf("failed to download WireMock from %s: %w", jarURL, lastErr)
 	}
-	sum, _ := FileSHA256(tmp)
+	sum, _ := fsx.SHA256(tmp)
 	if sum != SHA256 {
 		return "", fmt.Errorf("WireMock SHA-256 mismatch: expected %s, got %s", SHA256, sum)
 	}
@@ -107,27 +92,10 @@ func EnsureJar(ctx context.Context, projectCopy string, logf func(string, ...any
 
 // publish only replaces the jar if nobody else already won the race with a valid one.
 func publish(tmp, jar string) error {
-	if sum, err := FileSHA256(jar); err == nil && sum == SHA256 {
+	if sum, err := fsx.SHA256(jar); err == nil && sum == SHA256 {
 		return nil
 	}
 	return os.Rename(tmp, jar)
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 // PortListener describes whoever is listening on port, or "" when free.
@@ -142,15 +110,7 @@ func PortListener(ctx context.Context, ex execx.Runner, port int) string {
 			}
 		}
 	}
-	if _, lookErr := ex.LookPath("lsof"); lookErr != nil {
-		// No lsof: fall back to trying to bind.
-		l, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
-		if err != nil {
-			return "unknown process"
-		}
-		l.Close()
-	}
-	return ""
+	return "" // lsof is a checked prerequisite, so no bind-probe fallback
 }
 
 // Server is one run's WireMock.
@@ -164,10 +124,6 @@ type Server struct {
 }
 
 func (s *Server) base() string { return "http://127.0.0.1:" + strconv.Itoa(s.Port) }
-
-func NewClient(port int, runID string) *Server {
-	return &Server{Port: port, RunID: runID, http: &http.Client{Timeout: 10 * time.Second}}
-}
 
 // Start launches the JVM against root and proves ownership with a nonce before returning.
 func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, runID, logPath string) (*Server, error) {
@@ -190,10 +146,7 @@ func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, run
 		logf.Close()
 		return nil, fmt.Errorf("start WireMock: %w", err)
 	}
-	s := NewClient(port, runID)
-	s.Log = logPath
-	s.cmd = cmd
-	s.exit = make(chan struct{})
+	s := &Server{Port: port, RunID: runID, Log: logPath, cmd: cmd, exit: make(chan struct{}), http: &http.Client{Timeout: 10 * time.Second}}
 	go func() { _ = cmd.Wait(); logf.Close(); close(s.exit) }()
 
 	deadline := time.Now().Add(30 * time.Second)
@@ -227,13 +180,7 @@ func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, run
 }
 
 // Done is closed when the JVM exits.
-func (s *Server) Done() <-chan struct{} {
-	if s.exit == nil {
-		c := make(chan struct{})
-		return c
-	}
-	return s.exit
-}
+func (s *Server) Done() <-chan struct{} { return s.exit }
 
 func (s *Server) Stop() {
 	if s == nil || s.cmd == nil {
@@ -320,8 +267,7 @@ func (s *Server) Replace(mappings []any) error {
 	if _, err := s.do(http.MethodDelete, "/__admin/mappings", nil); err != nil {
 		return fmt.Errorf("failed to clear WireMock mappings: %w", err)
 	}
-	payload := ojson.NewObject()
-	payload.Set("mappings", mappings)
+	payload := map[string]any{"mappings": mappings}
 	if err := s.post("/__admin/mappings/import", payload); err != nil {
 		return fmt.Errorf("failed to bulk import WireMock scenario: %w", err)
 	}
@@ -335,20 +281,14 @@ func (s *Server) Replace(mappings []any) error {
 }
 
 type LoggedRequest struct {
-	ID      string `json:"id"`
 	Request struct {
-		URL          string `json:"url"`
-		Method       string `json:"method"`
-		LoggedDate   int64  `json:"loggedDate"`
-		LoggedString string `json:"loggedDateString"`
+		URL        string `json:"url"`
+		Method     string `json:"method"`
+		LoggedDate int64  `json:"loggedDate"`
 	} `json:"request"`
-	ResponseDefinition struct {
-		Status int `json:"status"`
-	} `json:"responseDefinition"`
 	StubMapping *struct {
 		Name string `json:"name"`
 	} `json:"stubMapping"`
-	WasMatched bool `json:"wasMatched"`
 }
 
 func (r LoggedRequest) StubName() string {
@@ -384,13 +324,11 @@ func (s *Server) Journal(own bool) ([]LoggedRequest, error) {
 }
 
 func (s *Server) StartRecording(target string) error {
-	body := ojson.NewObject()
-	body.Set("targetBaseUrl", target)
-	f := ojson.NewObject()
-	f.Set("urlPathPattern", "/api/.*")
-	body.Set("filters", f)
-	body.Set("persist", true)
-	return s.post("/__admin/recordings/start", body)
+	return s.post("/__admin/recordings/start", map[string]any{
+		"targetBaseUrl": target,
+		"filters":       map[string]any{"urlPathPattern": "/api/.*"},
+		"persist":       true,
+	})
 }
 
 func (s *Server) StopRecording() error {
@@ -400,89 +338,54 @@ func (s *Server) StopRecording() error {
 	return s.post("/__admin/recordings/stop", nil)
 }
 
-// Mapping builders.
+// Mapping builders. WireMock ignores key order, so plain maps will do.
 
-func NonceMapping(runID string) *ojson.Object {
-	m := ojson.NewObject()
-	m.Set("name", "maestro-run-nonce")
-	m.Set("priority", json.Number("1"))
-	req := ojson.NewObject()
-	req.Set("method", "GET")
-	req.Set("urlPath", NoncePath)
-	m.Set("request", req)
-	resp := ojson.NewObject()
-	resp.Set("status", json.Number("200"))
-	h := ojson.NewObject()
-	h.Set("Content-Type", "text/plain")
-	resp.Set("headers", h)
-	resp.Set("body", runID)
-	m.Set("response", resp)
-	return m
+func NonceMapping(runID string) map[string]any {
+	return map[string]any{
+		"name":     "maestro-run-nonce",
+		"priority": 1,
+		"request":  map[string]any{"method": "GET", "urlPath": NoncePath},
+		"response": map[string]any{"status": 200, "headers": map[string]string{"Content-Type": "text/plain"}, "body": runID},
+	}
 }
 
 // FallbackMapping answers every unstubbed request with a diagnostic 599 (or proxies).
-func FallbackMapping(proxyURL string) *ojson.Object {
-	m := ojson.NewObject()
-	m.Set("name", Fallback)
-	m.Set("priority", json.Number("100"))
-	req := ojson.NewObject()
-	req.Set("method", "ANY")
-	req.Set("urlPattern", ".*")
-	m.Set("request", req)
-	resp := ojson.NewObject()
-	if proxyURL != "" {
-		resp.Set("proxyBaseUrl", proxyURL)
-	} else {
-		resp.Set("status", json.Number("599"))
-		h := ojson.NewObject()
-		h.Set("Content-Type", "application/json")
-		resp.Set("headers", h)
-		body := ojson.NewObject()
-		body.Set("error", "No WireMock stub matched this request")
-		resp.Set("jsonBody", body)
+func FallbackMapping(proxyURL string) map[string]any {
+	response := map[string]any{
+		"status":   599,
+		"headers":  map[string]string{"Content-Type": "application/json"},
+		"jsonBody": map[string]string{"error": "No WireMock stub matched this request"},
 	}
-	m.Set("response", resp)
-	return m
+	if proxyURL != "" {
+		response = map[string]any{"proxyBaseUrl": proxyURL}
+	}
+	return map[string]any{
+		"name":     Fallback,
+		"priority": 100,
+		"request":  map[string]any{"method": "ANY", "urlPattern": ".*"},
+		"response": response,
+	}
 }
 
 // FBRCMappings serve Remote Config over HTTP for Map Remote setups (no device override).
-func FBRCMappings(entries map[string]string, keys []string) []any {
-	e := ojson.NewObject()
-	for _, k := range keys {
-		e.Set(k, entries[k])
-	}
-	eb, _ := ojson.Marshal(e)
+func FBRCMappings(entries map[string]string) []any {
+	eb, _ := ojson.Marshal(entries) // map keys sort, so the ETag is stable
 	version := strconv.FormatUint(uint64(crc32.ChecksumIEEE(eb)), 10)
-
-	perf := ojson.NewObject()
-	perf.Set("name", "firebase-performance/fetch")
-	perf.Set("priority", json.Number("1"))
-	pr := ojson.NewObject()
-	pr.Set("method", "POST")
-	pr.Set("urlPathPattern", "^/v1/projects/[^/]+/namespaces/fireperf:fetch$")
-	perf.Set("request", pr)
-	ps := ojson.NewObject()
-	ps.Set("status", json.Number("200"))
-	perf.Set("response", ps)
-
-	rc := ojson.NewObject()
-	rc.Set("name", "firebase-remote-config/fetch")
-	rc.Set("priority", json.Number("1"))
-	rr := ojson.NewObject()
-	rr.Set("method", "POST")
-	rr.Set("urlPathPattern", "^/v1/projects/[^/]+/namespaces/firebase:fetch$")
-	rc.Set("request", rr)
-	rs := ojson.NewObject()
-	rs.Set("status", json.Number("200"))
-	h := ojson.NewObject()
-	h.Set("Content-Type", "application/json")
-	h.Set("ETag", `"maestro-`+version+`"`)
-	rs.Set("headers", h)
-	jb := ojson.NewObject()
-	jb.Set("state", "UPDATE")
-	jb.Set("entries", e)
-	jb.Set("templateVersion", version)
-	rs.Set("jsonBody", jb)
-	rc.Set("response", rs)
+	perf := map[string]any{
+		"name":     "firebase-performance/fetch",
+		"priority": 1,
+		"request":  map[string]any{"method": "POST", "urlPathPattern": "^/v1/projects/[^/]+/namespaces/fireperf:fetch$"},
+		"response": map[string]any{"status": 200},
+	}
+	rc := map[string]any{
+		"name":     "firebase-remote-config/fetch",
+		"priority": 1,
+		"request":  map[string]any{"method": "POST", "urlPathPattern": "^/v1/projects/[^/]+/namespaces/firebase:fetch$"},
+		"response": map[string]any{
+			"status":   200,
+			"headers":  map[string]string{"Content-Type": "application/json", "ETag": `"maestro-` + version + `"`},
+			"jsonBody": map[string]any{"state": "UPDATE", "entries": entries, "templateVersion": version},
+		},
+	}
 	return []any{perf, rc}
 }

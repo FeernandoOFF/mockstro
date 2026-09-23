@@ -63,7 +63,7 @@ func (hm *historyModel) load() {
 		}
 		arts := engine.LoadArtifacts(rd.Path)
 		for _, r := range hr.results {
-			r.LogPath = filepath.Join(rd.Path, "logs", safeLogName(r))
+			r.LogPath = filepath.Join(rd.Path, "logs", engine.FlowSlug(r.Feature, r.File)+".log")
 			if fa, ok := arts[r.Feature+"/"+r.File]; ok {
 				r.Artifacts, r.Shots = fa.Artifacts, fa.Shots
 				if fa.Log != "" {
@@ -85,22 +85,6 @@ func (hm *historyModel) load() {
 		hm.cursor = max(0, len(runs)-1)
 	}
 }
-
-func safeLogName(r *engine.Result) string {
-	clean := func(s string) string {
-		var b strings.Builder
-		for _, c := range s {
-			if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-' {
-				b.WriteRune(c)
-			} else {
-				b.WriteRune('-')
-			}
-		}
-		return b.String()
-	}
-	return clean(r.Feature) + "-" + clean(strings.TrimSuffix(r.File, filepath.Ext(r.File))) + ".log"
-}
-
 func (hm *historyModel) selected() *histRun {
 	if hm.cursor < len(hm.runs) {
 		return hm.runs[hm.cursor]
@@ -113,7 +97,7 @@ func (hm *historyModel) logFor(run *histRun, r *engine.Result) string {
 	if _, err := os.Stat(r.LogPath); err == nil {
 		return r.LogPath
 	}
-	matches, _ := filepath.Glob(filepath.Join(run.dir, "worker-*", "logs", safeLogName(r)))
+	matches, _ := filepath.Glob(filepath.Join(run.dir, "worker-*", "logs", engine.FlowSlug(r.Feature, r.File)+".log"))
 	if len(matches) > 0 {
 		return matches[0]
 	}
@@ -308,16 +292,21 @@ func (hm *historyModel) view(w, h int) (string, string) {
 			}
 			rb.WriteString("\n")
 		}
+		var rows []string
+		focusLine := 0
 		for i, r := range run.results {
 			cur := "  "
 			if hm.focus >= 1 && i == hm.resCur {
 				cur = sSel.Render("› ")
+				focusLine = len(rows)
 			}
-			fmt.Fprintf(&rb, "%s%s %s %s%s\n", cur, statusStyle(r.Passed(), r.Stage), truncate(r.Feature+"/"+r.File, 34), sMuted.Render(fmt.Sprintf("%ds", int(r.Duration.Seconds()))), shotBadge(r))
+			rows = append(rows, fmt.Sprintf("%s%s %s %s%s", cur, statusStyle(r.Passed(), r.Stage), truncate(r.Feature+"/"+r.File, 34), sMuted.Render(fmt.Sprintf("%ds", int(r.Duration.Seconds()))), shotBadge(r)))
 			if !r.Passed() {
-				fmt.Fprintf(&rb, "     %s\n", sMuted.Render(r.Stage))
+				rows = append(rows, "     "+sMuted.Render(r.Stage))
 			}
 		}
+		used := strings.Count(rb.String(), "\n")
+		rb.WriteString(strings.Join(visibleLines(rows, focusLine, h-3-used), "\n"))
 	}
 
 	logW := w - listW - midW

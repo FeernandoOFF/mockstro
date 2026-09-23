@@ -9,16 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/feernandooff/trun/internal/execx"
+	"github.com/feernandooff/trun/internal/fsx"
 	"github.com/feernandooff/trun/internal/ojson"
 	"github.com/feernandooff/trun/internal/project"
 	"github.com/feernandooff/trun/internal/registry"
-	"github.com/feernandooff/trun/internal/wiremock"
 )
 
 type Android struct {
@@ -28,8 +29,6 @@ type Android struct {
 	mu    sync.Mutex
 	names map[string]string
 }
-
-func (a *Android) Name() string { return "android" }
 
 func (a *Android) adb(ctx context.Context, serial string, args ...string) (string, error) {
 	if serial != "" {
@@ -134,7 +133,7 @@ func (a *Android) Bootable(ctx context.Context) []string {
 	des := a.Designated()
 	var out []string
 	for _, avd := range a.InstalledAVDs(ctx) {
-		if contains(des, avd) {
+		if slices.Contains(des, avd) {
 			out = append(out, avd)
 		}
 	}
@@ -218,39 +217,17 @@ func (a *Android) Build(ctx context.Context, artifactDir string, out io.Writer) 
 		return "", "", err
 	}
 	dst := filepath.Join(dir, "app.apk")
-	tmp := fmt.Sprintf("%s.tmp.%d", dst, os.Getpid())
-	if err := copyFile(built[0], tmp); err != nil {
+	if err := fsx.CopyAtomic(built[0], dst); err != nil {
 		return "", "", fmt.Errorf("could not snapshot built APK: %w", err)
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		return "", "", err
-	}
-	sha, err := wiremock.FileSHA256(dst)
+	sha, err := fsx.SHA256(dst)
 	if err != nil {
 		return "", "", err
 	}
 	_ = os.WriteFile(filepath.Join(artifactDir, "apk.sha256"), []byte(sha+"  "+dst+"\n"), 0o644)
 	return dst, sha, nil
 }
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
-}
-
-func (a *Android) ArtifactSHA(path string) (string, error) { return wiremock.FileSHA256(path) }
+func (a *Android) ArtifactSHA(path string) (string, error) { return fsx.SHA256(path) }
 
 func (a *Android) ArtifactExists(path string) bool {
 	st, err := os.Stat(path)
@@ -347,26 +324,22 @@ func (a *Android) AssertNoProxy(ctx context.Context, serial string) error {
 
 // Payload is the JSON E2eConfig accepts: schema 1, this app id, unexpired, loopback /api.
 func (a *Android) Payload(o Override) ([]byte, error) {
-	obj := ojson.NewObject()
-	obj.Set("schema", "1")
-	obj.Set("applicationId", a.P.AppID)
-	obj.Set("runId", o.RunID)
-	obj.Set("expiresAt", strconv.FormatInt(o.ExpiresAt, 10))
-	obj.Set("apiUrl", o.APIURL())
-	rc := ojson.NewObject()
-	for _, k := range sorted(keys(o.FBRC)) {
-		rc.Set(k, o.FBRC[k])
-	}
-	obj.Set("remoteConfig", rc)
-	return ojson.Marshal(obj)
+	return ojson.Marshal(struct {
+		Schema        string            `json:"schema"`
+		ApplicationID string            `json:"applicationId"`
+		RunID         string            `json:"runId"`
+		ExpiresAt     string            `json:"expiresAt"`
+		APIURL        string            `json:"apiUrl"`
+		RemoteConfig  map[string]string `json:"remoteConfig"`
+	}{"1", a.P.AppID, o.RunID, strconv.FormatInt(o.ExpiresAt, 10), o.APIURL(), nonNil(o.FBRC)})
 }
 
-func keys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+// nonNil: E2eConfig expects remoteConfig to be an object, never null.
+func nonNil(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
 	}
-	return out
+	return m
 }
 
 func (a *Android) WriteOverride(ctx context.Context, serial string, o Override) error {
@@ -456,4 +429,38 @@ func (a *Android) IsEmulator(ctx context.Context, serial string) bool {
 	}
 	out, _ := a.adb(ctx, serial, "shell", "getprop", "ro.boot.qemu")
 	return out == "1"
+}
+
+const imeWithHardKeyboard = "show_ime_with_hard_keyboard"
+
+// hasHardwareKeyboard: the setting only hides the on-screen keyboard while one is attached
+// (AVD hw.keyboard=yes).
+func (a *Android) hasHardwareKeyboard(ctx context.Context, serial string) bool {
+	out, _ := a.adb(ctx, serial, "shell", "dumpsys", "input")
+	return strings.Contains(out, "KeyboardType: Alphabetic") || strings.Contains(out, "KeyboardType: 2")
+}
+
+func (a *Android) Keyboard(ctx context.Context, serial string) string {
+	if !a.hasHardwareKeyboard(ctx, serial) {
+		return "always"
+	}
+	v, _ := a.adb(ctx, serial, "shell", "settings", "get", "secure", imeWithHardKeyboard)
+	if strings.TrimSpace(v) == "0" {
+		return "hidden"
+	}
+	return "shown"
+}
+
+func (a *Android) SetKeyboard(ctx context.Context, serial string, show bool) error {
+	val := "0"
+	if show {
+		val = "1"
+	}
+	if _, err := a.adb(ctx, serial, "shell", "settings", "put", "secure", imeWithHardKeyboard, val); err != nil {
+		return fmt.Errorf("could not set the on-screen keyboard on %s: %w", serial, err)
+	}
+	if !show && !a.hasHardwareKeyboard(ctx, serial) {
+		return fmt.Errorf("%s has no hardware keyboard (AVD hw.keyboard=no), so Android always shows the on-screen keyboard; enable hw.keyboard in the AVD to hide it", serial)
+	}
+	return nil
 }

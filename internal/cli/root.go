@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -54,6 +55,7 @@ type runFlags struct {
 	junit       string
 	quiet       bool
 	clearProxy  bool
+	keyboard    string
 	jsonOut     bool
 	quietStatus bool
 	dryRun      bool
@@ -221,6 +223,7 @@ func addRunFlags(c *cobra.Command, f *runFlags) {
 	fl.BoolVar(&f.optimize, "optimize-recordings", false, "re-encode videos with HandBrakeCLI afterwards")
 	fl.StringVar(&f.junit, "junit", "", "also write a JUnit XML report to this path")
 	fl.BoolVar(&f.quiet, "quiet-output", false, "hide raw Maestro/Gradle output")
+	fl.StringVar(&f.keyboard, "keyboard", "", "on-screen keyboard before flows: hidden or shown (default: leave as is)")
 	fl.BoolVar(&f.clearProxy, "clear-proxy", false, "remove a device-wide HTTP proxy (Proxyman/Charles) instead of refusing the device")
 }
 
@@ -274,6 +277,7 @@ func buildOptions(cmd string, g *globals, f *runFlags, p *project.Project, args 
 	o.Attach = f.attach
 	o.JUnitPath = f.junit
 	o.ClearProxy = f.clearProxy
+	o.Keyboard = f.keyboard
 	switch o.DeviceClass {
 	case "", "emulator", "physical", "any":
 	default:
@@ -300,7 +304,7 @@ func splitTags(s string) []string {
 func newEngine(p *project.Project, o engine.Options, printer *Printer) *engine.Engine {
 	e := engine.New(p, o, execx.Real{}, printer.Handle)
 	if engine.ResolveOwner(o.Owner) == "human" {
-		e.Prompt = ttyPrompter{}
+		e.ChooseAVD = chooseAVDOnTTY
 	}
 	return e
 }
@@ -569,13 +573,7 @@ func bootCmd(ctx context.Context, g *globals, args []string) error {
 		}
 		return nil
 	}
-	found := false
-	for _, c := range candidates {
-		if c == args[0] {
-			found = true
-		}
-	}
-	if !found {
+	if !slices.Contains(candidates, args[0]) {
 		return fmt.Errorf("'%s' is not bootable for owner %s (candidates: %s)", args[0], e.Owner, strings.Join(candidates, ", "))
 	}
 	serial, err := e.Plat.Boot(ctx, args[0], func(s string) { fmt.Println(s) })
@@ -603,10 +601,8 @@ func runTUI(g *globals, f *runFlags) error {
 	return TUIFunc(p, o)
 }
 
-// ttyPrompter asks on the controlling terminal; never used unattended.
-type ttyPrompter struct{}
-
-func (ttyPrompter) ChooseAVD(avds []string) (string, bool) {
+// chooseAVDOnTTY asks on the controlling terminal; never used unattended.
+func chooseAVDOnTTY(avds []string) (string, bool) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return "", false

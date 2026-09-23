@@ -2,11 +2,12 @@ package paths
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+
+	"github.com/feernandooff/trun/internal/fsx"
 )
 
 // Known projects: every repository trun has operated on. Their legacy test.sh lock roots are
@@ -42,11 +43,7 @@ func RememberProject(root, legacyShared string) {
 	}
 	m[root] = legacyShared
 	b, _ := json.MarshalIndent(m, "", "  ")
-	_ = os.MkdirAll(StateRoot(), 0o755)
-	tmp := fmt.Sprintf("%s.tmp.%d", projectsFile(), os.Getpid())
-	if os.WriteFile(tmp, b, 0o644) == nil {
-		_ = os.Rename(tmp, projectsFile())
-	}
+	_ = fsx.WriteAtomic(projectsFile(), b)
 }
 
 func readProjects() map[string]string {

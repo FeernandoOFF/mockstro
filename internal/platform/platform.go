@@ -14,7 +14,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -42,7 +41,6 @@ type Override struct {
 func (o Override) APIURL() string { return "http://127.0.0.1:" + strconv.Itoa(o.Port) + "/api" }
 
 type Platform interface {
-	Name() string
 	// Devices lists devices the runner can see: ready adb devices, or available simulators.
 	Devices(ctx context.Context) ([]Device, error)
 	DeviceName(ctx context.Context, serial string) string
@@ -65,6 +63,10 @@ type Platform interface {
 	// and verifies the device reads back clean.
 	DeviceProxy(ctx context.Context, serial string) string
 	ClearProxy(ctx context.Context, serial string) error
+	// Keyboard reports the on-screen keyboard: "shown", "hidden", "always" (no hardware
+	// keyboard, so it cannot be hidden) or "" when unsupported.
+	Keyboard(ctx context.Context, serial string) string
+	SetKeyboard(ctx context.Context, serial string, show bool) error
 	WriteOverride(ctx context.Context, serial string, o Override) error
 	PreflightOverride(ctx context.Context, serial string, o Override) (string, error)
 	AcceptedRunID(ctx context.Context, serial string) string
@@ -106,13 +108,7 @@ func readNameList(path string) []string {
 }
 
 func splitNames(v string) []string {
-	var out []string
-	for _, f := range strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
-		if f != "" {
-			out = append(out, f)
-		}
-	}
-	return out
+	return strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' })
 }
 
 func uniq(in []string) []string {
@@ -128,18 +124,3 @@ func uniq(in []string) []string {
 }
 
 func globalDesignated() []string { return readNameList(paths.DesignatedFile()) }
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
-func sorted(in []string) []string {
-	out := append([]string(nil), in...)
-	sort.Strings(out)
-	return out
-}

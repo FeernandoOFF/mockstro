@@ -105,23 +105,6 @@ func Start(c Cmd, detach bool) (*exec.Cmd, error) {
 	return cmd, cmd.Start()
 }
 
-// KillGroup terminates a process group started with Setpgid, escalating after grace.
-func KillGroup(cmd *exec.Cmd, grace time.Duration) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	pid := cmd.Process.Pid
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	done := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(grace):
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-		<-done
-	}
-}
-
 type Error struct {
 	Cmd    string
 	Err    error

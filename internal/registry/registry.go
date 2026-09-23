@@ -6,13 +6,13 @@ package registry
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/feernandooff/trun/internal/execx"
+	"github.com/feernandooff/trun/internal/fsx"
 	"github.com/feernandooff/trun/internal/lock"
 )
 
@@ -54,28 +54,17 @@ type Registry struct {
 	Roots []string
 }
 
-func writeAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
 // Save writes run.json and publishes it to every registry root.
 func (r *Registry) Save(run *Run) error {
 	local := *run
 	local.Worktree = ""
 	b, _ := json.Marshal(local)
-	if err := writeAtomic(filepath.Join(run.RunDir, "run.json"), b); err != nil {
+	if err := fsx.WriteAtomic(filepath.Join(run.RunDir, "run.json"), b); err != nil {
 		return err
 	}
 	pub, _ := json.Marshal(run)
 	for _, root := range r.Roots {
-		_ = writeAtomic(filepath.Join(root, run.RunID+".json"), pub)
+		_ = fsx.WriteAtomic(filepath.Join(root, run.RunID+".json"), pub)
 	}
 	return nil
 }

@@ -4,10 +4,11 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,7 +44,8 @@ type Options struct {
 	Optimize    bool
 	Attach      bool // mock only
 	JUnitPath   string
-	ClearProxy  bool // remove a device-wide HTTP proxy instead of refusing the device
+	ClearProxy  bool   // remove a device-wide HTTP proxy instead of refusing the device
+	Keyboard    string // "", "hidden" or "shown": on-screen keyboard state to apply before flows
 
 	// Set by a parallel parent for its workers.
 	SessionAPK    string
@@ -54,20 +56,16 @@ func DefaultOptions() Options {
 	return Options{Tags: []string{"smoke"}, ServerPort: project.ReservedMockPort, FBRC: map[string]string{}}
 }
 
-// Prompter lets an interactive front end answer questions the engine cannot decide alone.
-type Prompter interface {
-	ChooseAVD(avds []string) (string, bool)
-}
-
 type Engine struct {
-	P      *project.Project
-	Store  *fixtures.Store
-	Exec   execx.Runner
-	Plat   platform.Platform
-	Opts   Options
-	Sink   Sink
-	Prompt Prompter
-	Owner  string
+	P     *project.Project
+	Store *fixtures.Store
+	Exec  execx.Runner
+	Plat  platform.Platform
+	Opts  Options
+	Sink  Sink
+	// ChooseAVD lets an interactive front end pick what to boot; nil when unattended.
+	ChooseAVD func(avds []string) (string, bool)
+	Owner     string
 
 	jar string
 }
@@ -157,11 +155,7 @@ func isTTY(f *os.File) bool {
 // NewRunID: <utc stamp>-<pid>-<hex>, the shape test.sh used (the app accepts [A-Za-z0-9._-]).
 func NewRunID() string {
 	b := make([]byte, 3)
-	f, err := os.Open("/dev/urandom")
-	if err == nil {
-		_, _ = f.Read(b)
-		f.Close()
-	}
+	_, _ = rand.Read(b)
 	return fmt.Sprintf("%s-%d-%x", time.Now().UTC().Format("20060102T150405Z"), os.Getpid(), b)
 }
 
@@ -209,22 +203,9 @@ func (e *Engine) DiscoverFlows() ([]*fixtures.Flow, error) {
 func (e *Engine) FBRCFor(h *fixtures.Header) map[string]string {
 	out := map[string]string{}
 	if h != nil {
-		for k, v := range h.FBRC {
-			out[k] = v
-		}
+		maps.Copy(out, h.FBRC)
 	}
-	for k, v := range e.Opts.FBRC {
-		out[k] = v
-	}
-	return out
-}
-
-func sortedKeys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
+	maps.Copy(out, e.Opts.FBRC)
 	return out
 }
 
@@ -326,6 +307,9 @@ func (o *Options) Validate(command string) error {
 	}
 	if len(o.FBRC) > 0 && command != "run" && command != "mock" {
 		return fmt.Errorf("--fbrc is only valid with run or mock")
+	}
+	if o.Keyboard != "" && o.Keyboard != "hidden" && o.Keyboard != "shown" {
+		return fmt.Errorf("--keyboard requires hidden or shown")
 	}
 	if o.Attach && command != "mock" {
 		return fmt.Errorf("--attach is only valid with mock")

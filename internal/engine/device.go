@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/feernandooff/trun/internal/lock"
@@ -24,12 +25,7 @@ func (e *Engine) isDesignated(ctx context.Context, serial string) bool {
 	if name == "" {
 		return false
 	}
-	for _, d := range e.Plat.Designated() {
-		if d == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(e.Plat.Designated(), name)
 }
 
 // Allowed reports whether this owner may drive serial at all.
@@ -102,37 +98,27 @@ func (e *Engine) candidates(ctx context.Context, devs []platform.Device) []strin
 
 // BootCandidates: designated installed AVDs/simulators, plus (for humans) every other one.
 func (e *Engine) BootCandidates(ctx context.Context) []string {
-	out := e.Plat.Bootable(ctx)
-	if e.Owner != "human" {
-		return out
-	}
-	var others []string
-	switch p := e.Plat.(type) {
-	case *platform.Android:
-		others = p.InstalledAVDs(ctx)
-	case *platform.IOS:
-		devs, _ := p.Devices(ctx)
-		for _, d := range devs {
-			if d.State != "Booted" {
-				others = append(others, d.Name)
+	candidates := e.Plat.Bootable(ctx)
+	if e.Owner == "human" {
+		switch p := e.Plat.(type) {
+		case *platform.Android:
+			candidates = append(candidates, p.InstalledAVDs(ctx)...)
+		case *platform.IOS:
+			devs, _ := p.Devices(ctx)
+			for _, d := range devs {
+				candidates = append(candidates, d.Name)
 			}
 		}
 	}
-	for _, n := range others {
-		if !contains(out, n) {
+	// Already running: nothing to boot (the emulator refuses a second instance anyway).
+	running := e.runningNames(ctx)
+	var out []string
+	for _, n := range candidates {
+		if !slices.Contains(out, n) && !slices.Contains(running, n) {
 			out = append(out, n)
 		}
 	}
 	return out
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // offerBoot boots something when no eligible device is free. Unattended runs must pass
@@ -146,16 +132,16 @@ func (e *Engine) offerBoot(ctx context.Context) bool {
 	pick := ""
 	switch {
 	case e.Opts.BootAVD != "":
-		if !contains(avds, e.Opts.BootAVD) {
+		if !slices.Contains(avds, e.Opts.BootAVD) {
 			e.Warnf("AVD '%s' is not designated (MAESTRO_AGENT_AVDS, .maestro/agent-avds.txt, ~/.config/trun/designated.txt).", e.Opts.BootAVD)
 			return false
 		}
 		pick = e.Opts.BootAVD
 	case e.Opts.BootRequest:
 		pick = avds[0]
-	case e.Prompt != nil:
+	case e.ChooseAVD != nil:
 		var ok bool
-		if pick, ok = e.Prompt.ChooseAVD(avds); !ok {
+		if pick, ok = e.ChooseAVD(avds); !ok {
 			return false
 		}
 	default:
@@ -268,7 +254,7 @@ func (e *Engine) EnsureParallelDevices(ctx context.Context, wanted int) error {
 	running := e.runningNames(ctx)
 	var toBoot []string
 	for _, n := range e.BootCandidates(ctx) {
-		if !contains(running, n) {
+		if !slices.Contains(running, n) {
 			toBoot = append(toBoot, n)
 		}
 	}

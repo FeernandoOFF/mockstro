@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -98,6 +99,13 @@ func (r *Run) Setup(ctx context.Context, needDevice bool) error {
 		// Checked before the build: a leftover proxy would otherwise fail every flow minutes later.
 		if err := r.checkProxy(ctx); err != nil {
 			return err
+		}
+	}
+	if r.Device != "" && e.Opts.Keyboard != "" {
+		if err := e.Plat.SetKeyboard(ctx, r.Device, e.Opts.Keyboard == "shown"); err != nil {
+			r.warnf("%v", err)
+		} else {
+			r.logf("On-screen keyboard %s on %s.", e.Opts.Keyboard, r.Device)
 		}
 	}
 	if r.Device != "" {
@@ -343,7 +351,7 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 	}
 	w.buf = append(w.buf, p...)
 	for {
-		i := indexNL(w.buf)
+		i := bytes.IndexByte(w.buf, '\n')
 		if i < 0 {
 			break
 		}
@@ -359,15 +367,6 @@ func (w *lineWriter) Flush() {
 		w.emit(stripCR(string(w.buf)))
 		w.buf = nil
 	}
-}
-
-func indexNL(b []byte) int {
-	for i, c := range b {
-		if c == '\n' {
-			return i
-		}
-	}
-	return -1
 }
 
 // stripCR keeps the last carriage-return segment (progress bars redraw with \r).

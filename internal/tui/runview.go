@@ -3,8 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os/exec"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -108,19 +109,6 @@ func (r *runModel) start(o engine.Options, total int) tea.Cmd {
 	a.log("info", "run started: %s", commandLine(o))
 	return nil
 }
-
-func (r *runModel) cancelAndWait() {
-	if r.cancel != nil {
-		r.cancel()
-	}
-	if r.done != nil {
-		select {
-		case <-r.done:
-		case <-time.After(90 * time.Second):
-		}
-	}
-}
-
 func (r *runModel) update(msg tea.Msg) tea.Cmd {
 	switch m := msg.(type) {
 	case runDoneMsg:
@@ -186,14 +174,7 @@ func (r *runModel) update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (r *runModel) workerIDs() []int {
-	var ids []int
-	for id := range r.workers {
-		ids = append(ids, id)
-	}
-	sort.Ints(ids)
-	return ids
-}
+func (r *runModel) workerIDs() []int { return slices.Sorted(maps.Keys(r.workers)) }
 
 func (r *runModel) key(k tea.KeyMsg) tea.Cmd {
 	if r.confirm {
@@ -383,21 +364,29 @@ func (r *runModel) view(w, h int) (string, string) {
 	// Results list.
 	var rb strings.Builder
 	resH := h - workersH - 1
-	rs, re := window(len(r.results), r.resCursor, resH-3)
-	for i := rs; i < re; i++ {
-		res := r.results[i]
+	var rows []string
+	focusLine := 0
+	for i, res := range r.results {
 		cur := "  "
 		name := truncate(res.Feature+"/"+res.File, 40)
 		if i == r.resCursor {
 			cur = sSel.Render("› ")
+			focusLine = len(rows)
 			if !r.focusLog {
 				name = sSel.Render(name)
 			}
 		}
-		fmt.Fprintf(&rb, "%s%s %s%s\n", cur, statusStyle(res.Passed(), res.Stage), name, shotBadge(res))
+		rows = append(rows, fmt.Sprintf("%s%s %s%s", cur, statusStyle(res.Passed(), res.Stage), name, shotBadge(res)))
 		if !res.Passed() && res.Stage != "TEST" && res.Stage != "UNSTARTED" {
-			fmt.Fprintf(&rb, "     %s\n", sMuted.Render(res.Stage))
+			rows = append(rows, "     "+sMuted.Render(res.Stage))
 		}
+	}
+	reserve := 3
+	if r.summary != nil && r.summary.Dir != "" {
+		reserve += 2
+	}
+	if len(rows) > 0 {
+		rb.WriteString(strings.Join(visibleLines(rows, focusLine, resH-reserve), "\n") + "\n")
 	}
 	if r.summary != nil && r.summary.Dir != "" {
 		rb.WriteString("\n" + sMuted.Render(r.a.p.Rel(r.summary.Dir)))
@@ -452,9 +441,4 @@ func (r *runModel) view(w, h int) (string, string) {
 		help = sWarn.Render("Cancel the run? Devices and locks are cleaned up. [y/N]")
 	}
 	return body, help
-}
-
-// start2ForTest puts the model into a running state without an engine.
-func (r *runModel) start2ForTest() {
-	*r = runModel{a: r.a, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[*engine.Result]outputMark{}}
 }

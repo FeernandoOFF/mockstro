@@ -45,9 +45,3 @@ func (f *Fake) LookPath(name string) (string, error) {
 	}
 	return "", errors.New("not found")
 }
-
-func (f *Fake) Snapshot() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.Calls...)
-}

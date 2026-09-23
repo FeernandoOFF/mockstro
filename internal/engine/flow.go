@@ -10,11 +10,11 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/feernandooff/trun/internal/execx"
 	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/ojson"
 	"github.com/feernandooff/trun/internal/platform"
 	"github.com/feernandooff/trun/internal/project"
 	"github.com/feernandooff/trun/internal/wiremock"
@@ -79,7 +79,7 @@ func (r *Run) Activate(ctx context.Context, profile string, fbrc map[string]stri
 		r.overrideApplied = true
 	}
 	if !r.overrideAuto {
-		mappings = append(mappings, wiremock.FBRCMappings(fbrc, sortedKeys(fbrc))...)
+		mappings = append(mappings, wiremock.FBRCMappings(fbrc)...)
 	}
 	if !r.preflightDone && r.Device != "" {
 		if r.overrideAuto {
@@ -144,7 +144,7 @@ func (r *Run) recordingPath(f *fixtures.Flow) string {
 	if dir == "" {
 		dir = filepath.Join(r.Dir, "recordings")
 	}
-	name := safeName(f.Feature) + "-" + safeName(trimExt(f.File)) + ".mp4"
+	name := FlowSlug(f.Feature, f.File) + ".mp4"
 	return filepath.Join(dir, name)
 }
 
@@ -180,9 +180,10 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 
 	logDir := filepath.Join(r.Dir, "logs")
 	_ = os.MkdirAll(logDir, 0o755)
-	res.LogPath = filepath.Join(logDir, safeName(f.Feature)+"-"+safeName(trimExt(f.File))+".log")
+	slug := FlowSlug(f.Feature, f.File)
+	res.LogPath = filepath.Join(logDir, slug+".log")
 	// Maestro's own debug log would otherwise pile up in ~/.maestro/tests forever.
-	debugDir := filepath.Join(r.Dir, "maestro-debug", safeName(f.Feature)+"-"+safeName(trimExt(f.File)))
+	debugDir := filepath.Join(r.Dir, "maestro-debug", slug)
 	logFile, _ := os.Create(res.LogPath)
 	lw := &lineWriter{tee: logFile, emit: func(line string) {
 		e.emit(Event{Kind: EvOutput, Worker: r.Worker, RunID: r.ID, Flow: f.Rel, Text: line})
@@ -200,7 +201,7 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 		_ = os.MkdirAll(filepath.Dir(res.Recording), 0o755)
 		target := res.Recording
 		if e.Opts.Optimize {
-			target = res.Recording[:len(res.Recording)-4] + ".raw.mp4"
+			target = rawPath(res.Recording)
 		}
 		r.logf("Recording %s/%s [%s]", f.Feature, f.File, profile)
 		args = append(args, "record", "--local", "--config", r.configPath, "--debug-output", debugDir, "-e", envArg, flowPath, target)
@@ -221,7 +222,7 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 			exit = 130
 		}
 		if res.Recording != "" {
-			if raw := res.Recording[:len(res.Recording)-4] + ".raw.mp4"; e.Opts.Optimize && fileExists(raw) {
+			if raw := rawPath(res.Recording); e.Opts.Optimize && fileExists(raw) {
 				res.Recording = raw
 			} else if !fileExists(res.Recording) {
 				res.Recording = ""
@@ -343,7 +344,7 @@ func (e *Engine) OptimizeRecordings(ctx context.Context, results []*Result) bool
 		if res.Recording == "" {
 			continue
 		}
-		raw := res.Recording[:len(res.Recording)-4] + ".raw.mp4"
+		raw := rawPath(res.Recording)
 		if !fileExists(raw) {
 			if res.Passed() {
 				e.Warnf("Missing raw recording for %s/%s: %s", res.Feature, res.File, e.P.Rel(raw))
@@ -367,15 +368,6 @@ func (e *Engine) OptimizeRecordings(ctx context.Context, results []*Result) bool
 		ok = false
 	}
 	return ok
-}
-
-// ResolveHeaderFBRC exposes the FBRC set as an ordered object for display.
-func FBRCObject(m map[string]string) *ojson.Object {
-	o := ojson.NewObject()
-	for _, k := range sortedKeys(m) {
-		o.Set(k, m[k])
-	}
-	return o
 }
 
 // resultDirs lists Maestro's per-flow output dirs (results/<timestamp>/<flow name>).
@@ -402,3 +394,9 @@ func (r *Run) newArtifacts(before map[string]bool) (string, []string) {
 	}
 	return "", nil
 }
+
+// FlowSlug names a flow's log, debug dir and recording: <feature>-<file without .yaml>.
+func FlowSlug(feature, file string) string { return safeName(feature) + "-" + safeName(trimExt(file)) }
+
+// rawPath is where a recording is written before HandBrake optimises it.
+func rawPath(recording string) string { return strings.TrimSuffix(recording, ".mp4") + ".raw.mp4" }

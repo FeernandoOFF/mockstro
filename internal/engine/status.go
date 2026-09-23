@@ -14,7 +14,8 @@ type StatusDevice struct {
 	LockedBy   *string `json:"lockedBy"`
 	Designated bool    `json:"designated"`
 	Eligible   bool    `json:"eligible"`
-	Proxy      string  `json:"proxy,omitempty"` // device-wide HTTP proxy, "" when none
+	Proxy      string  `json:"proxy,omitempty"`    // device-wide HTTP proxy, "" when none
+	Keyboard   string  `json:"keyboard,omitempty"` // shown | hidden | always
 }
 
 type Available struct {
@@ -64,7 +65,7 @@ func (e *Engine) Status(ctx context.Context) *Status {
 				continue
 			}
 			d.Name = e.Plat.DeviceName(ctx, d.Serial)
-			sd := StatusDevice{Device: d, Designated: e.isDesignated(ctx, d.Serial), Proxy: e.Plat.DeviceProxy(ctx, d.Serial)}
+			sd := StatusDevice{Device: d, Designated: e.isDesignated(ctx, d.Serial), Proxy: e.Plat.DeviceProxy(ctx, d.Serial), Keyboard: e.Plat.Keyboard(ctx, d.Serial)}
 			if id, ok := busy[d.Serial]; ok {
 				sd.LockedBy = &id
 			} else if e.DeviceLocked(d.Serial) {

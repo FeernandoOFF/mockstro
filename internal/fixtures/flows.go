@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -45,8 +45,7 @@ func (v Verification) Expectation() string {
 	case v.AtLeast != nil:
 		return fmt.Sprintf("at least %d", *v.AtLeast)
 	default:
-		lo, hi := v.Bounds()
-		_ = lo
+		_, hi := v.Bounds()
 		return fmt.Sprintf("at most %d", hi)
 	}
 }
@@ -64,16 +63,6 @@ type Header struct {
 	HasSteps      bool
 
 	raw map[string]any
-}
-
-// FBRCKeys returns the FBRC keys sorted for stable output.
-func (h *Header) FBRCKeys() []string {
-	keys := make([]string, 0, len(h.FBRC))
-	for k := range h.FBRC {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 var docSep = regexp.MustCompile(`(?m)^---[ \t]*$`)
@@ -351,12 +340,7 @@ func (s *Store) Flow(path string) (*Flow, error) {
 }
 
 func (f *Flow) HasTag(tag string) bool {
-	for _, t := range f.Header.Tags {
-		if t == tag {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(f.Header.Tags, tag)
 }
 
 func (f *Flow) MatchesTags(tags []string) bool {

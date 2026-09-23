@@ -87,7 +87,7 @@ func (e *Engine) RunDirs(ctx context.Context, withSize bool) []RunDir {
 			continue
 		}
 		rd := RunDir{Path: p, Name: ent.Name(), ModTime: info.ModTime(), Session: strings.HasPrefix(ent.Name(), "session-")}
-		rd.Active = active[filepath.Clean(p)] || e.sessionActive(p, active) || e.ownerAlive(ctx, p, info.ModTime())
+		rd.Active = active[filepath.Clean(p)] || e.ownerAlive(ctx, p, info.ModTime())
 		if withSize {
 			rd.Size = DirSize(p)
 		}
@@ -122,17 +122,6 @@ func (e *Engine) RunDirs(ctx context.Context, withSize bool) []RunDir {
 	}
 	sort.Slice(folded, func(i, j int) bool { return folded[i].ModTime.After(folded[j].ModTime) })
 	return folded
-}
-
-// A parallel session is active while any of its workers is.
-func (e *Engine) sessionActive(dir string, active map[string]bool) bool {
-	links, _ := filepath.Glob(filepath.Join(dir, "worker-*"))
-	for _, l := range links {
-		if t, err := os.Readlink(l); err == nil && active[filepath.Clean(t)] {
-			return true
-		}
-	}
-	return false
 }
 
 // ownerAlive: a dir without a finished result still belongs to a run while the process that

@@ -2,7 +2,8 @@ package tui
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -50,6 +51,7 @@ const (
 	fRecord
 	fIntercept
 	fProxy
+	fKeyboard
 	fFBRC
 )
 
@@ -82,6 +84,7 @@ func (c *configModel) open(flows []*fixtures.Flow, tag string, explicit bool) {
 		{label: "Record video", options: []string{"no", "yes"}},
 		{label: "Interception", options: []string{"runtime override"}},
 		{label: "Device proxy", options: []string{"clear if set", "refuse device"}},
+		{label: "Virtual keyboard", options: []string{"leave as is", "hidden", "shown"}},
 		{label: "FBRC overrides", text: true},
 	}
 	if c.a.opts.Platform != "ios" {
@@ -125,6 +128,9 @@ func (c *configModel) options() (engine.Options, error) {
 	o.Record = c.fields[fRecord].idx == 1
 	o.MapRemote = c.fields[fIntercept].idx == 1
 	o.ClearProxy = c.fields[fProxy].idx == 0 && !o.MapRemote
+	if kb := c.fields[fKeyboard].value(); kb != "leave as is" {
+		o.Keyboard = kb
+	}
 	for _, part := range strings.Split(c.fbrc.Value(), ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -172,12 +178,10 @@ func commandLine(o engine.Options) string {
 	if o.ClearProxy {
 		parts = append(parts, "--clear-proxy")
 	}
-	keys := make([]string, 0, len(o.FBRC))
-	for k := range o.FBRC {
-		keys = append(keys, k)
+	if o.Keyboard != "" {
+		parts = append(parts, "--keyboard "+o.Keyboard)
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(o.FBRC)) {
 		parts = append(parts, fmt.Sprintf("--fbrc '%s=%s'", k, o.FBRC[k]))
 	}
 	parts = append(parts, o.FlowArgs...)
