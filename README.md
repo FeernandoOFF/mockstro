@@ -39,13 +39,17 @@ Every run writes `result.tsv` (test.sh format) and `junit.xml` into its run dir;
 
 ### TUI
 
+Shared keys: `↑↓`/`jk` move, `u`/`d` page (10), `g`/`G` top/bottom, `f` switch panel, `/` filter
+(`esc` clears), `x` stop/cancel/delete the item, `X` delete all, `enter`/`y` confirm, `esc` dismiss,
+`r`/`R` refresh, `1`–`6`/`tab`/`h`/`l` switch tab, `q` quit. The focused panel has a highlighted border.
+
 | Tab       | What it does                                                                 |
 |-----------|------------------------------------------------------------------------------|
-| Dashboard | devices, designated/bootable AVDs (`b` boots), active runs of every project, sweep |
-| Flows     | filter by text/tag, multi-select, then a run form (device, parallel, build/skip, boot, profile, fail-fast, record, map-remote, FBRC) that shows the equivalent CLI command |
-| Run       | live workers, per-flow results, each worker's Maestro output; ↑↓ on a result jumps the output to where that flow started (`G` follows the tail again, `f` switches arrows to scrolling); cancel; `F` re-run failed |
-| History   | past runs (trun and test.sh) with sizes, per-flow logs, `F` re-run failed, open run dir; `d` delete a run, `P` prune to the newest N, `X` delete all finished |
-| Mock      | serve a scenario/profile/flow on :18080 (optionally attached to a device), live request journal with unmatched requests highlighted, switch targets without restarting |
+| Dashboard | devices, designated/bootable AVDs (`enter`/`b` boots, `B` boots headless, `x` stops an emulator, `p` clears proxy, `v` toggles keyboard), active runs of every project, sweep |
+| Flows     | tag menu (with counts) beside the flow list, text filter, multi-select, then a run form grouped into Run / Device / Network that shows the equivalent CLI command (`c` copies it) |
+| Run       | live workers, per-flow results, each worker's Maestro output; ↑↓ on a result jumps the output to where that flow started (`f` switches to the output, where `G` follows the tail again); `x` cancel; `F` re-run failed |
+| History   | past runs (trun and test.sh) with sizes, per-flow logs, `F` re-run failed, open run dir; `x` delete a run, `P` prune to the newest N, `X` delete all finished |
+| Mock      | explorer of scenarios / profiles / flows (flows by folder and `name:`, `→←` open/close); serve one on :18080 (`a` picks the device to attach), live request journal with unmatched requests highlighted (`m` only those), switch targets without restarting, `x` stop |
 | Stubs     | a stub's own JSON (default) or the merged result (`m`); `e`/`E` walk the `extends` chain; a second panel shows the served response with `bodyFileName` expanded; who uses it |
 
 ## Machine-wide state

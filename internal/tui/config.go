@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -14,6 +15,7 @@ import (
 )
 
 type cfgField struct {
+	group   string
 	label   string
 	options []string
 	idx     int
@@ -39,19 +41,21 @@ type configModel struct {
 	cursor   int
 	fbrc     textinput.Model
 	err      string
+	note     string
 }
 
 const (
 	fDevice = iota
 	fParallel
 	fBuild
-	fBoot
 	fProfile
 	fFailFast
 	fRecord
+	fWindow
+	fKeyboard
+	fBoot
 	fIntercept
 	fProxy
-	fKeyboard
 	fFBRC
 )
 
@@ -64,7 +68,7 @@ func newConfigModel(a *app) *configModel {
 }
 
 func (c *configModel) open(flows []*fixtures.Flow, tag string, explicit bool) {
-	c.active, c.flows, c.byTag, c.explicit, c.err = true, flows, tag, explicit || c.a.flowTab.filter.Value() != "", ""
+	c.active, c.flows, c.byTag, c.explicit, c.err, c.note = true, flows, tag, explicit || c.a.flowTab.filter.Value() != "", "", ""
 	devices := []string{"auto"}
 	if st := c.a.status; st != nil {
 		devices = append(devices, st.Available.Eligible...)
@@ -75,17 +79,18 @@ func (c *configModel) open(flows []*fixtures.Flow, tag string, explicit bool) {
 		prev[i] = f.value()
 	}
 	c.fields = []*cfgField{
-		{label: "Device", options: devices},
-		{label: "Parallel", options: []string{"off", "auto", "2", "3", "4"}},
-		{label: "Build", options: []string{"build & install", "skip build (use installed app)"}},
-		{label: "Boot emulator", options: []string{"if none free", "never"}},
-		{label: "Profile", options: profiles},
-		{label: "Fail fast", options: []string{"no", "yes"}},
-		{label: "Record video", options: []string{"no", "yes"}},
-		{label: "Interception", options: []string{"runtime override"}},
-		{label: "Device proxy", options: []string{"clear if set", "refuse device"}},
-		{label: "Virtual keyboard", options: []string{"leave as is", "hidden", "shown"}},
-		{label: "FBRC overrides", text: true},
+		{group: "Run", label: "Device", options: devices},
+		{group: "Run", label: "Parallel", options: []string{"off", "auto", "2", "3", "4"}},
+		{group: "Run", label: "Build", options: []string{"build & install", "skip build (use installed app)"}},
+		{group: "Run", label: "Profile", options: profiles},
+		{group: "Run", label: "Fail fast", options: []string{"no", "yes"}},
+		{group: "Run", label: "Record video", options: []string{"no", "yes"}},
+		{group: "Device", label: "Emulator window", options: []string{"shown", "headless (faster in parallel)"}},
+		{group: "Device", label: "Virtual keyboard", options: []string{"leave as is", "hidden", "shown"}},
+		{group: "Device", label: "Boot emulator", options: []string{"if none free", "never"}},
+		{group: "Network", label: "Interception", options: []string{"runtime override"}},
+		{group: "Network", label: "Device proxy", options: []string{"clear if set", "refuse device"}},
+		{group: "Network", label: "FBRC overrides", text: true},
 	}
 	if c.a.opts.Platform != "ios" {
 		c.fields[fIntercept].options = append(c.fields[fIntercept].options, "map remote (Proxyman/Charles, port 18080)")
@@ -128,6 +133,7 @@ func (c *configModel) options() (engine.Options, error) {
 	o.Record = c.fields[fRecord].idx == 1
 	o.MapRemote = c.fields[fIntercept].idx == 1
 	o.ClearProxy = c.fields[fProxy].idx == 0 && !o.MapRemote
+	o.Headless = c.fields[fWindow].idx == 1
 	if kb := c.fields[fKeyboard].value(); kb != "leave as is" {
 		o.Keyboard = kb
 	}
@@ -181,6 +187,9 @@ func commandLine(o engine.Options) string {
 	if o.Keyboard != "" {
 		parts = append(parts, "--keyboard "+o.Keyboard)
 	}
+	if o.Headless {
+		parts = append(parts, "--headless")
+	}
 	for _, k := range slices.Sorted(maps.Keys(o.FBRC)) {
 		parts = append(parts, fmt.Sprintf("--fbrc '%s=%s'", k, o.FBRC[k]))
 	}
@@ -200,18 +209,19 @@ func (c *configModel) key(k tea.KeyMsg) tea.Cmd {
 		c.fbrc, cmd = c.fbrc.Update(k)
 		return cmd
 	}
+	c.note = ""
 	f := c.fields[c.cursor]
+	key := map[string]string{"tab": "down", "shift+tab": "up"}[k.String()]
+	if key == "" {
+		key = k.String()
+	}
+	if cur, ok := navKey(key, c.cursor, len(c.fields)); ok {
+		c.cursor = c.skipDisabled(cur, cur-c.cursor)
+		return nil
+	}
 	switch k.String() {
-	case "esc", "q":
+	case "esc":
 		c.active = false
-	case "up", "k", "shift+tab":
-		if c.cursor > 0 {
-			c.cursor--
-		}
-	case "down", "j", "tab":
-		if c.cursor < len(c.fields)-1 {
-			c.cursor++
-		}
 	case "left", "h":
 		if !f.text && len(f.options) > 0 {
 			f.idx = (f.idx + len(f.options) - 1) % len(f.options)
@@ -224,16 +234,23 @@ func (c *configModel) key(k tea.KeyMsg) tea.Cmd {
 		if len(f.options) > 0 {
 			f.idx = (f.idx + 1) % len(f.options)
 		}
+	case "c":
+		o, err := c.options()
+		if err != nil {
+			c.err = err.Error()
+			return nil
+		}
+		if err := clipboard.WriteAll(commandLine(o)); err != nil {
+			c.note = sBad.Render("copy failed: " + err.Error())
+		} else {
+			c.note = sOK.Render("copied")
+		}
 	case "e":
 		if f.text {
 			c.editing = true
 			return c.fbrc.Focus()
 		}
-	case "enter", "s":
-		if f.text && k.String() == "enter" {
-			c.editing = true
-			return c.fbrc.Focus()
-		}
+	case "enter":
 		o, err := c.options()
 		if err != nil {
 			c.err = err.Error()
@@ -250,6 +267,26 @@ func (c *configModel) key(k tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// disabled: Device proxy does not apply with map remote; the user's own proxy is the point.
+func (c *configModel) disabled(i int) bool {
+	return i == fProxy && c.fields[fIntercept].idx == 1
+}
+
+// skipDisabled steps off a disabled field in the direction of travel, or back if at the end.
+func (c *configModel) skipDisabled(cur, dir int) int {
+	if !c.disabled(cur) {
+		return cur
+	}
+	step := 1
+	if dir < 0 {
+		step = -1
+	}
+	if n := cur + step; n >= 0 && n < len(c.fields) {
+		return n
+	}
+	return cur - step
+}
+
 func (c *configModel) view(w, h int) (string, string) {
 	var b strings.Builder
 	what := fmt.Sprintf("%d flow(s)", len(c.flows))
@@ -257,9 +294,17 @@ func (c *configModel) view(w, h int) (string, string) {
 		what += " tagged " + sSel.Render(c.byTag)
 	}
 	b.WriteString(sBold.Render("Run "+what) + "\n\n")
+	group := ""
 	for i, f := range c.fields {
+		if f.group != group {
+			if group != "" {
+				b.WriteString("\n")
+			}
+			group = f.group
+			b.WriteString(sMuted.Render(group) + "\n")
+		}
 		cur := "  "
-		label := pad(f.label, 16)
+		label := pad(f.label, 22)
 		if i == c.cursor {
 			cur = sSel.Render("› ")
 			label = sSel.Render(label)
@@ -268,8 +313,11 @@ func (c *configModel) view(w, h int) (string, string) {
 		if f.text {
 			val = c.fbrc.View()
 			if c.fbrc.Value() == "" && !c.editing {
-				val = sMuted.Render("none (enter to edit)")
+				val = sMuted.Render("none (e to edit)")
 			}
+		} else if c.disabled(i) {
+			label = sMuted.Render(label)
+			val = sMuted.Render("n/a with map remote (your proxy stays)")
 		} else {
 			val = "‹ " + f.value() + " ›"
 			if i != c.cursor {
@@ -280,7 +328,7 @@ func (c *configModel) view(w, h int) (string, string) {
 	}
 	b.WriteString("\n")
 	if o, err := c.options(); err == nil {
-		b.WriteString(sMuted.Render("Equivalent command:") + "\n  " + truncate(commandLine(o), w-8) + "\n")
+		b.WriteString(sMuted.Render("Equivalent command:") + " " + c.note + "\n  " + truncate(commandLine(o), w-8) + "\n")
 	} else {
 		b.WriteString(sBad.Render(err.Error()) + "\n")
 	}
@@ -289,13 +337,13 @@ func (c *configModel) view(w, h int) (string, string) {
 	}
 	b.WriteString("\n" + sMuted.Render("Flows:") + "\n")
 	for i, f := range c.flows {
-		if i >= h-len(c.fields)-14 {
+		if i >= h-len(c.fields)-19 {
 			b.WriteString(sMuted.Render(fmt.Sprintf("  … and %d more", len(c.flows)-i)) + "\n")
 			break
 		}
 		b.WriteString("  " + f.Rel + "\n")
 	}
-	help := "↑↓ field · ←→ change · enter start · esc back"
+	help := navHelp + " · ←→ change · e edit · c copy command · enter start · esc back"
 	if c.editing {
 		help = "type key=value pairs separated by commas · enter done"
 	}

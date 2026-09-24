@@ -68,10 +68,11 @@ func (e *Engine) runSingle(ctx context.Context, flows []*fixtures.Flow, start ti
 }
 
 // Parallel: workers are goroutines, each a full Run with its own device, port and WireMock.
-// Flows are claimed one at a time because durations vary a lot.
+// Flows are claimed one at a time because durations vary a lot, in `order` (nil = as listed).
 type queue struct {
 	mu      sync.Mutex
 	flows   []*fixtures.Flow
+	order   []int
 	next    int
 	claimed []bool
 	results []*Result
@@ -85,6 +86,9 @@ func (q *queue) claim() (int, *fixtures.Flow, bool) {
 		return 0, nil, false
 	}
 	i := q.next
+	if q.order != nil {
+		i = q.order[q.next]
+	}
 	q.next++
 	q.claimed[i] = true
 	return i, q.flows[i], true
@@ -157,6 +161,13 @@ func (e *Engine) runParallel(ctx context.Context, flows []*fixtures.Flow, start 
 	}
 
 	q := &queue{flows: flows, claimed: make([]bool, len(flows)), results: make([]*Result, len(flows))}
+	if workers > 1 {
+		order, known := longestFirst(flows, e.FlowEstimates(ctx))
+		if known > 0 {
+			q.order = order
+			e.Logf("Scheduling longest flows first (%d/%d with past durations).", known, len(flows))
+		}
+	}
 	var wg sync.WaitGroup
 	var failMu sync.Mutex
 	var workerFailures []string

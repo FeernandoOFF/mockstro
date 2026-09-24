@@ -48,7 +48,8 @@ type Platform interface {
 	Designated() []string
 	// Bootable lists designated AVDs/simulators installed on this machine.
 	Bootable(ctx context.Context) []string
-	Boot(ctx context.Context, name string, progress func(string)) (string, error)
+	// Boot starts name; headless skips the emulator window (Android) / Simulator.app (iOS).
+	Boot(ctx context.Context, name string, headless bool, progress func(string)) (string, error)
 	EnsureBooted(ctx context.Context, serial string, progress func(string)) error
 
 	Build(ctx context.Context, artifactDir string, out io.Writer) (path, sha string, err error)
@@ -63,10 +64,11 @@ type Platform interface {
 	// and verifies the device reads back clean.
 	DeviceProxy(ctx context.Context, serial string) string
 	ClearProxy(ctx context.Context, serial string) error
-	// Keyboard reports the on-screen keyboard: "shown", "hidden", "always" (no hardware
-	// keyboard, so it cannot be hidden) or "" when unsupported.
+	// Keyboard reports the on-screen keyboard: "shown", "hidden" or "" when unsupported.
 	Keyboard(ctx context.Context, serial string) string
 	SetKeyboard(ctx context.Context, serial string, show bool) error
+	// Shutdown stops an emulator/simulator and waits until it is gone; physical devices refuse.
+	Shutdown(ctx context.Context, serial string) error
 	WriteOverride(ctx context.Context, serial string, o Override) error
 	PreflightOverride(ctx context.Context, serial string, o Override) (string, error)
 	AcceptedRunID(ctx context.Context, serial string) string

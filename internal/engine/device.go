@@ -148,7 +148,7 @@ func (e *Engine) offerBoot(ctx context.Context) bool {
 		e.Warnf("No free emulator. Available AVDs: %s", strings.Join(avds, " "))
 		return false
 	}
-	if _, err := e.Plat.Boot(ctx, pick, func(s string) { e.Logf("%s", s) }); err != nil {
+	if _, err := e.Plat.Boot(ctx, pick, e.Opts.Headless, func(s string) { e.Logf("%s", s) }); err != nil {
 		e.Warnf("%v", err)
 		return false
 	}
@@ -267,7 +267,7 @@ func (e *Engine) EnsureParallelDevices(ctx context.Context, wanted int) error {
 		if free+booted >= wanted {
 			break
 		}
-		if _, err := e.Plat.Boot(ctx, n, func(s string) { e.Logf("%s", s) }); err != nil {
+		if _, err := e.Plat.Boot(ctx, n, e.Opts.Headless, func(s string) { e.Logf("%s", s) }); err != nil {
 			return fmt.Errorf("could not boot designated device '%s' for --parallel %d: %w", n, wanted, err)
 		}
 		booted++

@@ -15,20 +15,31 @@ var (
 	colWarn   = lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#E3B341"}
 	colBorder = lipgloss.AdaptiveColor{Light: "#D0D0D8", Dark: "#3A3A46"}
 
-	sTitle     = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
-	sMuted     = lipgloss.NewStyle().Foreground(colMuted)
-	sOK        = lipgloss.NewStyle().Foreground(colOK)
-	sBad       = lipgloss.NewStyle().Foreground(colBad)
-	sWarn      = lipgloss.NewStyle().Foreground(colWarn)
-	sBold      = lipgloss.NewStyle().Bold(true)
-	sSel       = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
-	sTab       = lipgloss.NewStyle().Padding(0, 1).Foreground(colMuted)
-	sTabActive = lipgloss.NewStyle().Padding(0, 1).Foreground(colAccent).Bold(true).Underline(true)
-	sPanel     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colBorder).Padding(0, 1)
-	sHelp      = lipgloss.NewStyle().Foreground(colMuted)
+	sTitle      = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+	sMuted      = lipgloss.NewStyle().Foreground(colMuted)
+	sOK         = lipgloss.NewStyle().Foreground(colOK)
+	sBad        = lipgloss.NewStyle().Foreground(colBad)
+	sWarn       = lipgloss.NewStyle().Foreground(colWarn)
+	sBold       = lipgloss.NewStyle().Bold(true)
+	sSel        = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
+	sTab        = lipgloss.NewStyle().Padding(0, 1).Foreground(colMuted)
+	sTabActive  = lipgloss.NewStyle().Padding(0, 1).Foreground(colAccent).Bold(true).Underline(true)
+	sPanel      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colBorder).Padding(0, 1)
+	sPanelFocus = sPanel.BorderForeground(colAccent)
+	sHelp       = lipgloss.NewStyle().Foreground(colMuted)
 )
 
-func panel(title, body string, w, h int) string {
+func panel(title, body string, w, h int) string { return panelStyled(sPanel, title, body, w, h) }
+
+// focusPanel is a panel whose border lights up while it has keyboard focus.
+func focusPanel(focused bool, title, body string, w, h int) string {
+	if focused {
+		return panelStyled(sPanelFocus, title, body, w, h)
+	}
+	return panel(title, body, w, h)
+}
+
+func panelStyled(st lipgloss.Style, title, body string, w, h int) string {
 	if w < 10 {
 		w = 10
 	}
@@ -44,7 +55,7 @@ func panel(title, body string, w, h int) string {
 		lines[i] = truncate(l, w-4)
 	}
 	content := sTitle.Render(title) + "\n" + strings.Join(lines, "\n")
-	return sPanel.Width(w - 2).Height(h - 2).Render(content)
+	return st.Width(w - 2).Height(h - 2).Render(content)
 }
 
 func truncate(s string, w int) string {

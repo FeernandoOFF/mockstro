@@ -26,6 +26,10 @@ type IOS struct {
 	P    *project.Project
 	Exec execx.Runner
 
+	// BootKeyboard ("", "hidden", "shown") is written before booting, so the run's keyboard
+	// choice lands on the first boot instead of costing a second one.
+	BootKeyboard string
+
 	mu       sync.Mutex
 	cache    []simDevice
 	cachedAt time.Time
@@ -108,7 +112,7 @@ func (i *IOS) Bootable(ctx context.Context) []string {
 	return out
 }
 
-func (i *IOS) Boot(ctx context.Context, name string, progress func(string)) (string, error) {
+func (i *IOS) Boot(ctx context.Context, name string, headless bool, progress func(string)) (string, error) {
 	udid := ""
 	for _, s := range i.sims(ctx, true) {
 		if s.Name == name {
@@ -118,13 +122,20 @@ func (i *IOS) Boot(ctx context.Context, name string, progress func(string)) (str
 	if udid == "" {
 		return "", fmt.Errorf("no available simulator named %s", name)
 	}
+	if i.BootKeyboard != "" {
+		if err := i.writeKeyboardPref(ctx, udid, i.BootKeyboard == "shown"); err != nil {
+			progress(err.Error())
+		}
+	}
 	progress(fmt.Sprintf("Booting simulator %s...", name))
 	_, _ = i.simctl(ctx, "boot", udid)
 	if _, err := i.simctl(ctx, "bootstatus", udid, "-b"); err != nil {
 		return "", fmt.Errorf("simulator %s did not finish booting", name)
 	}
 	progress(fmt.Sprintf("Booted %s as %s", name, udid))
-	i.showSimulator(ctx, progress)
+	if !headless {
+		i.showSimulator(ctx, progress)
+	}
 	i.sims(ctx, true)
 	return udid, nil
 }
@@ -276,6 +287,24 @@ func (i *IOS) SetKeyboard(ctx context.Context, serial string, show bool) error {
 	if (i.Keyboard(ctx, serial) == "shown") == show {
 		return nil
 	}
+	if err := i.writeKeyboardPref(ctx, serial, show); err != nil {
+		return err
+	}
+	for _, s := range i.sims(ctx, true) {
+		if s.UDID == serial && s.State == "Booted" {
+			_, _ = i.simctl(ctx, "shutdown", serial)
+			_, _ = i.simctl(ctx, "boot", serial)
+			if _, err := i.simctl(ctx, "bootstatus", serial, "-b"); err != nil {
+				return fmt.Errorf("simulator %s did not come back after the keyboard change", serial)
+			}
+			i.sims(ctx, true)
+		}
+	}
+	return nil
+}
+
+// writeKeyboardPref records the per-simulator preference; it takes effect on the next boot.
+func (i *IOS) writeKeyboardPref(ctx context.Context, serial string, show bool) error {
 	plist := simulatorPlist()
 	plutil := func(args ...string) error {
 		_, err := i.Exec.Output(ctx, execx.Cmd{Name: "plutil", Args: append(args, plist)})
@@ -290,16 +319,6 @@ func (i *IOS) SetKeyboard(ctx context.Context, serial string, show bool) error {
 	}
 	if err := plutil("-replace", "DevicePreferences."+serial+".ConnectHardwareKeyboard", "-bool", connect); err != nil {
 		return fmt.Errorf("could not set the keyboard preference for %s: %w", serial, err)
-	}
-	for _, s := range i.sims(ctx, true) {
-		if s.UDID == serial && s.State == "Booted" {
-			_, _ = i.simctl(ctx, "shutdown", serial)
-			_, _ = i.simctl(ctx, "boot", serial)
-			if _, err := i.simctl(ctx, "bootstatus", serial, "-b"); err != nil {
-				return fmt.Errorf("simulator %s did not come back after the keyboard change", serial)
-			}
-			i.sims(ctx, true)
-		}
 	}
 	return nil
 }
@@ -384,3 +403,10 @@ func (i *IOS) ResetApp(ctx context.Context, serial, runID string) (bool, string)
 
 func (i *IOS) AttachPort(context.Context, string, int) error { return nil }
 func (i *IOS) DetachPort(context.Context, string, int) error { return nil }
+
+func (i *IOS) Shutdown(ctx context.Context, serial string) error {
+	if _, err := i.simctl(ctx, "shutdown", serial); err != nil {
+		return fmt.Errorf("could not shut down simulator %s: %w", serial, err)
+	}
+	return nil
+}

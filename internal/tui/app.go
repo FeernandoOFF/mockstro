@@ -214,6 +214,14 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.log("info", "on-screen keyboard %s on %s", m.state, m.serial)
 		}
 		return a, a.refreshStatus()
+	case deviceStoppedMsg:
+		a.dash.clearing = ""
+		if m.err != nil {
+			a.log("error", "stop: %v", m.err)
+		} else {
+			a.log("info", "stopped %s", m.serial)
+		}
+		return a, a.refreshStatus()
 	case proxyClearedMsg:
 		a.dash.clearing = ""
 		if m.err != nil {
@@ -259,18 +267,16 @@ func (a *app) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !a.inputFocused() {
 		switch k.String() {
 		case "q":
-			if !(a.tab == tabFlows && a.cfg.active) {
-				return a.requestQuit()
-			}
+			return a.requestQuit()
 		case "1", "2", "3", "4", "5", "6":
 			a.tab = int(k.String()[0] - '1')
 			return a, nil
-		case "tab":
+		case "tab", "l":
 			if !(a.tab == tabFlows && a.cfg.active) {
 				a.tab = (a.tab + 1) % len(tabNames)
 				return a, nil
 			}
-		case "shift+tab":
+		case "shift+tab", "h":
 			if !(a.tab == tabFlows && a.cfg.active) {
 				a.tab = (a.tab + len(tabNames) - 1) % len(tabNames)
 				return a, nil
@@ -387,7 +393,7 @@ func (a *app) View() string {
 	}
 	footer := sHelp.Render(" " + help + " · 1-6/tab switch · r/R refresh · q quit")
 	if a.confirmQ {
-		footer = sWarn.Render(" A run or mock is active. Stop it and quit? [y/N]")
+		footer = sWarn.Render(" A run or mock is active. Stop it and quit? " + confirmHint)
 	}
 	body = lipgloss.NewStyle().Height(bodyH).MaxHeight(bodyH).Render(body)
 	return lipgloss.JoinVertical(lipgloss.Left, head, proj, body, footer)

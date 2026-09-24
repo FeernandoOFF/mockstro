@@ -337,7 +337,7 @@ type bootSpy struct {
 	boot func(string)
 }
 
-func (b *bootSpy) Boot(_ context.Context, name string, _ func(string)) (string, error) {
+func (b *bootSpy) Boot(_ context.Context, name string, _ bool, _ func(string)) (string, error) {
 	b.boot(name)
 	return "", nil
 }
@@ -584,19 +584,35 @@ func TestDeleteRemovesLinkedMaestroOutput(t *testing.T) {
 }
 
 func TestKeyboardAndroid(t *testing.T) {
-	setting, hw := "1", true
+	ids := map[string]string{
+		"com.google.android.inputmethod.latin": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME",
+		"com.google.android.tts":               "com.google.android.tts/.VoiceInputMethodService",
+		"dev.mobile.maestro":                   "dev.mobile.maestro/.input.MaestroInputMethodService",
+	}
+	disabled := map[string]bool{}
+	setting := "null"
 	h := func(c execx.Cmd) (string, error) {
 		a := strings.Join(c.Args, " ")
+		last := c.Args[len(c.Args)-1]
 		switch {
-		case strings.HasSuffix(a, "dumpsys input"):
-			if hw {
-				return "  KeyboardType: Alphabetic", nil
+		case strings.Contains(a, "ime list -s"):
+			var out []string
+			for pkg, id := range ids {
+				if !disabled[pkg] {
+					out = append(out, id)
+				}
 			}
-			return "  KeyboardType: None", nil
-		case strings.Contains(a, "settings get secure show_ime_with_hard_keyboard"):
+			return strings.Join(out, "\n"), nil
+		case strings.Contains(a, "pm disable-user"):
+			disabled[last] = true
+		case strings.Contains(a, "pm enable"):
+			disabled[last] = false
+		case strings.Contains(a, "settings get global trun_disabled_ime_packages"):
 			return setting, nil
-		case strings.Contains(a, "settings put secure show_ime_with_hard_keyboard"):
-			setting = c.Args[len(c.Args)-1]
+		case strings.Contains(a, "settings put global trun_disabled_ime_packages"):
+			setting = last
+		case strings.Contains(a, "settings delete global trun_disabled_ime_packages"):
+			setting = "null"
 		}
 		return "", nil
 	}
@@ -606,14 +622,17 @@ func TestKeyboardAndroid(t *testing.T) {
 		t.Fatalf("state %s", got)
 	}
 	if err := e.Plat.SetKeyboard(ctx, "emulator-5554", false); err != nil || e.Plat.Keyboard(ctx, "emulator-5554") != "hidden" {
-		t.Fatalf("hide: %v", err)
+		t.Fatalf("hide: %v %v", err, disabled)
 	}
-	hw = false
-	if e.Plat.Keyboard(ctx, "emulator-5554") != "always" {
-		t.Fatal("no hardware keyboard must report always")
+	if disabled["dev.mobile.maestro"] {
+		t.Fatal("Maestro's own input method must stay enabled")
 	}
-	if err := e.Plat.SetKeyboard(ctx, "emulator-5554", false); err == nil || !strings.Contains(err.Error(), "hw.keyboard") {
-		t.Fatalf("hiding without a hardware keyboard must explain why: %v", err)
+	// Hiding again (packages already gone from the list) must keep the record.
+	if err := e.Plat.SetKeyboard(ctx, "emulator-5554", false); err != nil || !strings.Contains(setting, "latin") {
+		t.Fatalf("re-hide lost the record: %v %q", err, setting)
+	}
+	if err := e.Plat.SetKeyboard(ctx, "emulator-5554", true); err != nil || e.Plat.Keyboard(ctx, "emulator-5554") != "shown" {
+		t.Fatalf("show: %v %v", err, disabled)
 	}
 }
 
@@ -650,5 +669,58 @@ func TestKeyboardIOSWritesPerSimulatorPreference(t *testing.T) {
 	}
 	if e.Plat.Keyboard(ctx, "UDID-1") != "shown" {
 		t.Fatal("state not updated")
+	}
+}
+
+func TestIOSBootAppliesKeyboardWithoutSecondBoot(t *testing.T) {
+	var calls []string
+	value, state := "true", "Shutdown"
+	h := func(c execx.Cmd) (string, error) {
+		a := strings.Join(c.Args, " ")
+		calls = append(calls, c.Name+" "+a)
+		switch {
+		case c.Name == "plutil" && strings.HasPrefix(a, "-extract"):
+			return value, nil
+		case c.Name == "plutil" && strings.HasPrefix(a, "-replace"):
+			value = map[string]string{"YES": "true", "NO": "false"}[c.Args[3]]
+		case c.Name == "xcrun" && strings.Contains(a, "list devices"):
+			return `{"devices":{"r":[{"udid":"UDID-1","name":"iPhone","state":"` + state + `","isAvailable":true}]}}`, nil
+		case c.Name == "xcrun" && strings.Contains(a, "simctl boot"):
+			state = "Booted"
+		}
+		return "", nil
+	}
+	p := testProject(t)
+	p.Platform = "ios"
+	fake := &execx.Fake{Handler: h}
+	o := DefaultOptions()
+	o.Platform, o.Keyboard = "ios", "shown"
+	e := New(p, o, fake, nil)
+	ctx := context.Background()
+	if _, err := e.Plat.Boot(ctx, "iPhone", false, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Plat.SetKeyboard(ctx, "UDID-1", true); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(calls, "\n")
+	if strings.Count(joined, "simctl boot UDID-1") != 1 || strings.Contains(joined, "simctl shutdown") {
+		t.Fatalf("expected exactly one boot and no reboot:\n%s", joined)
+	}
+	if !strings.Contains(joined, "-replace DevicePreferences.UDID-1.ConnectHardwareKeyboard -bool NO") {
+		t.Fatalf("preference not written before boot:\n%s", joined)
+	}
+}
+
+func TestLongestFirst(t *testing.T) {
+	mk := func(n string) *fixtures.Flow { return &fixtures.Flow{Feature: "f", File: n} }
+	flows := []*fixtures.Flow{mk("a"), mk("b"), mk("c"), mk("d")}
+	if order, known := longestFirst(flows, nil); known != 0 || fmt.Sprint(order) != "[0 1 2 3]" {
+		t.Fatalf("no history should keep order, got %v", order)
+	}
+	est := map[string]time.Duration{"f/a": 10 * time.Second, "f/c": 90 * time.Second, "f/d": 30 * time.Second}
+	// b has no history: gets the median (30s), stays behind d via stable sort.
+	if order, known := longestFirst(flows, est); known != 3 || fmt.Sprint(order) != "[2 1 3 0]" {
+		t.Fatalf("got %v known %d", order, known)
 	}
 }

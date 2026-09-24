@@ -56,6 +56,11 @@ type runFlags struct {
 	quiet       bool
 	clearProxy  bool
 	keyboard    string
+	headless    bool
+	emuCores    int
+	emuMemory   int
+	emuGPU      string
+	emuSnapshot string
 	jsonOut     bool
 	quietStatus bool
 	dryRun      bool
@@ -142,7 +147,8 @@ func Execute(version string) int {
 	playback.Flags().IntVar(&f.serverPort, "server-port", project.ReservedMockPort, "port to listen on")
 
 	boot := &cobra.Command{Use: "boot [avd|simulator]", Short: "Boot a designated emulator/simulator (lists them without an argument)", Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error { return bootCmd(cmd.Context(), g, args) }}
+		RunE: func(cmd *cobra.Command, args []string) error { return bootCmd(cmd.Context(), g, args, f.headless) }}
+	boot.Flags().BoolVar(&f.headless, "headless", false, "boot without a window")
 
 	var proxyDevice string
 	var proxyClear bool
@@ -223,6 +229,11 @@ func addRunFlags(c *cobra.Command, f *runFlags) {
 	fl.BoolVar(&f.optimize, "optimize-recordings", false, "re-encode videos with HandBrakeCLI afterwards")
 	fl.StringVar(&f.junit, "junit", "", "also write a JUnit XML report to this path")
 	fl.BoolVar(&f.quiet, "quiet-output", false, "hide raw Maestro/Gradle output")
+	fl.BoolVar(&f.headless, "headless", false, "boot emulators without a window (less host CPU/GPU per device)")
+	fl.IntVar(&f.emuCores, "emulator-cores", 0, "vCPUs for emulators trun boots (default: the AVD's)")
+	fl.IntVar(&f.emuMemory, "emulator-memory", 0, "RAM in MB for emulators trun boots (default: the AVD's)")
+	fl.StringVar(&f.emuSnapshot, "emulator-snapshot", "", "boot emulators from this named snapshot (e.g. saved with `adb emu avd snapshot save <name>`)")
+	fl.StringVar(&f.emuGPU, "emulator-gpu", "", "emulator -gpu mode for emulators trun boots (default: host when --headless, else the AVD's)")
 	fl.StringVar(&f.keyboard, "keyboard", "", "on-screen keyboard before flows: hidden or shown (default: leave as is)")
 	fl.BoolVar(&f.clearProxy, "clear-proxy", false, "remove a device-wide HTTP proxy (Proxyman/Charles) instead of refusing the device")
 }
@@ -278,6 +289,9 @@ func buildOptions(cmd string, g *globals, f *runFlags, p *project.Project, args 
 	o.JUnitPath = f.junit
 	o.ClearProxy = f.clearProxy
 	o.Keyboard = f.keyboard
+	o.Headless = f.headless
+	o.EmuCores, o.EmuMemoryMB, o.EmuGPU = f.emuCores, f.emuMemory, f.emuGPU
+	o.EmuSnapshot = f.emuSnapshot
 	switch o.DeviceClass {
 	case "", "emulator", "physical", "any":
 	default:
@@ -551,13 +565,14 @@ func playbackCmd(ctx context.Context, g *globals, f *runFlags, dir string) error
 	return e.Playback(ctx, dir)
 }
 
-func bootCmd(ctx context.Context, g *globals, args []string) error {
+func bootCmd(ctx context.Context, g *globals, args []string, headless bool) error {
 	p, err := loadProject(g)
 	if err != nil {
 		return err
 	}
 	o := engine.DefaultOptions()
 	o.Owner = g.owner
+	o.Headless = headless
 	if g.platform != "" {
 		o.Platform = g.platform
 	}
@@ -576,7 +591,7 @@ func bootCmd(ctx context.Context, g *globals, args []string) error {
 	if !slices.Contains(candidates, args[0]) {
 		return fmt.Errorf("'%s' is not bootable for owner %s (candidates: %s)", args[0], e.Owner, strings.Join(candidates, ", "))
 	}
-	serial, err := e.Plat.Boot(ctx, args[0], func(s string) { fmt.Println(s) })
+	serial, err := e.Plat.Boot(ctx, args[0], o.Headless, func(s string) { fmt.Println(s) })
 	if err != nil {
 		return err
 	}

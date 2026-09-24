@@ -25,6 +25,14 @@ import (
 type Android struct {
 	P    *project.Project
 	Exec execx.Runner
+	// Cores / MemoryMB override the AVD's hw.cpu.ncore / hw.ramSize for emulators trun boots.
+	Cores, MemoryMB int
+	// GPU is passed as -gpu (e.g. "host"). Headless defaults to SwiftShader, which renders on
+	// the CPU; "host" keeps rendering on the Mac's GPU.
+	GPU string
+	// Snapshot boots from a named emulator snapshot (seconds instead of a cold boot); with
+	// -no-snapshot-save it is never overwritten, so every boot starts from the same state.
+	Snapshot string
 
 	mu    sync.Mutex
 	names map[string]string
@@ -141,7 +149,7 @@ func (a *Android) Bootable(ctx context.Context) []string {
 }
 
 // Boot starts an AVD and waits until the package manager is ready, not merely until adb sees it.
-func (a *Android) Boot(ctx context.Context, avd string, progress func(string)) (string, error) {
+func (a *Android) Boot(ctx context.Context, avd string, headless bool, progress func(string)) (string, error) {
 	bin := a.emulatorBin()
 	if bin == "" {
 		return "", fmt.Errorf("android emulator binary not found; set ANDROID_HOME")
@@ -153,7 +161,34 @@ func (a *Android) Boot(ctx context.Context, avd string, progress func(string)) (
 		}
 	}
 	progress(fmt.Sprintf("Booting %s (a cold boot can take a couple of minutes)...", avd))
-	cmd, err := execx.Start(execx.Cmd{Name: bin, Args: []string{"-avd", avd, "-no-snapshot-save"}}, true)
+	args := []string{"-avd", avd, "-no-snapshot-save"}
+	if headless {
+		args = append(args, "-no-window", "-no-audio")
+		progress(fmt.Sprintf("Booting %s headless (no window, GPU rendering).", avd))
+	}
+	if a.Snapshot != "" {
+		args = append(args, "-snapshot", a.Snapshot)
+		progress(fmt.Sprintf("Booting %s from snapshot %s.", avd, a.Snapshot))
+	}
+	gpu := a.GPU
+	if gpu == "" && headless {
+		// Headless otherwise falls back to SwiftShader (rendering on the CPU), which saturated
+		// the host with 3 emulators; -gpu host keeps it on the Mac's GPU.
+		gpu = "host"
+	}
+	if gpu != "" {
+		args = append(args, "-gpu", gpu)
+	}
+	if a.Cores > 0 {
+		args = append(args, "-cores", strconv.Itoa(a.Cores))
+	}
+	if a.MemoryMB > 0 {
+		args = append(args, "-memory", strconv.Itoa(a.MemoryMB))
+	}
+	if a.Cores > 0 || a.MemoryMB > 0 {
+		progress(fmt.Sprintf("Booting %s with cores=%d memory=%dMB (0 = AVD default).", avd, a.Cores, a.MemoryMB))
+	}
+	cmd, err := execx.Start(execx.Cmd{Name: bin, Args: args}, true)
 	if err != nil {
 		return "", fmt.Errorf("start emulator: %w", err)
 	}
@@ -431,36 +466,90 @@ func (a *Android) IsEmulator(ctx context.Context, serial string) bool {
 	return out == "1"
 }
 
-const imeWithHardKeyboard = "show_ime_with_hard_keyboard"
+// The on-screen keyboard is hidden by disabling every keyboard app's package: Android
+// re-enables a system keyboard on any install (the app, Maestro's driver) while none is
+// enabled, but only from enabled packages. Maestro's own input method is left alone. The
+// disabled packages are recorded on the device so "shown" can re-enable exactly those.
+const (
+	maestroPkg      = "dev.mobile.maestro"
+	disabledIMEsKey = "trun_disabled_ime_packages"
+)
 
-// hasHardwareKeyboard: the setting only hides the on-screen keyboard while one is attached
-// (AVD hw.keyboard=yes).
-func (a *Android) hasHardwareKeyboard(ctx context.Context, serial string) bool {
-	out, _ := a.adb(ctx, serial, "shell", "dumpsys", "input")
-	return strings.Contains(out, "KeyboardType: Alphabetic") || strings.Contains(out, "KeyboardType: 2")
+// imePackages lists packages providing an input method (all=false: only enabled ones).
+func (a *Android) imePackages(ctx context.Context, serial string, all bool) []string {
+	args := []string{"shell", "ime", "list", "-s"}
+	if all {
+		args = append(args, "-a")
+	}
+	out, _ := a.adb(ctx, serial, args...)
+	var pkgs []string
+	for _, id := range strings.Fields(out) {
+		pkg, _, _ := strings.Cut(id, "/")
+		if pkg != maestroPkg && !slices.Contains(pkgs, pkg) {
+			pkgs = append(pkgs, pkg)
+		}
+	}
+	return pkgs
 }
 
 func (a *Android) Keyboard(ctx context.Context, serial string) string {
-	if !a.hasHardwareKeyboard(ctx, serial) {
-		return "always"
-	}
-	v, _ := a.adb(ctx, serial, "shell", "settings", "get", "secure", imeWithHardKeyboard)
-	if strings.TrimSpace(v) == "0" {
+	if len(a.imePackages(ctx, serial, false)) == 0 {
 		return "hidden"
 	}
 	return "shown"
 }
 
 func (a *Android) SetKeyboard(ctx context.Context, serial string, show bool) error {
-	val := "0"
+	recorded, _ := a.adb(ctx, serial, "shell", "settings", "get", "global", disabledIMEsKey)
+	var prev []string
+	if r := strings.TrimSpace(recorded); r != "" && r != "null" {
+		prev = strings.Split(r, ",")
+	}
 	if show {
-		val = "1"
+		for _, pkg := range prev {
+			if _, err := a.adb(ctx, serial, "shell", "pm", "enable", pkg); err != nil {
+				return fmt.Errorf("could not re-enable %s on %s: %w", pkg, serial, err)
+			}
+		}
+		_, _ = a.adb(ctx, serial, "shell", "settings", "delete", "global", disabledIMEsKey)
+		if _, err := a.adb(ctx, serial, "shell", "ime", "reset"); err != nil {
+			return fmt.Errorf("could not restore the on-screen keyboard on %s: %w", serial, err)
+		}
+		return nil
 	}
-	if _, err := a.adb(ctx, serial, "shell", "settings", "put", "secure", imeWithHardKeyboard, val); err != nil {
-		return fmt.Errorf("could not set the on-screen keyboard on %s: %w", serial, err)
+	for _, pkg := range a.imePackages(ctx, serial, true) {
+		if _, err := a.adb(ctx, serial, "shell", "pm", "disable-user", "--user", "0", pkg); err != nil {
+			return fmt.Errorf("could not disable keyboard app %s on %s: %w", pkg, serial, err)
+		}
+		if !slices.Contains(prev, pkg) {
+			prev = append(prev, pkg)
+		}
 	}
-	if !show && !a.hasHardwareKeyboard(ctx, serial) {
-		return fmt.Errorf("%s has no hardware keyboard (AVD hw.keyboard=no), so Android always shows the on-screen keyboard; enable hw.keyboard in the AVD to hide it", serial)
+	if len(prev) > 0 {
+		_, _ = a.adb(ctx, serial, "shell", "settings", "put", "global", disabledIMEsKey, strings.Join(prev, ","))
+	}
+	if left := a.imePackages(ctx, serial, false); len(left) > 0 {
+		return fmt.Errorf("%s still has keyboard apps enabled: %s", serial, strings.Join(left, ", "))
 	}
 	return nil
+}
+
+func (a *Android) Shutdown(ctx context.Context, serial string) error {
+	if !a.IsEmulator(ctx, serial) {
+		return fmt.Errorf("%s is a physical device; not shutting it down", serial)
+	}
+	if _, err := a.adb(ctx, serial, "emu", "kill"); err != nil {
+		return fmt.Errorf("could not stop %s: %w", serial, err)
+	}
+	for {
+		devs, _ := a.Devices(ctx)
+		if !slices.ContainsFunc(devs, func(d Device) bool { return d.Serial == serial }) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s did not shut down: %w", serial, ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
 }

@@ -46,6 +46,11 @@ type Options struct {
 	JUnitPath   string
 	ClearProxy  bool   // remove a device-wide HTTP proxy instead of refusing the device
 	Keyboard    string // "", "hidden" or "shown": on-screen keyboard state to apply before flows
+	Headless    bool   // boot emulators without a window / simulators without Simulator.app
+	EmuCores    int    // override AVD vCPUs for emulators trun boots (0 = AVD default)
+	EmuMemoryMB int    // override AVD RAM for emulators trun boots (0 = AVD default)
+	EmuGPU      string // emulator -gpu mode for emulators trun boots ("" = emulator default)
+	EmuSnapshot string // boot emulators from this named snapshot
 
 	// Set by a parallel parent for its workers.
 	SessionAPK    string
@@ -85,6 +90,13 @@ func New(p *project.Project, opts Options, ex execx.Runner, sink Sink) *Engine {
 	}
 	e := &Engine{P: p, Store: fixtures.New(p), Exec: ex, Opts: opts, Sink: sink}
 	e.Plat = platform.New(p, opts.Platform, ex)
+	switch p := e.Plat.(type) {
+	case *platform.IOS:
+		p.BootKeyboard = opts.Keyboard
+	case *platform.Android:
+		p.Cores, p.MemoryMB, p.GPU = opts.EmuCores, opts.EmuMemoryMB, opts.EmuGPU
+		p.Snapshot = opts.EmuSnapshot
+	}
 	e.Owner = ResolveOwner(opts.Owner)
 	return e
 }

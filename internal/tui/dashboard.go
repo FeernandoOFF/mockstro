@@ -20,12 +20,18 @@ type dashModel struct {
 	booting      string
 	confirmSweep bool
 	confirmProxy string // serial awaiting confirmation
+	confirmStop  string
 	clearing     string
 }
 
 type keyboardSetMsg struct {
 	serial, state string
 	err           error
+}
+
+type deviceStoppedMsg struct {
+	serial string
+	err    error
 }
 
 type proxyClearedMsg struct {
@@ -38,7 +44,7 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 	if d.confirmProxy != "" {
 		serial := d.confirmProxy
 		d.confirmProxy = ""
-		if k.String() != "y" && k.String() != "Y" {
+		if !confirmed(k) {
 			return nil
 		}
 		d.clearing = serial
@@ -52,9 +58,23 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 			return proxyClearedMsg{serial, was, a.query.Plat.ClearProxy(ctx, serial)}
 		}
 	}
+	if d.confirmStop != "" {
+		serial := d.confirmStop
+		d.confirmStop = ""
+		if !confirmed(k) {
+			return nil
+		}
+		d.clearing = serial
+		a.log("info", "stopping %s…", serial)
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			return deviceStoppedMsg{serial, a.query.Plat.Shutdown(ctx, serial)}
+		}
+	}
 	if d.confirmSweep {
 		d.confirmSweep = false
-		if k.String() == "y" || k.String() == "Y" {
+		if confirmed(k) {
 			return func() tea.Msg {
 				return sweepDoneMsg(a.query.Sweep(context.Background(), false))
 			}
@@ -67,15 +87,11 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 		boot = a.status.Bootable
 		nDev = len(a.status.Devices)
 	}
+	if c, ok := navKey(k.String(), d.cursor, nDev+len(boot)); ok {
+		d.cursor = c
+		return nil
+	}
 	switch k.String() {
-	case "up", "k":
-		if d.cursor > 0 {
-			d.cursor--
-		}
-	case "down", "j":
-		if d.cursor < nDev+len(boot)-1 {
-			d.cursor++
-		}
 	case "p":
 		if d.cursor < nDev {
 			dv := a.status.Devices[d.cursor]
@@ -88,14 +104,24 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 				d.confirmProxy = dv.Serial
 			}
 		}
+	case "x":
+		if d.cursor < nDev {
+			dv := a.status.Devices[d.cursor]
+			switch {
+			case dv.LockedBy != nil:
+				a.log("warn", "%s is held by run %s; not stopping it", dv.Serial, *dv.LockedBy)
+			case dv.Class != "emulator":
+				a.log("warn", "%s is a physical device; not stopping it", dv.Serial)
+			default:
+				d.confirmStop = dv.Serial
+			}
+		}
 	case "v":
 		if d.cursor < nDev {
 			dv := a.status.Devices[d.cursor]
 			switch {
 			case dv.LockedBy != nil:
 				a.log("warn", "%s is held by run %s; not changing its keyboard", dv.Serial, *dv.LockedBy)
-			case dv.Keyboard == "always":
-				a.log("warn", "%s has no hardware keyboard (AVD hw.keyboard=no), so the on-screen keyboard cannot be hidden", dv.Serial)
 			case dv.Keyboard == "":
 				a.log("warn", "%s: keyboard setting not supported", dv.Serial)
 			default:
@@ -110,18 +136,23 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 				}
 			}
 		}
-	case "b", "enter":
+	case "b", "B", "enter":
 		i := d.cursor - nDev
 		if d.booting != "" || i < 0 || i >= len(boot) {
 			return nil
 		}
 		name := boot[i]
+		headless := k.String() == "B"
 		d.booting = name
-		a.log("info", "booting %s…", name)
+		mode := ""
+		if headless {
+			mode = " headless"
+		}
+		a.log("info", "booting %s%s…", name, mode)
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 			defer cancel()
-			serial, err := a.query.Plat.Boot(ctx, name, func(s string) { a.prog.Send(activityMsg{"info", s}) })
+			serial, err := a.query.Plat.Boot(ctx, name, headless, func(s string) { a.prog.Send(activityMsg{"info", s}) })
 			return bootDoneMsg{name, serial, err}
 		}
 	case "S":
@@ -164,8 +195,6 @@ func (d *dashModel) view(w, h int) (string, string) {
 			switch x.Keyboard {
 			case "shown", "hidden":
 				dev.WriteString(sMuted.Render("    ⌨ keyboard "+x.Keyboard) + "\n")
-			case "always":
-				dev.WriteString(sMuted.Render("    ⌨ keyboard always shown (no hardware keyboard)") + "\n")
 			}
 			switch {
 			case x.Serial == d.clearing:
@@ -174,7 +203,7 @@ func (d *dashModel) view(w, h int) (string, string) {
 				dev.WriteString(sBad.Render("    ⚠ proxy "+x.Proxy) + sMuted.Render("  (p to clear)") + "\n")
 			}
 		}
-		dev.WriteString("\n" + sBold.Render("Bootable") + sMuted.Render("  (b to boot)") + "\n")
+		dev.WriteString("\n" + sBold.Render("Bootable") + sMuted.Render("  (b to boot, B headless)") + "\n")
 		if len(st.Bootable) == 0 {
 			dev.WriteString(sMuted.Render("none — designate AVDs in .maestro/agent-avds.txt or "+paths.DesignatedFile()) + "\n")
 		}
@@ -241,12 +270,15 @@ func (d *dashModel) view(w, h int) (string, string) {
 			panel("Project", info.String(), rightW, 7),
 			panel("Active runs (all projects)", runs.String(), rightW, topH-7)))
 	body := lipgloss.JoinVertical(lipgloss.Left, top, panel("Activity", act.String(), w, botH))
-	help := "↑↓ select · p clear device proxy · v toggle keyboard · b boot · S sweep stale locks"
+	help := navHelp + d.selectionKeys() + " · S sweep stale locks"
 	if d.confirmProxy != "" {
-		help = sWarn.Render(fmt.Sprintf("Remove the device-wide proxy on %s (Proxyman/Charles setting)? [y/N]", d.confirmProxy))
+		help = sWarn.Render(fmt.Sprintf("Remove the device-wide proxy on %s (Proxyman/Charles setting)? "+confirmHint, d.confirmProxy))
+	}
+	if d.confirmStop != "" {
+		help = sWarn.Render(fmt.Sprintf("Stop emulator %s? "+confirmHint, d.confirmStop))
 	}
 	if d.confirmSweep {
-		help = sWarn.Render("Reclaim locks whose owning process is gone? [y/N]")
+		help = sWarn.Render("Reclaim locks whose owning process is gone? " + confirmHint)
 	}
 	return body, help
 }
@@ -268,4 +300,33 @@ func (d *dashModel) device(serial string) *engine.StatusDevice {
 		}
 	}
 	return nil
+}
+
+// selectionKeys lists only the actions that apply to what the cursor is on.
+func (d *dashModel) selectionKeys() string {
+	st := d.a.status
+	if st == nil {
+		return ""
+	}
+	if d.cursor < len(st.Devices) {
+		dv := st.Devices[d.cursor]
+		if dv.LockedBy != nil {
+			return ""
+		}
+		keys := ""
+		if dv.Proxy != "" {
+			keys += " · p clear device proxy"
+		}
+		if dv.Keyboard == "shown" || dv.Keyboard == "hidden" {
+			keys += " · v toggle keyboard"
+		}
+		if dv.Class == "emulator" {
+			keys += " · x stop emulator"
+		}
+		return keys
+	}
+	if d.cursor-len(st.Devices) < len(st.Bootable) {
+		return " · enter/b boot · B boot headless"
+	}
+	return ""
 }

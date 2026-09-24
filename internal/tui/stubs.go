@@ -32,7 +32,7 @@ type stubsModel struct {
 	respLines []string
 	respTitle string
 	usedBy    []string
-	focusResp bool
+	focus     int // 0 list, 1 stub, 2 response
 	stubScrl  int
 	respScrl  int
 }
@@ -206,25 +206,28 @@ func (s *stubsModel) key(k tea.KeyMsg) tea.Cmd {
 		s.refresh()
 		return cmd
 	}
-	scroll := func(d int) {
-		if s.focusResp {
-			s.respScrl = max(0, s.respScrl+d)
-		} else {
-			s.stubScrl = max(0, s.stubScrl+d)
+	if s.focus == 0 {
+		if c, ok := navKey(k.String(), s.cursor, len(s.visible)); ok {
+			s.cursor = c
+			return nil
+		}
+	} else {
+		lines, scrl := s.stubLines, &s.stubScrl
+		if s.focus == 2 {
+			lines, scrl = s.respLines, &s.respScrl
+		}
+		if c, ok := navKey(k.String(), *scrl, len(lines)); ok {
+			*scrl = c
+			return nil
 		}
 	}
 	switch k.String() {
 	case "/":
 		s.filtering = true
 		return s.filter.Focus()
-	case "up", "k":
-		if s.cursor > 0 {
-			s.cursor--
-		}
-	case "down", "j":
-		if s.cursor < len(s.visible)-1 {
-			s.cursor++
-		}
+	case "esc":
+		s.filter.SetValue("")
+		s.refresh()
 	case "m":
 		s.merged = !s.merged
 		s.stubScrl = 0
@@ -244,15 +247,7 @@ func (s *stubsModel) key(k tea.KeyMsg) tea.Cmd {
 			s.load(true)
 		}
 	case "f":
-		s.focusResp = !s.focusResp
-	case "J":
-		scroll(3)
-	case "K":
-		scroll(-3)
-	case "pgdown":
-		scroll(15)
-	case "pgup":
-		scroll(-15)
+		s.focus = (s.focus + 1) % 3
 	}
 	return nil
 }
@@ -299,20 +294,17 @@ func (s *stubsModel) view(w, h int) (string, string) {
 	if len(head) > 0 {
 		head = append(head, "")
 	}
+	s.stubScrl = min(s.stubScrl, max(0, len(s.stubLines)-(h-3-len(head))))
+	s.respScrl = min(s.respScrl, max(0, len(s.respLines)-(h-3)))
 	stubBody := strings.Join(append(head, sliceFrom(s.stubLines, s.stubScrl)...), "\n")
 
-	stubTitle, respTitle := s.stubTitle, s.respTitle
-	if s.focusResp {
-		respTitle += " ◂"
-	} else {
-		stubTitle += " ◂"
+	chain := ""
+	if len(s.chain) > 1 {
+		chain = " · e/E walk extends chain"
 	}
-	help := "↑↓ stub · m own/merged · e/E walk extends chain · f switch panel · J/K scroll · / filter"
-	if len(s.chain) <= 1 {
-		help = "↑↓ stub · m own/merged · f switch panel · J/K scroll · / filter"
-	}
+	help := navHelp + " · f switch panel · m own/merged" + chain + " · / filter · esc clear"
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		panel("Stubs", lb.String(), listW, h),
-		panel(stubTitle, stubBody, stubW, h),
-		panel(respTitle, strings.Join(sliceFrom(s.respLines, s.respScrl), "\n"), respW, h)), help
+		focusPanel(s.focus == 0, "Stubs", lb.String(), listW, h),
+		focusPanel(s.focus == 1, s.stubTitle, stubBody, stubW, h),
+		focusPanel(s.focus == 2, s.respTitle, strings.Join(sliceFrom(s.respLines, s.respScrl), "\n"), respW, h)), help
 }

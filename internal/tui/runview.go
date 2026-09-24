@@ -179,7 +179,7 @@ func (r *runModel) workerIDs() []int { return slices.Sorted(maps.Keys(r.workers)
 func (r *runModel) key(k tea.KeyMsg) tea.Cmd {
 	if r.confirm {
 		r.confirm = false
-		if k.String() == "y" || k.String() == "Y" {
+		if confirmed(k) {
 			r.a.log("warn", "cancelling run…")
 			if r.cancel != nil {
 				r.cancel()
@@ -187,9 +187,39 @@ func (r *runModel) key(k tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if r.focusLog {
+		switch k.String() {
+		case "up", "k":
+			r.scrollLog(-1)
+			return nil
+		case "down", "j":
+			r.scrollLog(1)
+			return nil
+		case "u":
+			r.scrollLog(-pageSize)
+			return nil
+		case "d":
+			r.scrollLog(pageSize)
+			return nil
+		case "g", "home":
+			if wk := r.workers[r.selWorker]; wk != nil {
+				r.anchor, r.scroll = wk.dropped, 0
+			}
+			return nil
+		case "G", "end":
+			r.anchor, r.scroll = -1, 0
+			return nil
+		}
+	} else if c, ok := navKey(k.String(), r.resCursor, len(r.results)); ok {
+		if c != r.resCursor {
+			r.resCursor = c
+			r.jumpToResult()
+		}
+		return nil
+	}
 	ids := r.workerIDs()
 	switch k.String() {
-	case "c":
+	case "x":
 		if r.running() {
 			r.confirm = true
 		}
@@ -207,29 +237,6 @@ func (r *runModel) key(k tea.KeyMsg) tea.Cmd {
 				break
 			}
 		}
-	case "up", "k":
-		if r.focusLog {
-			r.scrollLog(-1)
-		} else if r.resCursor > 0 {
-			r.resCursor--
-			r.jumpToResult()
-		}
-	case "down", "j":
-		if r.focusLog {
-			r.scrollLog(1)
-		} else if r.resCursor < len(r.results)-1 {
-			r.resCursor++
-			r.jumpToResult()
-		}
-	case "pgup":
-		r.scrollLog(-20)
-	case "pgdown":
-		r.scrollLog(20)
-	case "home", "g":
-		r.resCursor = 0
-		r.jumpToResult()
-	case "G", "end":
-		r.anchor, r.scroll = -1, 0
 	case "f":
 		r.focusLog = !r.focusLog
 	case "enter":
@@ -423,22 +430,22 @@ func (r *runModel) view(w, h int) (string, string) {
 		header,
 		panel("Workers", wb.String(), w, workersH),
 		lipgloss.JoinHorizontal(lipgloss.Top,
-			panel("Results", rb.String(), 50, resH),
-			panel(logTitle, strings.Join(lines[start:end], "\n"), logW, resH)))
-	arrows := "↑↓ result → output"
+			focusPanel(!r.focusLog, "Results", rb.String(), 50, resH),
+			focusPanel(r.focusLog, logTitle, strings.Join(lines[start:end], "\n"), logW, resH)))
+	arrows := navHelp + " result"
 	if r.focusLog {
-		arrows = "↑↓ scroll output"
+		arrows = navHelp + " output · G follow"
 	}
 	var sel *engine.Result
 	if r.resCursor < len(r.results) {
 		sel = r.results[r.resCursor]
 	}
-	help := arrows + " · f toggle results/output · G follow · ←→ worker · c cancel" + artifactKeys(sel) + " · o open dir"
+	help := arrows + " · f toggle results/output · enter jump · ←→ worker · x cancel" + artifactKeys(sel) + " · o open dir"
 	if r.summary != nil {
-		help = arrows + " · f toggle results/output · G follow · ←→ worker · F re-run failed" + artifactKeys(sel) + " · o open dir"
+		help = arrows + " · f toggle results/output · enter jump · ←→ worker · F re-run failed" + artifactKeys(sel) + " · o open dir"
 	}
 	if r.confirm {
-		help = sWarn.Render("Cancel the run? Devices and locks are cleaned up. [y/N]")
+		help = sWarn.Render("Cancel the run? Devices and locks are cleaned up. " + confirmHint)
 	}
 	return body, help
 }

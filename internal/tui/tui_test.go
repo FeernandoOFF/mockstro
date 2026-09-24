@@ -110,7 +110,7 @@ func TestFlowPickerToConfigCommand(t *testing.T) {
 	if len(a.flowTab.visible) != 2 {
 		t.Fatalf("visible %d", len(a.flowTab.visible))
 	}
-	key(a, "t") // tag: smoke
+	key(a, "down") // tag: smoke
 	if len(a.flowTab.visible) != 1 || a.flowTab.tags[a.flowTab.tagIdx] != "smoke" {
 		t.Fatalf("tag filter: %d %v", len(a.flowTab.visible), a.flowTab.tags)
 	}
@@ -140,8 +140,8 @@ func TestFlowPickerToConfigCommand(t *testing.T) {
 		t.Fatal("esc did not close config")
 	}
 	// Explicit selection becomes flow paths.
-	key(a, "t")
-	key(a, "t")
+	key(a, "g") // tag: all
+	key(a, "f") // flow list
 	key(a, " ")
 	key(a, "enter")
 	o, _ = a.cfg.options()
@@ -288,4 +288,80 @@ func TestHistoryFlowsScrollToCursor(t *testing.T) {
 // start2ForTest puts the model into a running state without an engine.
 func (r *runModel) start2ForTest() {
 	*r = runModel{a: r.a, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[*engine.Result]outputMark{}}
+}
+
+func TestDashboardKeysFollowSelection(t *testing.T) {
+	a := testApp(t)
+	a.status.Devices[0].Keyboard = "shown"
+	key(a, "1")
+	v := a.View()
+	if !strings.Contains(v, "v toggle keyboard") || strings.Contains(v, "b boot") || strings.Contains(v, "p clear") {
+		t.Fatalf("device selected: wrong keys:\n%s", v)
+	}
+	key(a, "down") // onto the bootable entry
+	v = a.View()
+	if strings.Contains(v, "v toggle keyboard") || !strings.Contains(v, "b boot") {
+		t.Fatalf("bootable selected: wrong keys:\n%s", v)
+	}
+}
+
+func TestNavKey(t *testing.T) {
+	cases := []struct {
+		k       string
+		cur, n  int
+		want    int
+		handled bool
+	}{
+		{"down", 0, 5, 1, true},
+		{"up", 0, 5, 0, true},
+		{"d", 2, 30, 12, true},
+		{"d", 25, 30, 29, true},
+		{"u", 5, 30, 0, true},
+		{"G", 0, 30, 29, true},
+		{"g", 20, 30, 0, true},
+		{"x", 3, 30, 3, false},
+	}
+	for _, c := range cases {
+		got, ok := navKey(c.k, c.cur, c.n)
+		if got != c.want || ok != c.handled {
+			t.Errorf("navKey(%q,%d,%d) = %d,%v want %d,%v", c.k, c.cur, c.n, got, ok, c.want, c.handled)
+		}
+	}
+}
+
+func TestMapRemoteDisablesProxyField(t *testing.T) {
+	a := testApp(t)
+	key(a, "2")
+	key(a, "enter")
+	for a.cfg.cursor != fIntercept {
+		key(a, "down")
+	}
+	key(a, "right") // map remote
+	key(a, "down")
+	if a.cfg.cursor != fFBRC {
+		t.Fatalf("cursor landed on %d, want FBRC (proxy skipped)", a.cfg.cursor)
+	}
+	o, _ := a.cfg.options()
+	if o.ClearProxy || !o.MapRemote {
+		t.Fatalf("map remote %v clear proxy %v", o.MapRemote, o.ClearProxy)
+	}
+	if v := a.View(); !strings.Contains(v, "n/a with map remote") {
+		t.Fatalf("proxy not shown disabled:\n%s", v)
+	}
+}
+
+func TestMockTreeCompactsFolders(t *testing.T) {
+	ts := []*mockTarget{
+		{kind: "flow", label: "Only", rel: "deep/nested/only.yaml"},
+		{kind: "flow", label: "Home", rel: "home/home.yaml"},
+		{kind: "scenario", label: "usage"},
+	}
+	var got []string
+	for _, r := range buildRows(ts, map[string]bool{}, true) {
+		got = append(got, strings.Repeat(" ", r.depth)+r.label)
+	}
+	want := "scenarios\n usage\nflows\n deep/nested\n  Only\n home\n  Home"
+	if strings.Join(got, "\n") != want {
+		t.Fatalf("rows:\n%s", strings.Join(got, "\n"))
+	}
 }

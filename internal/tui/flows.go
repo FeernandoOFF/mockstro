@@ -12,13 +12,15 @@ import (
 	"github.com/feernandooff/trun/internal/fixtures"
 )
 
-// flowsModel: filterable, multi-select flow picker grouped by feature.
+// flowsModel: a tag menu beside a filterable, multi-select flow picker grouped by feature.
 type flowsModel struct {
 	a         *app
 	filter    textinput.Model
 	filtering bool
 	tags      []string // "" = all
 	tagIdx    int
+	tagCount  []int // flows per tag after the text filter
+	focusList bool  // arrows move in the flow list instead of the tag menu
 	visible   []*fixtures.Flow
 	selected  map[string]bool
 	cursor    int
@@ -69,11 +71,9 @@ func (f *flowsModel) apply() {
 	q := strings.ToLower(strings.TrimSpace(f.filter.Value()))
 	tag := f.tags[f.tagIdx]
 	f.visible = f.visible[:0]
+	f.tagCount = make([]int, len(f.tags))
 	for _, fl := range f.a.flows {
 		if !fl.MatchesPlatform(f.a.opts.Platform) {
-			continue
-		}
-		if tag != "" && !fl.HasTag(tag) {
 			continue
 		}
 		if q != "" {
@@ -81,6 +81,14 @@ func (f *flowsModel) apply() {
 			if !strings.Contains(hay, q) {
 				continue
 			}
+		}
+		for i, t := range f.tags {
+			if t == "" || fl.HasTag(t) {
+				f.tagCount[i]++
+			}
+		}
+		if tag != "" && !fl.HasTag(tag) {
+			continue
 		}
 		f.visible = append(f.visible, fl)
 	}
@@ -116,6 +124,18 @@ func (f *flowsModel) key(k tea.KeyMsg) tea.Cmd {
 		f.apply()
 		return cmd
 	}
+	if !f.focusList {
+		if c, ok := navKey(k.String(), f.tagIdx, len(f.tags)); ok {
+			if c != f.tagIdx {
+				f.tagIdx, f.cursor = c, 0
+				f.apply()
+			}
+			return nil
+		}
+	} else if c, ok := navKey(k.String(), f.cursor, len(f.visible)); ok {
+		f.cursor = c
+		return nil
+	}
 	switch k.String() {
 	case "/":
 		f.filtering = true
@@ -123,20 +143,10 @@ func (f *flowsModel) key(k tea.KeyMsg) tea.Cmd {
 	case "esc":
 		f.filter.SetValue("")
 		f.apply()
-	case "up", "k":
-		if f.cursor > 0 {
-			f.cursor--
-		}
-	case "down", "j":
-		if f.cursor < len(f.visible)-1 {
-			f.cursor++
-		}
-	case "pgup":
-		f.cursor = max(0, f.cursor-10)
-	case "pgdown":
-		f.cursor = min(len(f.visible)-1, f.cursor+10)
-	case " ", "x":
-		if f.cursor < len(f.visible) {
+	case "f":
+		f.focusList = !f.focusList
+	case " ":
+		if f.focusList && f.cursor < len(f.visible) {
 			p := f.visible[f.cursor].Path
 			f.selected[p] = !f.selected[p]
 			if !f.selected[p] {
@@ -152,12 +162,6 @@ func (f *flowsModel) key(k tea.KeyMsg) tea.Cmd {
 		}
 	case "n":
 		f.selected = map[string]bool{}
-	case "t":
-		f.tagIdx = (f.tagIdx + 1) % len(f.tags)
-		f.apply()
-	case "T":
-		f.tagIdx = (f.tagIdx + len(f.tags) - 1) % len(f.tags)
-		f.apply()
 	case "enter":
 		flows := f.chosen()
 		if len(flows) == 0 {
@@ -169,11 +173,24 @@ func (f *flowsModel) key(k tea.KeyMsg) tea.Cmd {
 }
 
 func (f *flowsModel) view(w, h int) (string, string) {
-	tag := f.tags[f.tagIdx]
-	if tag == "" {
-		tag = "all"
+	tagW := 26
+	listW := w - tagW
+	head := fmt.Sprintf("%s   %d visible · %d selected", f.filter.View(), len(f.visible), len(f.selected))
+
+	var tb strings.Builder
+	ts, te := window(len(f.tags), f.tagIdx, h-5)
+	for i := ts; i < te; i++ {
+		name := f.tags[i]
+		if name == "" {
+			name = "all"
+		}
+		cur, line := "  ", pad(name, tagW-12)+sMuted.Render(fmt.Sprintf("%4d", f.tagCount[i]))
+		if i == f.tagIdx {
+			cur, line = sSel.Render("› "), sSel.Render(pad(name, tagW-12))+sMuted.Render(fmt.Sprintf("%4d", f.tagCount[i]))
+		}
+		tb.WriteString(cur + line + "\n")
 	}
-	head := fmt.Sprintf("Tag: %s   %s   %d visible · %d selected", sSel.Render(tag), f.filter.View(), len(f.visible), len(f.selected))
+
 	listH := h - 5
 	start, end := window(len(f.visible), f.cursor, listH)
 	var b strings.Builder
@@ -185,33 +202,36 @@ func (f *flowsModel) view(w, h int) (string, string) {
 			mark = sOK.Render("[x]")
 		}
 		cur := "  "
-		if i == f.cursor {
-			cur = sSel.Render("› ")
+		name := fl.File
+		if i == f.cursor && f.focusList {
+			cur, name = sSel.Render("› "), sSel.Render(name)
 		}
 		feature := ""
 		if fl.Feature != lastFeature {
 			feature = fl.Feature
 			lastFeature = fl.Feature
 		}
-		name := fl.File
-		if i == f.cursor {
-			name = sSel.Render(name)
-		}
 		tags := sMuted.Render(strings.Join(fl.Header.Tags, ","))
-		line := fmt.Sprintf("%s%s %s %s %s %s", cur, mark, pad(sMuted.Render(feature), 12), pad(name, 52), pad(fl.Header.Profile, 11), tags)
-		b.WriteString(truncate(line, w-4) + "\n")
+		line := fmt.Sprintf("%s%s %s %s %s %s", cur, mark, pad(sMuted.Render(feature), 12), pad(name, 44), pad(fl.Header.Profile, 11), tags)
+		b.WriteString(truncate(line, listW-4) + "\n")
 	}
 	if len(f.visible) == 0 {
 		b.WriteString(sMuted.Render("no flows match"))
 	}
 	var detail string
-	if f.cursor < len(f.visible) {
+	if f.focusList && f.cursor < len(f.visible) {
 		fl := f.visible[f.cursor]
 		detail = fmt.Sprintf("%s  %s  overrides %d · verifications %d · fbrc %d",
 			sBold.Render(fl.Header.Name), sMuted.Render(fl.Rel), len(fl.Header.Overrides), len(fl.Header.Verifications), len(fl.Header.FBRC))
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left, " "+head, panel("Flows", b.String(), w, listH+2), " "+truncate(detail, w-2))
-	help := "↑↓ move · space select · a all · n none · t/T tag · / filter · enter configure run"
+	panes := lipgloss.JoinHorizontal(lipgloss.Top,
+		focusPanel(!f.focusList, "Tags", tb.String(), tagW, listH+2),
+		focusPanel(f.focusList, "Flows", b.String(), listW, listH+2))
+	body := lipgloss.JoinVertical(lipgloss.Left, " "+head, panes, " "+truncate(detail, w-2))
+	help := navHelp + " · f switch panel · space select · a all · n none · / filter · esc clear · enter configure run"
+	if !f.focusList {
+		help = navHelp + " tag · f switch panel · a all · n none · / filter · esc clear · enter configure run"
+	}
 	if f.filtering {
 		help = "type to filter · enter/esc done"
 	}

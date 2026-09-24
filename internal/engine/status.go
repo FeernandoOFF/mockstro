@@ -15,7 +15,7 @@ type StatusDevice struct {
 	Designated bool    `json:"designated"`
 	Eligible   bool    `json:"eligible"`
 	Proxy      string  `json:"proxy,omitempty"`    // device-wide HTTP proxy, "" when none
-	Keyboard   string  `json:"keyboard,omitempty"` // shown | hidden | always
+	Keyboard   string  `json:"keyboard,omitempty"` // shown | hidden
 }
 
 type Available struct {

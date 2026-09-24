@@ -131,7 +131,7 @@ func (hm *historyModel) key(k tea.KeyMsg) tea.Cmd {
 	if hm.confirm != "" {
 		action := hm.confirm
 		hm.confirm = ""
-		if k.String() != "y" && k.String() != "Y" {
+		if !confirmed(k) {
 			return nil
 		}
 		switch action {
@@ -155,8 +155,11 @@ func (hm *historyModel) key(k tea.KeyMsg) tea.Cmd {
 		hm.load()
 		return nil
 	}
+	if hm.navKey(k.String(), run) {
+		return nil
+	}
 	switch k.String() {
-	case "d", "delete", "backspace":
+	case "x":
 		if run != nil {
 			if run.active {
 				hm.a.log("warn", "%s belongs to an active run", filepath.Base(run.dir))
@@ -173,38 +176,14 @@ func (hm *historyModel) key(k tea.KeyMsg) tea.Cmd {
 	case "X":
 		hm.confirm = "all"
 		return nil
-	case "up", "k":
-		if hm.focus == 0 && hm.cursor > 0 {
-			hm.cursor--
-			hm.resCur = 0
-		} else if hm.focus == 1 && hm.resCur > 0 {
-			hm.resCur--
-			hm.loadPreview()
-		} else if hm.focus == 2 {
-			hm.scroll++
-		}
-	case "down", "j":
-		if hm.focus == 0 && hm.cursor < len(hm.runs)-1 {
-			hm.cursor++
-			hm.resCur = 0
-		} else if hm.focus == 1 && run != nil && hm.resCur < len(run.results)-1 {
-			hm.resCur++
-			hm.loadPreview()
-		} else if hm.focus == 2 && hm.scroll > 0 {
-			hm.scroll--
-		}
-	case "pgup":
-		hm.scroll += 20
-	case "pgdown":
-		hm.scroll = max(0, hm.scroll-20)
-	case "enter", "right", "l":
+	case "enter", "right":
 		if hm.focus < 2 && run != nil {
 			hm.focus++
 			if hm.focus == 1 {
 				hm.loadPreview()
 			}
 		}
-	case "esc", "left", "h":
+	case "esc", "left":
 		if hm.focus > 0 {
 			hm.focus--
 		}
@@ -270,7 +249,7 @@ func (hm *historyModel) view(w, h int) (string, string) {
 		}
 		kind := ""
 		if strings.HasPrefix(filepath.Base(r.dir), "session-") {
-			kind = sMuted.Render(" ∥")
+			kind = sMuted.Render(fmt.Sprintf(" ∥%d", len(r.rd.Workers)))
 		}
 		if r.active {
 			kind += sWarn.Render(" ●")
@@ -285,7 +264,7 @@ func (hm *historyModel) view(w, h int) (string, string) {
 	var rb strings.Builder
 	run := hm.selected()
 	if run != nil {
-		fmt.Fprintf(&rb, "%s\n%s\n\n", sMuted.Render(hm.a.p.Rel(run.dir)), sMuted.Render("total "+run.total.String()))
+		fmt.Fprintf(&rb, "%s\n%s\n\n", sMuted.Render(hm.a.p.Rel(run.dir)), sMuted.Render(fmt.Sprintf("total %s · runners %d", run.total, max(1, len(run.rd.Workers)))))
 		if run.err != "" {
 			for _, l := range strings.Split(run.err, "\n") {
 				rb.WriteString(sBad.Render(l) + "\n")
@@ -311,10 +290,8 @@ func (hm *historyModel) view(w, h int) (string, string) {
 
 	logW := w - listW - midW
 	lh := h - 3
+	hm.scroll = min(hm.scroll, max(0, len(hm.preview)-lh))
 	end := len(hm.preview) - hm.scroll
-	if end < 0 {
-		end = 0
-	}
 	start := max(0, end-lh)
 	var preview string
 	if hm.focus == 0 {
@@ -323,14 +300,14 @@ func (hm *historyModel) view(w, h int) (string, string) {
 		preview = strings.Join(hm.preview[start:end], "\n")
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		panel(fmt.Sprintf("Runs · %d · %s", len(hm.runs), engine.HumanSize(hm.total)), lb.String(), listW, h),
-		panel("Flows", rb.String(), midW, h),
-		panel("Flow log", preview, logW, h))
+		focusPanel(hm.focus == 0, fmt.Sprintf("Runs · %d · %s", len(hm.runs), engine.HumanSize(hm.total)), lb.String(), listW, h),
+		focusPanel(hm.focus == 1, "Flows", rb.String(), midW, h),
+		focusPanel(hm.focus == 2, "Flow log", preview, logW, h))
 	keys := ""
 	if run != nil && hm.focus >= 1 && hm.resCur < len(run.results) {
 		keys = artifactKeys(run.results[hm.resCur])
 	}
-	help := fmt.Sprintf("↑↓ move · enter/→ drill in · esc/← back · d delete · P prune (keep %d) · X delete all%s · F re-run failed · o open dir", engine.KeepRuns(), keys)
+	help := fmt.Sprintf(navHelp+" · enter/→ drill in · esc/← back · x delete · X delete all · P prune (keep %d)%s · F re-run failed · o open dir", engine.KeepRuns(), keys)
 	switch hm.confirm {
 	case "delete":
 		if run != nil {
@@ -341,12 +318,51 @@ func (hm *historyModel) view(w, h int) (string, string) {
 			if hm.linkedN > 0 {
 				extra += fmt.Sprintf(" + %d Maestro output/recording item(s) outside the project (%s)", hm.linkedN, engine.HumanSize(hm.linkedB))
 			}
-			help = sWarn.Render(fmt.Sprintf("Delete %s (%s)%s? [y/N]", filepath.Base(run.dir), engine.HumanSize(run.size), extra))
+			help = sWarn.Render(fmt.Sprintf("Delete %s (%s)%s? "+confirmHint, filepath.Base(run.dir), engine.HumanSize(run.size), extra))
 		}
 	case "prune":
-		help = sWarn.Render(fmt.Sprintf("Keep the newest %d finished runs, delete the rest and strip APK snapshots? [y/N]", engine.KeepRuns()))
+		help = sWarn.Render(fmt.Sprintf("Keep the newest %d finished runs, delete the rest and strip APK snapshots? "+confirmHint, engine.KeepRuns()))
 	case "all":
-		help = sWarn.Render("Delete every finished run dir of this project? [y/N]")
+		help = sWarn.Render("Delete every finished run dir of this project? " + confirmHint)
 	}
 	return body, help
+}
+
+// navKey moves whichever column has focus; the log (focus 2) scrolls, offset from its tail.
+func (hm *historyModel) navKey(k string, run *histRun) bool {
+	switch hm.focus {
+	case 0:
+		c, ok := navKey(k, hm.cursor, len(hm.runs))
+		if ok && c != hm.cursor {
+			hm.cursor, hm.resCur = c, 0
+		}
+		return ok
+	case 1:
+		if run == nil {
+			return false
+		}
+		c, ok := navKey(k, hm.resCur, len(run.results))
+		if ok && c != hm.resCur {
+			hm.resCur = c
+			hm.loadPreview()
+		}
+		return ok
+	}
+	switch k {
+	case "up", "k":
+		hm.scroll++
+	case "down", "j":
+		hm.scroll = max(0, hm.scroll-1)
+	case "u":
+		hm.scroll += pageSize
+	case "d":
+		hm.scroll = max(0, hm.scroll-pageSize)
+	case "g", "home":
+		hm.scroll = len(hm.preview)
+	case "G", "end":
+		hm.scroll = 0
+	default:
+		return false
+	}
+	return true
 }
