@@ -1,4 +1,4 @@
-module github.com/feernandooff/trun
+module github.com/feernandooff/mockstro
 
 go 1.25.6
 

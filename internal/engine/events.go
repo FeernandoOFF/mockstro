@@ -63,7 +63,7 @@ type Result struct {
 
 func (r *Result) Passed() bool { return r.Stage == "PASS" && r.Exit == 0 }
 
-// TSV is test.sh's result line: feature|flow|stage|exit|<n>s|recording.
+// TSV is a result.tsv line: feature|flow|stage|exit|<n>s|recording.
 func (r *Result) TSV() string {
 	return strings.Join([]string{r.Feature, r.File, r.Stage, strconv.Itoa(r.Exit), fmt.Sprintf("%ds", int(r.Duration.Seconds())), r.Recording}, "|")
 }

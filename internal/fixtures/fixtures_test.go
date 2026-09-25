@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/feernandooff/trun/internal/ojson"
-	"github.com/feernandooff/trun/internal/project"
+	"github.com/feernandooff/mockstro/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 func write(t *testing.T, path, content string) {

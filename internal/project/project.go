@@ -1,5 +1,4 @@
 // Package project locates a repository's .maestro directory and loads its per-repo settings.
-// The on-disk layout is the one test.sh uses, so both runners can serve the same checkout.
 package project
 
 import (
@@ -7,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -18,8 +16,8 @@ const (
 	OverrideTTLSecs   = 14400
 	DefaultProxyBase  = "https://apptest.prepaypower.eu:2019"
 	DefaultFBRCURL    = "https://firebaseremoteconfig.googleapis.com"
-	DefaultOverrideKy = "ppp_e2e_override"
 	DefaultAcceptKey  = "prepaypower_e2e_accepted_run_id"
+	DefaultOverrideKy = "ppp_e2e_override"
 )
 
 type Project struct {
@@ -43,8 +41,20 @@ type Project struct {
 	AcceptKey    string
 	FallbackURL  string
 
-	// GitCommonDir is shared by every worktree; test.sh keeps its locks under <it>/maestro.
-	GitCommonDir string
+	// Integration (docs/integration.md): "full" when .maestro/project.env exists (runtime
+	// override seam, mockstro builds, parallel), otherwise "lite" (drop-in: the user's own
+	// Proxyman/Charles Map Remote and the installed app, one device at a time).
+	Integration string
+}
+
+// Lite: the app is not modified and traffic reaches WireMock via the user's Map Remote.
+func (p *Project) Lite() bool { return p.Integration == "lite" }
+
+func (p *Project) IntegrationLabel() string {
+	if p.Lite() {
+		return "lite · proxy (drop-in)"
+	}
+	return "full · runtime override"
 }
 
 func (p *Project) FlowsRoot() string     { return filepath.Join(p.MaestroRoot, "flows") }
@@ -63,15 +73,6 @@ func (p *Project) RecordingsRoot() string {
 }
 func (p *Project) LastRunPath() string {
 	return filepath.Join(p.RuntimeRoot(), "results", "last-run.tsv")
-}
-func (p *Project) AgentAVDsFile() string { return filepath.Join(p.MaestroRoot, "agent-avds.txt") }
-
-// LegacyLocksRoot is where test.sh keeps device/port locks for this repository.
-func (p *Project) LegacySharedRoot() string {
-	if p.GitCommonDir != "" {
-		return filepath.Join(p.GitCommonDir, "maestro")
-	}
-	return filepath.Join(p.Root, "build", "maestro-shared")
 }
 
 func (p *Project) Rel(path string) string {
@@ -102,7 +103,7 @@ func Find(dir string) (string, error) {
 }
 
 func isMaestroRoot(m string) bool {
-	for _, marker := range []string{"flows", "wiremock", "project.env", "test.sh"} {
+	for _, marker := range []string{"flows", "wiremock", "project.env"} {
 		if _, err := os.Stat(filepath.Join(m, marker)); err == nil {
 			return true
 		}
@@ -110,8 +111,7 @@ func isMaestroRoot(m string) bool {
 	return false
 }
 
-// Load reads project.env on top of the process environment (project.env wins, as with
-// test.sh's `set -a; . project.env`).
+// Load reads project.env on top of the process environment (project.env wins).
 func Load(root string) (*Project, error) {
 	p := &Project{Root: root, MaestroRoot: filepath.Join(root, ".maestro"), Env: map[string]string{}}
 	for _, kv := range os.Environ() {
@@ -120,11 +120,14 @@ func Load(root string) (*Project, error) {
 		}
 	}
 	envFile := filepath.Join(p.MaestroRoot, "project.env")
+	p.Integration = "full"
 	if vals, err := ParseEnvFile(envFile); err == nil {
 		for k, v := range vals {
 			p.Env[k] = v
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if errors.Is(err, os.ErrNotExist) {
+		p.Integration = "lite"
+	} else {
 		return nil, fmt.Errorf("read %s: %w", envFile, err)
 	}
 
@@ -132,9 +135,16 @@ func Load(root string) (*Project, error) {
 		if v := p.Env[k]; v != "" {
 			return v
 		}
+		if p.Lite() {
+			// No project defaults in lite: the app id comes from the flows' appId.
+			return ""
+		}
 		return def
 	}
 	p.Platform = get("MAESTRO_PLATFORM", "android")
+	if p.Platform == "" {
+		p.Platform = "android"
+	}
 	p.AppID = get("APP_PACKAGE", "ie.prepaypower.envtest")
 	p.Variant = get("MAESTRO_APP_VARIANT", "debugEnvTest")
 	switch p.Variant {
@@ -144,6 +154,8 @@ func Load(root string) (*Project, error) {
 	case "envtest":
 		p.GradleTask = "assembleEnvtest"
 		p.APKGlob = "app/build/outputs/apk/envtest/*-envtest.apk"
+	case "":
+		// Lite: mockstro never builds.
 	default:
 		return nil, fmt.Errorf("unknown MAESTRO_APP_VARIANT: %s (expected debugEnvTest or envtest)", p.Variant)
 	}
@@ -157,17 +169,12 @@ func Load(root string) (*Project, error) {
 	}
 	p.ProxyBaseURL = get("E2E_PROXY_BASE_URL", DefaultProxyBase)
 	p.FBRCURL = get("E2E_FBRC_URL", DefaultFBRCURL)
+	if p.FBRCURL == "" {
+		p.FBRCURL = DefaultFBRCURL // Google's endpoint, not project-specific
+	}
 	p.OverrideKey = get("E2E_OVERRIDE_SETTING_KEY", DefaultOverrideKy)
 	p.AcceptKey = get("E2E_ACCEPT_SETTING_KEY", DefaultAcceptKey)
 	p.FallbackURL = get("E2E_FALLBACK_PROXY_URL", "")
-
-	if out, err := exec.Command("git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir").Output(); err == nil {
-		if d := strings.TrimSpace(string(out)); d != "" {
-			if st, err := os.Stat(d); err == nil && st.IsDir() {
-				p.GitCommonDir = d
-			}
-		}
-	}
 	return p, nil
 }
 

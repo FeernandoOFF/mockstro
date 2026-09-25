@@ -13,11 +13,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fsx"
-	"github.com/feernandooff/trun/internal/ojson"
-	"github.com/feernandooff/trun/internal/project"
-	"github.com/feernandooff/trun/internal/registry"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fsx"
+	"github.com/feernandooff/mockstro/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/registry"
 )
 
 var iosEnvKeys = []string{"E2E_API_URL", "E2E_RUN_ID", "E2E_REMOTE_CONFIG", "E2E_EXPIRES_AT"}
@@ -231,8 +231,6 @@ func (i *IOS) Install(ctx context.Context, serial, path string) error {
 	return nil
 }
 
-func (i *IOS) AfterInstall(context.Context, string, bool) error { return nil }
-
 func (i *IOS) container(ctx context.Context, serial, kind string) string {
 	out, err := i.simctl(ctx, "get_app_container", serial, i.P.AppID, kind)
 	if err != nil {
@@ -247,7 +245,7 @@ func (i *IOS) container(ctx context.Context, serial, kind string) string {
 func (i *IOS) InstalledProvenance(ctx context.Context, serial string) (*registry.APK, error) {
 	app := i.container(ctx, serial, "app")
 	if app == "" {
-		return nil, fmt.Errorf("%s is not installed on %s; drop --skip-build", i.P.AppID, serial)
+		return nil, notInstalled(i.P, serial)
 	}
 	plist := filepath.Join(app, "Info.plist")
 	read := func(key string) string {
@@ -400,6 +398,8 @@ func (i *IOS) ResetApp(ctx context.Context, serial, runID string) (bool, string)
 	}
 	return true, ""
 }
+
+func (i *IOS) AfterInstall(context.Context, string, bool) error { return nil }
 
 func (i *IOS) AttachPort(context.Context, string, int) error { return nil }
 func (i *IOS) DetachPort(context.Context, string, int) error { return nil }

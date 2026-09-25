@@ -13,9 +13,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/feernandooff/trun/internal/lock"
-	"github.com/feernandooff/trun/internal/registry"
-	"github.com/feernandooff/trun/internal/wiremock"
+	"github.com/feernandooff/mockstro/internal/lock"
+	"github.com/feernandooff/mockstro/internal/registry"
+	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
 // Run owns one device, one port and one WireMock for its lifetime. A single-device session is
@@ -158,7 +158,7 @@ func (r *Run) initDir() error {
 		User: username, PID: os.Getpid(), PIDStartedAt: lock.StartTime(context.Background(), e.Exec, os.Getpid()),
 		Device: r.Device, Port: r.Port, Platform: e.Opts.Platform, Command: r.Command,
 		Tags: strings.Join(e.Opts.Tags, ","), StartedAt: time.Now().UTC().Format(time.RFC3339),
-		RunDir: r.Dir, Worktree: e.P.Root, Runner: "trun",
+		RunDir: r.Dir, Worktree: e.P.Root, Runner: "mockstro",
 	}
 	if err := r.reg.Save(r.info); err != nil {
 		return err

@@ -8,15 +8,16 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/feernandooff/trun/internal/lock"
-	"github.com/feernandooff/trun/internal/platform"
-	"github.com/feernandooff/trun/internal/project"
-	"github.com/feernandooff/trun/internal/wiremock"
+	"github.com/feernandooff/mockstro/internal/lock"
+	"github.com/feernandooff/mockstro/internal/paths"
+	"github.com/feernandooff/mockstro/internal/platform"
+	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
 // Device rules:
 //   - agents and CI may only take an emulator/simulator that is explicitly designated
-//     (MAESTRO_AGENT_AVDS, .maestro/agent-avds.txt, IOS_SIMULATOR_NAMES or ~/.config/trun/designated.txt);
+//     (MAESTRO_AGENT_AVDS, IOS_SIMULATOR_NAMES or ~/.config/mockstro/designated.txt);
 //   - a human may take any emulator, designated ones first;
 //   - a physical device is only driven with --map-remote.
 
@@ -30,7 +31,7 @@ func (e *Engine) isDesignated(ctx context.Context, serial string) bool {
 
 // Allowed reports whether this owner may drive serial at all.
 func (e *Engine) Allowed(ctx context.Context, serial string) bool {
-	if e.Opts.MapRemote {
+	if e.Opts.MapRemote || e.Opts.Lite {
 		return true
 	}
 	if e.Plat.Class(serial) != "emulator" {
@@ -56,17 +57,17 @@ func (e *Engine) wantedClass() string {
 }
 
 func (e *Engine) requireDesignation() error {
-	if e.Opts.MapRemote || e.Owner == "human" || len(e.Plat.Designated()) > 0 {
+	if e.Opts.MapRemote || e.Opts.Lite || e.Owner == "human" || len(e.Plat.Designated()) > 0 {
 		return nil
 	}
 	if e.Opts.Platform == "ios" {
-		return errors.New("no simulators designated. Set IOS_SIMULATOR_NAMES in .maestro/project.env or list names in ~/.config/trun/designated.txt")
+		return errors.New("no simulators designated. Set IOS_SIMULATOR_NAMES in .maestro/project.env or list names in ~/.config/mockstro/designated.txt")
 	}
-	return errors.New("no reusable agent AVDs configured. Set MAESTRO_AGENT_AVDS=name[,name], create .maestro/agent-avds.txt, or list names in ~/.config/trun/designated.txt")
+	return errors.New("no reusable agent AVDs configured. Set MAESTRO_AGENT_AVDS=name[,name] in .maestro/project.env, or list names in ~/.config/mockstro/designated.txt")
 }
 
 func (e *Engine) DeviceLocked(serial string) bool {
-	return lock.Held(e.LockRoots(), "device", serial)
+	return lock.Held(paths.LocksRoot(), "device", serial)
 }
 
 // candidates orders eligible devices: designated first, so a human run does not grab a
@@ -126,14 +127,14 @@ func (e *Engine) BootCandidates(ctx context.Context) []string {
 func (e *Engine) offerBoot(ctx context.Context) bool {
 	avds := e.BootCandidates(ctx)
 	if len(avds) == 0 {
-		e.Warnf("No installed AVD is designated for Maestro. Configure MAESTRO_AGENT_AVDS or .maestro/agent-avds.txt.")
+		e.Warnf("No installed AVD is designated for Maestro. Set MAESTRO_AGENT_AVDS in .maestro/project.env.")
 		return false
 	}
 	pick := ""
 	switch {
 	case e.Opts.BootAVD != "":
 		if !slices.Contains(avds, e.Opts.BootAVD) {
-			e.Warnf("AVD '%s' is not designated (MAESTRO_AGENT_AVDS, .maestro/agent-avds.txt, ~/.config/trun/designated.txt).", e.Opts.BootAVD)
+			e.Warnf("AVD '%s' is not designated (MAESTRO_AGENT_AVDS in .maestro/project.env, or ~/.config/mockstro/designated.txt).", e.Opts.BootAVD)
 			return false
 		}
 		pick = e.Opts.BootAVD
@@ -156,9 +157,9 @@ func (e *Engine) offerBoot(ctx context.Context) bool {
 }
 
 func (e *Engine) noDeviceHint() string {
-	h := "  Boot a designated emulator: trun run --boot-emulator [avd] ..."
+	h := "  Boot a designated emulator: mockstro run --boot-emulator[=avd] ..."
 	if e.Opts.Platform != "ios" {
-		h += fmt.Sprintf("\n  Or run on a connected phone via your Proxyman Map Remote rule (port %d):\n    trun run --map-remote [--device <serial>] ...", project.ReservedMockPort)
+		h += fmt.Sprintf("\n  Or run on a connected phone via your Proxyman Map Remote rule (port %d):\n    mockstro run --map-remote [--device <serial>] ...", project.ReservedMockPort)
 	}
 	return h
 }
@@ -210,9 +211,9 @@ func (e *Engine) SelectDevice(ctx context.Context, locks *lock.Manager) (string,
 		}
 	}
 	if e.Opts.MapRemote {
-		return "", errors.New("--map-remote: no free device. See: trun status")
+		return "", errors.New("--map-remote: no free device. See: mockstro status")
 	}
-	return "", fmt.Errorf("no %s device eligible for owner %s is free. See: trun status\n%s", e.wantedClass(), e.Owner, e.noDeviceHint())
+	return "", fmt.Errorf("no %s device eligible for owner %s is free. See: mockstro status\n%s", e.wantedClass(), e.Owner, e.noDeviceHint())
 }
 
 // FreeEligible lists devices this owner may take that no run holds.
@@ -259,7 +260,7 @@ func (e *Engine) EnsureParallelDevices(ctx context.Context, wanted int) error {
 		}
 	}
 	if free+len(toBoot) < wanted {
-		return fmt.Errorf("--parallel %d needs %d devices: %d free now and %d more designated AVD(s) to boot.\n  Designate another AVD in MAESTRO_AGENT_AVDS, .maestro/agent-avds.txt or ~/.config/trun/designated.txt, or lower --parallel", wanted, wanted, free, len(toBoot))
+		return fmt.Errorf("--parallel %d needs %d devices: %d free now and %d more designated AVD(s) to boot.\n  Designate another AVD in MAESTRO_AGENT_AVDS (.maestro/project.env) or ~/.config/mockstro/designated.txt, or lower --parallel", wanted, wanted, free, len(toBoot))
 	}
 	e.Logf("Need %d more device(s) for %d worker(s); %d free now.", wanted-free, wanted, free)
 	booted := 0
@@ -285,7 +286,7 @@ func (e *Engine) AcquirePort(ctx context.Context, locks *lock.Manager, command, 
 	port := e.Opts.ServerPort
 	if e.Opts.PortPinned {
 		if err := locks.Acquire("port", fmt.Sprint(port)); err != nil {
-			return 0, fmt.Errorf("port %d is locked by another Maestro run. See: trun status", port)
+			return 0, fmt.Errorf("port %d is locked by another Maestro run. See: mockstro status", port)
 		}
 		return port, nil
 	}
@@ -310,7 +311,7 @@ func (e *Engine) AcquirePort(ctx context.Context, locks *lock.Manager, command, 
 			return c, nil
 		}
 	}
-	return 0, fmt.Errorf("no free port in %d-%d. See: trun status", base, base+19)
+	return 0, fmt.Errorf("no free port in %d-%d. See: mockstro status", base, base+19)
 }
 
 func (e *Engine) isEmulator(ctx context.Context, serial string) bool {

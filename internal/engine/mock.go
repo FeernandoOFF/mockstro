@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/wiremock"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
 // MockTarget is what `mock` serves: a flow's, a scenario's or a bare profile's fixtures.
@@ -74,7 +74,7 @@ func (e *Engine) ResolveMockTarget(args []string) (*MockTarget, error) {
 	}
 	for _, o := range cli {
 		if !e.Store.StubExists(o) {
-			return nil, fmt.Errorf("unknown stub: %s (see `trun list profiles`)", o)
+			return nil, fmt.Errorf("unknown stub: %s (see `mockstro list profiles`)", o)
 		}
 	}
 	merged, err := e.Store.MergeOverridesByRoute(append(append([]string(nil), flowOverrides...), cli...))

@@ -1,4 +1,4 @@
-// Package tui is trun's interactive front end. It drives the same engine as the CLI; every
+// Package tui is mockstro's interactive front end. It drives the same engine as the CLI; every
 // run it starts could equally have been started from the command line (the config screen
 // shows the equivalent command).
 package tui
@@ -12,11 +12,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/lock"
-	"github.com/feernandooff/trun/internal/project"
+	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/lock"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 const (
@@ -369,8 +369,8 @@ func (a *app) View() string {
 			tabs = append(tabs, sTab.Render(label))
 		}
 	}
-	head := lipgloss.JoinHorizontal(lipgloss.Top, sTitle.Render(" trun "), strings.Join(tabs, ""))
-	proj := sMuted.Render(fmt.Sprintf(" %s · %s · owner %s", a.p.Root, a.opts.Platform, a.query.Owner))
+	head := lipgloss.JoinHorizontal(lipgloss.Top, sTitle.Render(" mockstro "), strings.Join(tabs, ""))
+	proj := sMuted.Render(fmt.Sprintf(" %s · %s · owner %s · ", a.p.Root, a.opts.Platform, a.query.Owner)) + sSel.Render(a.p.IntegrationLabel())
 	bodyH := a.h - 4
 	var body, help string
 	switch a.tab {

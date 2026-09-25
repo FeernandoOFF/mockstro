@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fsx"
-	"github.com/feernandooff/trun/internal/ojson"
-	"github.com/feernandooff/trun/internal/paths"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fsx"
+	"github.com/feernandooff/mockstro/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/paths"
 )
 
 const (

@@ -1,5 +1,5 @@
-// Package cli is trun's command-line front end. Every command is non-interactive and
-// scriptable; the TUI (`trun` in a terminal, or `trun tui`) drives the same engine.
+// Package cli is mockstro's command-line front end. Every command is non-interactive and
+// scriptable; the TUI (`mockstro` in a terminal, or `mockstro tui`) drives the same engine.
 package cli
 
 import (
@@ -17,9 +17,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/project"
+	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 // ExitError carries a specific process exit status.
@@ -75,9 +75,9 @@ func Execute(version string) int {
 	g := &globals{}
 	f := &runFlags{}
 	root := &cobra.Command{
-		Use:           "trun",
+		Use:           "mockstro",
 		Short:         "Maestro + WireMock end-to-end runner (Android & iOS)",
-		Long:          "trun runs the .maestro suite of the repository it is started in. Without a command it opens the TUI in a terminal, and runs the smoke suite otherwise.",
+		Long:          "mockstro runs the .maestro suite of the repository it is started in. Without a command it opens the TUI in a terminal, and runs the smoke suite otherwise.",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -177,10 +177,9 @@ func Execute(version string) int {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 		<-c
-		fmt.Fprintln(os.Stderr, "\nForced exit; run `trun sweep` if locks were left behind.")
+		fmt.Fprintln(os.Stderr, "\nForced exit; run `mockstro sweep` if locks were left behind.")
 		os.Exit(130)
 	}()
-	root.SetArgs(normalizeArgs(os.Args[1:]))
 	err := root.ExecuteContext(ctx)
 	var ee ExitError
 	if errors.As(err, &ee) {
@@ -193,26 +192,9 @@ func Execute(version string) int {
 	return 0
 }
 
-// normalizeArgs accepts test.sh's `--boot-emulator avd` (space-separated optional value).
-func normalizeArgs(args []string) []string {
-	var out []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "--boot-emulator" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && !strings.HasSuffix(args[i+1], ".yaml") && !strings.HasSuffix(args[i+1], ".yml") {
-			out = append(out, "--boot-emulator="+args[i+1])
-			i++
-			continue
-		}
-		out = append(out, a)
-	}
-	return out
-}
-
 func addRunFlags(c *cobra.Command, f *runFlags) {
 	fl := c.Flags()
 	fl.StringVar(&f.tags, "tags", "smoke", "comma-separated tags")
-	fl.StringVar(&f.tags, "include-tags", "smoke", "alias of --tags")
-	_ = fl.MarkHidden("include-tags")
 	fl.StringVar(&f.device, "device", "", "emulator serial / simulator UDID")
 	fl.IntVar(&f.serverPort, "server-port", project.ReservedMockPort, "pin the WireMock port")
 	fl.StringVar(&f.profile, "profile", "", "override the profile each flow declares")
@@ -230,10 +212,10 @@ func addRunFlags(c *cobra.Command, f *runFlags) {
 	fl.StringVar(&f.junit, "junit", "", "also write a JUnit XML report to this path")
 	fl.BoolVar(&f.quiet, "quiet-output", false, "hide raw Maestro/Gradle output")
 	fl.BoolVar(&f.headless, "headless", false, "boot emulators without a window (less host CPU/GPU per device)")
-	fl.IntVar(&f.emuCores, "emulator-cores", 0, "vCPUs for emulators trun boots (default: the AVD's)")
-	fl.IntVar(&f.emuMemory, "emulator-memory", 0, "RAM in MB for emulators trun boots (default: the AVD's)")
+	fl.IntVar(&f.emuCores, "emulator-cores", 0, "vCPUs for emulators mockstro boots (default: the AVD's)")
+	fl.IntVar(&f.emuMemory, "emulator-memory", 0, "RAM in MB for emulators mockstro boots (default: the AVD's)")
 	fl.StringVar(&f.emuSnapshot, "emulator-snapshot", "", "boot emulators from this named snapshot (e.g. saved with `adb emu avd snapshot save <name>`)")
-	fl.StringVar(&f.emuGPU, "emulator-gpu", "", "emulator -gpu mode for emulators trun boots (default: host when --headless, else the AVD's)")
+	fl.StringVar(&f.emuGPU, "emulator-gpu", "", "emulator -gpu mode for emulators mockstro boots (default: host when --headless, else the AVD's)")
 	fl.StringVar(&f.keyboard, "keyboard", "", "on-screen keyboard before flows: hidden or shown (default: leave as is)")
 	fl.BoolVar(&f.clearProxy, "clear-proxy", false, "remove a device-wide HTTP proxy (Proxyman/Charles) instead of refusing the device")
 }
@@ -256,6 +238,7 @@ func buildOptions(cmd string, g *globals, f *runFlags, p *project.Project, args 
 	if g.platform != "" {
 		o.Platform = g.platform
 	}
+	o.Lite = p.Lite()
 	o.Owner = g.owner
 	o.Tags = splitTags(f.tags)
 	o.FlowArgs = args
@@ -438,7 +421,7 @@ func printStatus(st *engine.Status) {
 	}
 	for _, dv := range st.Devices {
 		if dv.Proxy != "" {
-			fmt.Printf("\nWARNING: %s has a device-wide proxy: %s (trun proxy --clear --device %s)", dv.Serial, dv.Proxy, dv.Serial)
+			fmt.Printf("\nWARNING: %s has a device-wide proxy: %s (mockstro proxy --clear --device %s)", dv.Serial, dv.Proxy, dv.Serial)
 		}
 	}
 	fmt.Printf("\nFree: emulators=[%s] physical=[%s]\n", strings.Join(st.Available.Emulator, ","), strings.Join(st.Available.Physical, ","))
@@ -488,7 +471,7 @@ func lastRunCmd(g *globals) error {
 	}
 	at, total, results, err := engine.LoadResults(p.LastRunPath())
 	if err != nil {
-		return fmt.Errorf("no saved Maestro run found. Run `trun run` first")
+		return fmt.Errorf("no saved Maestro run found. Run `mockstro run` first")
 	}
 	if len(results) == 0 {
 		return fmt.Errorf("last Maestro run contains no flow results")
@@ -613,6 +596,7 @@ func runTUI(g *globals, f *runFlags) error {
 	if g.platform != "" {
 		o.Platform = g.platform
 	}
+	o.Lite = p.Lite()
 	return TUIFunc(p, o)
 }
 

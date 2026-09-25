@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 
-	"github.com/feernandooff/trun/internal/cli"
-	"github.com/feernandooff/trun/internal/tui"
+	"github.com/feernandooff/mockstro/internal/cli"
+	"github.com/feernandooff/mockstro/internal/tui"
 )
 
 var version = "dev"

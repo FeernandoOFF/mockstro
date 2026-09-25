@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/feernandooff/trun/internal/ojson"
-	"github.com/feernandooff/trun/internal/project"
+	"github.com/feernandooff/mockstro/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 const RemoveMarker = "__remove__"
@@ -220,7 +220,7 @@ var allowedFaults = map[string]bool{
 	"MALFORMED_RESPONSE_CHUNK": true, "RANDOM_DATA_THEN_CLOSE": true,
 }
 
-// ValidateStub checks a resolved stub the way test.sh's validate_stub did.
+// ValidateStub checks a resolved stub before WireMock receives it.
 func (s *Store) ValidateStub(stub *ojson.Object, expectedName, sourceFile string) error {
 	rel := s.P.Rel(sourceFile)
 	req := stub.Object("request")

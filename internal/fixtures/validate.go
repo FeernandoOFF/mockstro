@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/feernandooff/trun/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/ojson"
 )
 
 type Counts struct {

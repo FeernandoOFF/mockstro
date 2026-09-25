@@ -11,7 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/feernandooff/trun/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/ojson"
 )
 
 // Verification asserts how often a named stub was matched during one flow.
@@ -53,6 +53,7 @@ func (v Verification) Expectation() string {
 // Header is the first YAML document of a flow or scenario.
 type Header struct {
 	Path          string
+	AppID         string
 	Name          string
 	Description   string
 	Tags          []string
@@ -104,6 +105,7 @@ func ParseHeader(path string) (*Header, error) {
 		}
 		h.HasSteps = steps != nil
 	}
+	h.AppID, _ = raw["appId"].(string)
 	h.Name, _ = raw["name"].(string)
 	h.Description, _ = raw["description"].(string)
 	switch t := raw["tags"].(type) {
@@ -168,7 +170,7 @@ func (h *Header) prop(key string) any {
 	return h.raw["properties."+key]
 }
 
-// Validate applies the header rules test.sh enforced in validate_flow / validate_scenario.
+// validateProperties checks a flow or scenario header's properties.
 func (h *Header) validateProperties(rel string) error {
 	if h.Profile == "" {
 		return fmt.Errorf("missing properties.apiProfile in %s", rel)

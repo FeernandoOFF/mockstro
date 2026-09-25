@@ -8,18 +8,17 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/lock"
-	"github.com/feernandooff/trun/internal/paths"
-	"github.com/feernandooff/trun/internal/platform"
-	"github.com/feernandooff/trun/internal/project"
-	"github.com/feernandooff/trun/internal/registry"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/lock"
+	"github.com/feernandooff/mockstro/internal/paths"
+	"github.com/feernandooff/mockstro/internal/platform"
+	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/registry"
 )
 
 type Options struct {
@@ -47,10 +46,13 @@ type Options struct {
 	ClearProxy  bool   // remove a device-wide HTTP proxy instead of refusing the device
 	Keyboard    string // "", "hidden" or "shown": on-screen keyboard state to apply before flows
 	Headless    bool   // boot emulators without a window / simulators without Simulator.app
-	EmuCores    int    // override AVD vCPUs for emulators trun boots (0 = AVD default)
-	EmuMemoryMB int    // override AVD RAM for emulators trun boots (0 = AVD default)
-	EmuGPU      string // emulator -gpu mode for emulators trun boots ("" = emulator default)
+	EmuCores    int    // override AVD vCPUs for emulators mockstro boots (0 = AVD default)
+	EmuMemoryMB int    // override AVD RAM for emulators mockstro boots (0 = AVD default)
+	EmuGPU      string // emulator -gpu mode for emulators mockstro boots ("" = emulator default)
 	EmuSnapshot string // boot emulators from this named snapshot
+	// Lite: a lite-integration project (no project.env). Runs are always --map-remote on
+	// the installed app, one device at a time; see docs/integration.md.
+	Lite bool
 
 	// Set by a parallel parent for its workers.
 	SessionAPK    string
@@ -79,16 +81,17 @@ func New(p *project.Project, opts Options, ex execx.Runner, sink Sink) *Engine {
 	if opts.Platform == "" {
 		opts.Platform = p.Platform
 	}
+	opts.Lite = p.Lite()
 	if opts.FBRC == nil {
 		opts.FBRC = map[string]string{}
 	}
 	if sink == nil {
 		sink = func(Event) {}
 	}
-	if p.GitCommonDir != "" {
-		paths.RememberProject(p.Root, p.LegacySharedRoot())
-	}
 	e := &Engine{P: p, Store: fixtures.New(p), Exec: ex, Opts: opts, Sink: sink}
+	if p.AppID == "" {
+		p.AppID = e.flowsAppID()
+	}
 	e.Plat = platform.New(p, opts.Platform, ex)
 	switch p := e.Plat.(type) {
 	case *platform.IOS:
@@ -112,30 +115,6 @@ func (e *Engine) Logf(format string, args ...any) {
 
 func (e *Engine) Warnf(format string, args ...any) {
 	e.emit(Event{Kind: EvLog, Level: "warn", Text: fmt.Sprintf(format, args...)})
-}
-
-// Lock and registry roots: global first (authoritative, cross-project), then the repository's
-// legacy test.sh roots so a test.sh run and a trun run never share a device or port.
-// Every known project's legacy root is included, so test.sh runs in other repositories count.
-func (e *Engine) LockRoots() []string {
-	return e.roots(paths.LocksRoot(), "locks")
-}
-
-func (e *Engine) RegistryRoots() []string {
-	return e.roots(paths.RegistryRoot(), "runs")
-}
-
-func (e *Engine) roots(global, sub string) []string {
-	out := []string{global}
-	seen := map[string]bool{global: true}
-	for _, shared := range append([]string{e.P.LegacySharedRoot()}, paths.LegacyRoots()...) {
-		r := filepath.Join(shared, sub)
-		if !seen[r] {
-			seen[r] = true
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 // ResolveOwner: explicit flag, env, CI, agent env, interactive tty; otherwise agent, the
@@ -164,7 +143,7 @@ func isTTY(f *os.File) bool {
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
 }
 
-// NewRunID: <utc stamp>-<pid>-<hex>, the shape test.sh used (the app accepts [A-Za-z0-9._-]).
+// NewRunID: <utc stamp>-<pid>-<hex> (the app accepts [A-Za-z0-9._-]).
 func NewRunID() string {
 	b := make([]byte, 3)
 	_, _ = rand.Read(b)
@@ -172,10 +151,10 @@ func NewRunID() string {
 }
 
 func (e *Engine) newLocks(runID string) *lock.Manager {
-	return &lock.Manager{Roots: e.LockRoots(), Exec: e.Exec, RunID: runID, Who: e.Owner}
+	return &lock.Manager{Root: paths.LocksRoot(), Exec: e.Exec, RunID: runID, Who: e.Owner}
 }
 
-func (e *Engine) registry() *registry.Registry { return &registry.Registry{Roots: e.RegistryRoots()} }
+func (e *Engine) registry() *registry.Registry { return &registry.Registry{Root: paths.RegistryRoot()} }
 
 // DiscoverFlows resolves explicit paths or filters flows/ by tag and platform.
 func (e *Engine) DiscoverFlows() ([]*fixtures.Flow, error) {
@@ -262,10 +241,22 @@ func (e *Engine) CheckEnvironment(command string) error {
 	return nil
 }
 
-// Validate checks the option combinations test.sh enforced in parse_args.
+// Validate rejects invalid option combinations.
 func (o *Options) Validate(command string) error {
 	if o.ServerPort < 1 || o.ServerPort > 65535 {
 		return fmt.Errorf("--server-port must be a number from 1 to 65535")
+	}
+	if o.Lite {
+		const why = " needs full integration (.maestro/project.env and the app's override seam; see docs/integration.md)"
+		switch {
+		case o.Parallel != "":
+			return fmt.Errorf("--parallel" + why)
+		case o.Attach:
+			return fmt.Errorf("mock --attach" + why)
+		}
+		if command == "run" {
+			o.MapRemote, o.SkipBuild = true, true
+		}
 	}
 	if o.Platform != "" && o.Platform != "android" && o.Platform != "ios" {
 		return fmt.Errorf("unknown platform: %s", o.Platform)
@@ -274,7 +265,7 @@ func (o *Options) Validate(command string) error {
 		if command != "run" {
 			return fmt.Errorf("--map-remote is only valid with run")
 		}
-		if o.Platform == "ios" {
+		if o.Platform == "ios" && !o.Lite {
 			return fmt.Errorf("--map-remote is Android only")
 		}
 		if o.Parallel != "" {
@@ -359,4 +350,19 @@ func isUDID(s string) bool {
 // Background returns a context that survives the caller's cancellation, for cleanup.
 func cleanupCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 60*time.Second)
+}
+
+// flowsAppID is the appId most flows declare: a lite project has no APP_PACKAGE.
+func (e *Engine) flowsAppID() string {
+	flows, _ := e.Store.Flows()
+	count, best := map[string]int{}, ""
+	for _, f := range flows {
+		if id := f.Header.AppID; id != "" {
+			count[id]++
+			if count[id] > count[best] {
+				best = id
+			}
+		}
+	}
+	return best
 }

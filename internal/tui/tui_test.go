@@ -11,11 +11,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/platform"
-	"github.com/feernandooff/trun/internal/project"
+	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/platform"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 func write(t *testing.T, path, s string) {
@@ -27,7 +27,7 @@ func write(t *testing.T, path, s string) {
 }
 
 func testApp(t *testing.T) *app {
-	t.Setenv("TRUN_STATE_DIR", t.TempDir())
+	t.Setenv("MOCKSTRO_STATE_DIR", t.TempDir())
 	root := t.TempDir()
 	m := filepath.Join(root, ".maestro")
 	write(t, filepath.Join(m, "config.yaml"), "flows:\n  - flows/**\n")
@@ -114,7 +114,16 @@ func TestFlowPickerToConfigCommand(t *testing.T) {
 	if len(a.flowTab.visible) != 1 || a.flowTab.tags[a.flowTab.tagIdx] != "smoke" {
 		t.Fatalf("tag filter: %d %v", len(a.flowTab.visible), a.flowTab.tags)
 	}
+	key(a, "c")
+	if a.cfg.active {
+		t.Fatal("config opened with nothing selected")
+	}
 	key(a, "enter")
+	if !a.flowTab.focusList {
+		t.Fatal("enter did not focus flow list")
+	}
+	key(a, "a")
+	key(a, "c")
 	if !a.cfg.active {
 		t.Fatal("config did not open")
 	}
@@ -122,7 +131,7 @@ func TestFlowPickerToConfigCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := commandLine(o); got != "trun run --tags smoke --boot-emulator --clear-proxy" {
+	if got := commandLine(o); got != "mockstro run --tags smoke --boot-emulator --clear-proxy" {
 		t.Fatalf("command: %s", got)
 	}
 	key(a, "down") // parallel
@@ -140,10 +149,12 @@ func TestFlowPickerToConfigCommand(t *testing.T) {
 		t.Fatal("esc did not close config")
 	}
 	// Explicit selection becomes flow paths.
+	key(a, "n")
+	key(a, "f") // tag menu
 	key(a, "g") // tag: all
 	key(a, "f") // flow list
 	key(a, " ")
-	key(a, "enter")
+	key(a, "c")
 	o, _ = a.cfg.options()
 	if len(o.FlowArgs) != 1 || !strings.HasSuffix(o.FlowArgs[0], ".yaml") {
 		t.Fatalf("flow args %v", o.FlowArgs)
@@ -332,7 +343,8 @@ func TestNavKey(t *testing.T) {
 func TestMapRemoteDisablesProxyField(t *testing.T) {
 	a := testApp(t)
 	key(a, "2")
-	key(a, "enter")
+	key(a, "a")
+	key(a, "c")
 	for a.cfg.cursor != fIntercept {
 		key(a, "down")
 	}
@@ -363,5 +375,78 @@ func TestMockTreeCompactsFolders(t *testing.T) {
 	want := "scenarios\n usage\nflows\n deep/nested\n  Only\n home\n  Home"
 	if strings.Join(got, "\n") != want {
 		t.Fatalf("rows:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+func TestRunOnRealDeviceForcesMapRemote(t *testing.T) {
+	a := testApp(t)
+	a.status.Devices = append(a.status.Devices, engine.StatusDevice{Device: platform.Device{Serial: "R5CT123", Name: "Galaxy", Class: "physical"}})
+	key(a, "2")
+	key(a, "a")
+	key(a, "c")
+	for !a.cfg.realDevice() {
+		key(a, "right")
+	}
+	o, err := a.cfg.options()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := commandLine(o); !strings.Contains(got, "--device R5CT123 --map-remote") || strings.Contains(got, "--boot-emulator") {
+		t.Fatalf("command: %s", got)
+	}
+	key(a, "down")
+	if a.cfg.cursor != fBuild {
+		t.Fatalf("parallel not skipped: cursor %d", a.cfg.cursor)
+	}
+	if v := a.View(); !strings.Contains(v, "n/a on a real device") || !strings.Contains(v, "required on a real device") {
+		t.Fatalf("real-device fields not disabled:\n%s", v)
+	}
+}
+
+func TestLiteRunForm(t *testing.T) {
+	a := testApp(t)
+	a.p.Integration = "lite"
+	a.opts.Lite = true
+	key(a, "2")
+	key(a, "a")
+	key(a, "c")
+	o, err := a.cfg.options()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := commandLine(o); !strings.Contains(got, "--skip-build") || !strings.Contains(got, "--map-remote") {
+		t.Fatalf("command: %s", got)
+	}
+	key(a, "down")
+	if a.cfg.cursor != fProfile {
+		t.Fatalf("parallel/build not skipped: cursor %d", a.cfg.cursor)
+	}
+	v := a.View()
+	for _, want := range []string{"lite · proxy", "mockstro does not build", "n/a in lite"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("missing %q:\n%s", want, v)
+		}
+	}
+	key(a, "esc")
+	key(a, "5")
+	if v := a.View(); strings.Contains(v, "a attach device") || !strings.Contains(v, "attach needs full integration") {
+		t.Fatalf("mock attach should be off in lite:\n%s", v)
+	}
+}
+
+func TestResultLinesPickedOrCursor(t *testing.T) {
+	rs := []*engine.Result{
+		{Feature: "home", File: "a.yaml", Stage: "PASS"},
+		{Feature: "home", File: "b.yaml", Stage: "TEST", Exit: 1},
+		{Feature: "home", File: "c.yaml", Stage: "CANCELLED"},
+	}
+	if got := resultLines(rs, nil, 1); got != "FAIL home/b.yaml" {
+		t.Fatalf("cursor: %q", got)
+	}
+	picked := map[string]bool{}
+	togglePick(picked, rs[0])
+	togglePick(picked, rs[2])
+	if got := resultLines(rs, picked, 1); got != "PASS home/a.yaml\nCANCELLED home/c.yaml" {
+		t.Fatalf("picked: %q", got)
 	}
 }

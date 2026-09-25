@@ -1,7 +1,5 @@
 // Package lock implements the device/port locks: an atomic mkdir per resource plus an owner
-// record. The format matches test.sh exactly, so a lock written here is honoured there and
-// vice versa. trun takes every lock in the global root (cross-project) and, when running in a
-// repository test.sh also serves, in that repository's legacy root too.
+// record, in one machine-wide root shared by every project.
 package lock
 
 import (
@@ -17,7 +15,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/feernandooff/trun/internal/execx"
+	"github.com/feernandooff/mockstro/internal/execx"
 )
 
 type Owner struct {
@@ -29,9 +27,9 @@ type Owner struct {
 	Key          string `json:"key"`
 }
 
-// Manager acquires locks on behalf of one run across one or more roots.
+// Manager acquires locks on behalf of one run.
 type Manager struct {
-	Roots []string // first is authoritative (global); the rest mirror it for test.sh
+	Root  string
 	Exec  execx.Runner
 	RunID string
 	Who   string // human | agent | ci
@@ -46,7 +44,7 @@ func DirFor(root, kind, key string) string {
 	return filepath.Join(root, kind+"-"+unsafeKey.ReplaceAllString(key, "_"))
 }
 
-// StartTime returns `ps -o lstart=` for pid, the same identity test.sh records.
+// StartTime returns `ps -o lstart=` for pid; with the pid it identifies a process.
 func StartTime(ctx context.Context, ex execx.Runner, pid int) string {
 	out, err := ex.Output(ctx, execx.Cmd{Name: "ps", Args: []string{"-o", "lstart=", "-p", strconv.Itoa(pid)}})
 	if err != nil {
@@ -65,15 +63,11 @@ func (m *Manager) selfStartTime() string {
 	return selfStart
 }
 
-// Held reports whether any root has a lock dir for the resource. An existing directory is
+// Held reports whether root has a lock dir for the resource. An existing directory is
 // always busy, even half-written: only an explicit sweep reclaims it.
-func Held(roots []string, kind, key string) bool {
-	for _, r := range roots {
-		if st, err := os.Stat(DirFor(r, kind, key)); err == nil && st.IsDir() {
-			return true
-		}
-	}
-	return false
+func Held(root, kind, key string) bool {
+	st, err := os.Stat(DirFor(root, kind, key))
+	return err == nil && st.IsDir()
 }
 
 func ReadOwner(dir string) (*Owner, error) {
@@ -88,21 +82,13 @@ func ReadOwner(dir string) (*Owner, error) {
 	return &o, nil
 }
 
-// Acquire takes the lock in every root or none.
 func (m *Manager) Acquire(kind, key string) error {
-	var taken []string
-	for _, root := range m.Roots {
-		dir, err := m.acquireOne(root, kind, key)
-		if err != nil {
-			for _, d := range taken {
-				m.releaseDir(d)
-			}
-			return err
-		}
-		taken = append(taken, dir)
+	dir, err := m.acquireOne(m.Root, kind, key)
+	if err != nil {
+		return err
 	}
 	m.mu.Lock()
-	m.held = append(m.held, taken...)
+	m.held = append(m.held, dir)
 	m.mu.Unlock()
 	return nil
 }
@@ -137,12 +123,12 @@ func (m *Manager) acquireOne(root, kind, key string) (string, error) {
 	return dir, nil
 }
 
-// Owns reports whether this run holds the lock in the authoritative root.
+// Owns reports whether this run holds the lock.
 func (m *Manager) Owns(kind, key string) bool {
-	if len(m.Roots) == 0 {
+	if m.Root == "" {
 		return false
 	}
-	o, err := ReadOwner(DirFor(m.Roots[0], kind, key))
+	o, err := ReadOwner(DirFor(m.Root, kind, key))
 	return err == nil && o.RunID == m.RunID
 }
 
@@ -204,68 +190,64 @@ type SweepAction struct {
 }
 
 // Sweep reclaims locks whose owner is provably gone. Live, incomplete or contended locks stay.
-func Sweep(ctx context.Context, ex execx.Runner, roots []string, dryRun bool) []SweepAction {
+func Sweep(ctx context.Context, ex execx.Runner, root string, dryRun bool) []SweepAction {
 	var actions []SweepAction
-	for _, root := range roots {
-		entries, err := os.ReadDir(root)
-		if err != nil {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || strings.HasSuffix(name, ".reclaim") || !(strings.HasPrefix(name, "port-") || strings.HasPrefix(name, "device-")) {
 			continue
 		}
-		for _, e := range entries {
-			name := e.Name()
-			if !e.IsDir() || strings.HasSuffix(name, ".reclaim") || !(strings.HasPrefix(name, "port-") || strings.HasPrefix(name, "device-")) {
-				continue
-			}
-			dir := filepath.Join(root, name)
-			if _, err := os.Stat(filepath.Join(dir, "owner")); err != nil {
-				actions = append(actions, SweepAction{Root: root, Name: name, Note: "incomplete lock left untouched; inspect and remove manually if no acquisition is running"})
-				continue
-			}
-			if !isDead(ctx, ex, dir) {
-				continue
-			}
-			o, _ := ReadOwner(dir)
-			a := SweepAction{Root: root, Name: name, RunID: o.RunID}
-			if dryRun {
-				a.Note = "would release stale lock; no process/device cleanup"
-				actions = append(actions, a)
-				continue
-			}
-			reclaim := dir + ".reclaim"
-			if err := os.Mkdir(reclaim, 0o755); err != nil {
-				a.Note = "reclaim already in progress; left untouched"
-				actions = append(actions, a)
-				continue
-			}
-			if isDead(ctx, ex, dir) {
-				os.RemoveAll(dir)
-				a.Released = true
-				a.Note = "released stale lock; processes and devices left untouched"
-				actions = append(actions, a)
-			}
-			os.Remove(reclaim)
+		dir := filepath.Join(root, name)
+		if _, err := os.Stat(filepath.Join(dir, "owner")); err != nil {
+			actions = append(actions, SweepAction{Root: root, Name: name, Note: "incomplete lock left untouched; inspect and remove manually if no acquisition is running"})
+			continue
 		}
+		if !isDead(ctx, ex, dir) {
+			continue
+		}
+		o, _ := ReadOwner(dir)
+		a := SweepAction{Root: root, Name: name, RunID: o.RunID}
+		if dryRun {
+			a.Note = "would release stale lock; no process/device cleanup"
+			actions = append(actions, a)
+			continue
+		}
+		reclaim := dir + ".reclaim"
+		if err := os.Mkdir(reclaim, 0o755); err != nil {
+			a.Note = "reclaim already in progress; left untouched"
+			actions = append(actions, a)
+			continue
+		}
+		if isDead(ctx, ex, dir) {
+			os.RemoveAll(dir)
+			a.Released = true
+			a.Note = "released stale lock; processes and devices left untouched"
+			actions = append(actions, a)
+		}
+		os.Remove(reclaim)
 	}
 	return actions
 }
 
-// PortLocks lists live port locks across roots (one entry per run id).
-func PortLocks(ctx context.Context, ex execx.Runner, roots []string) []*Owner {
+// PortLocks lists live port locks (one entry per run id).
+func PortLocks(ctx context.Context, ex execx.Runner, root string) []*Owner {
 	seen := map[string]bool{}
 	var out []*Owner
-	for _, root := range roots {
-		entries, _ := os.ReadDir(root)
-		for _, e := range entries {
-			if !e.IsDir() || !strings.HasPrefix(e.Name(), "port-") || strings.HasSuffix(e.Name(), ".reclaim") {
-				continue
-			}
-			o, err := ReadOwner(filepath.Join(root, e.Name()))
-			if err != nil || seen[o.RunID] || !IsLive(ctx, ex, o) {
-				continue
-			}
-			seen[o.RunID] = true
-			out = append(out, o)
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "port-") || strings.HasSuffix(e.Name(), ".reclaim") {
+			continue
 		}
+		o, err := ReadOwner(filepath.Join(root, e.Name()))
+		if err != nil || seen[o.RunID] || !IsLive(ctx, ex, o) {
+			continue
+		}
+		seen[o.RunID] = true
+		out = append(out, o)
 	}
 	return out
 }

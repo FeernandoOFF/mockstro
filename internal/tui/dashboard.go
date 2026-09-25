@@ -9,8 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/paths"
+	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/paths"
 )
 
 // dashModel: devices, bootable AVDs/simulators, active runs across every project, activity.
@@ -205,7 +205,7 @@ func (d *dashModel) view(w, h int) (string, string) {
 		}
 		dev.WriteString("\n" + sBold.Render("Bootable") + sMuted.Render("  (b to boot, B headless)") + "\n")
 		if len(st.Bootable) == 0 {
-			dev.WriteString(sMuted.Render("none — designate AVDs in .maestro/agent-avds.txt or "+paths.DesignatedFile()) + "\n")
+			dev.WriteString(sMuted.Render("none — set MAESTRO_AGENT_AVDS in .maestro/project.env or list AVDs in "+paths.DesignatedFile()) + "\n")
 		}
 		for i, n := range st.Bootable {
 			cur := "  "
@@ -235,7 +235,10 @@ func (d *dashModel) view(w, h int) (string, string) {
 
 	var info strings.Builder
 	fmt.Fprintf(&info, "App id     %s\n", a.p.AppID)
-	if a.opts.Platform == "ios" {
+	fmt.Fprintf(&info, "Integration %s\n", a.p.IntegrationLabel())
+	if a.p.Lite() {
+		fmt.Fprintf(&info, "Build      %s\n", sMuted.Render("none: runs use the installed app"))
+	} else if a.opts.Platform == "ios" {
 		fmt.Fprintf(&info, "Scheme     %s (%s)\n", a.p.IOSScheme, a.p.IOSConfig)
 	} else {
 		fmt.Fprintf(&info, "Build      %s\n", a.p.GradleTask)

@@ -1,7 +1,7 @@
 // Package platform isolates what genuinely differs between Android and iOS: device discovery,
 // booting, build/install, and how the app is told which mock to talk to.
 //
-//	Android  base64 JSON in Settings.Global (read in attachBaseContext) + `adb reverse`.
+//	Android  base64 JSON in Settings.Global (read before the HTTP clients exist) + `adb reverse`.
 //	iOS      e2e-config.json inside the installed bundle + simulator launchctl environment;
 //	         a simulator shares the host loopback, so nothing is forwarded.
 //
@@ -12,15 +12,16 @@ package platform
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/paths"
-	"github.com/feernandooff/trun/internal/project"
-	"github.com/feernandooff/trun/internal/registry"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/paths"
+	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/registry"
 )
 
 type Device struct {
@@ -123,6 +124,13 @@ func uniq(in []string) []string {
 		}
 	}
 	return out
+}
+
+func notInstalled(p *project.Project, serial string) error {
+	if p.Lite() {
+		return fmt.Errorf("%s is not installed on %s; install it yourself (lite integration does not build, see docs/integration.md)", p.AppID, serial)
+	}
+	return fmt.Errorf("%s is not installed on %s; drop --skip-build", p.AppID, serial)
 }
 
 func globalDesignated() []string { return readNameList(paths.DesignatedFile()) }

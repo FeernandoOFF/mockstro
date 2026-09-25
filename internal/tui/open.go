@@ -3,10 +3,11 @@ package tui
 import (
 	"fmt"
 	"os/exec"
-	"path/filepath"
+	"strings"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/fixtures"
+	"github.com/atotto/clipboard"
+
+	"github.com/feernandooff/mockstro/internal/engine"
 )
 
 // openPath hands a file or folder to macOS (Preview for screenshots, Finder for dirs).
@@ -44,31 +45,6 @@ func shotBadge(r *engine.Result) string {
 	return sMuted.Render(fmt.Sprintf(" 📷%d", len(r.Shots)))
 }
 
-// attachLegacyArtifacts finds artifacts for runs without artifacts.json: Maestro names each
-// output dir after the flow's `name:`.
-func attachLegacyArtifacts(dir string, results []*engine.Result, flows []*fixtures.Flow) {
-	byFile := map[string]string{}
-	for _, f := range flows {
-		byFile[f.Feature+"/"+f.File] = f.Header.Name
-	}
-	for _, r := range results {
-		name := byFile[r.Feature+"/"+r.File]
-		if r.Artifacts != "" || name == "" {
-			continue
-		}
-		for _, pattern := range []string{filepath.Join(dir, "results", "*", name), filepath.Join(dir, "worker-*", "results", "*", name)} {
-			matches, _ := filepath.Glob(pattern)
-			if len(matches) == 0 {
-				continue
-			}
-			r.Artifacts = matches[len(matches)-1]
-			shots, _ := filepath.Glob(filepath.Join(r.Artifacts, "screenshots", "*.png"))
-			r.Shots = shots
-			break
-		}
-	}
-}
-
 // artifactKeys is the footer hint for the selected result: only the keys that do something.
 func artifactKeys(r *engine.Result) string {
 	if r == nil {
@@ -82,4 +58,52 @@ func artifactKeys(r *engine.Result) string {
 		out += " · A artifacts"
 	}
 	return out
+}
+
+func resultKey(r *engine.Result) string { return r.Feature + "/" + r.File }
+
+// pickMark prefixes a result row picked for copying.
+func pickMark(picked bool) string {
+	if picked {
+		return sSel.Render("*")
+	}
+	return " "
+}
+
+func togglePick(picked map[string]bool, r *engine.Result) {
+	if picked[resultKey(r)] {
+		delete(picked, resultKey(r))
+	} else {
+		picked[resultKey(r)] = true
+	}
+}
+
+// copyResults copies "STATUS feature/file" for the picked results, or the one under the cursor.
+func copyResults(a *app, results []*engine.Result, picked map[string]bool, cur int) {
+	copyText(a, resultLines(results, picked, cur))
+}
+
+func resultLines(results []*engine.Result, picked map[string]bool, cur int) string {
+	var lines []string
+	for _, r := range results {
+		if picked[resultKey(r)] {
+			lines = append(lines, statusText(r.Passed(), r.Stage)+" "+resultKey(r))
+		}
+	}
+	if len(lines) == 0 && cur < len(results) {
+		r := results[cur]
+		lines = append(lines, statusText(r.Passed(), r.Stage)+" "+resultKey(r))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func copyText(a *app, s string) {
+	if s == "" {
+		return
+	}
+	if err := clipboard.WriteAll(s); err != nil {
+		a.log("error", "copy failed: %v", err)
+		return
+	}
+	a.log("info", "copied %s", strings.ReplaceAll(s, "\n", ", "))
 }

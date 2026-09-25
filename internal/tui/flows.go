@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/feernandooff/trun/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/fixtures"
 )
 
 // flowsModel: a tag menu beside a filterable, multi-select flow picker grouped by feature.
@@ -97,18 +97,19 @@ func (f *flowsModel) apply() {
 	}
 }
 
-// chosen: the explicit selection, or everything visible when nothing is selected.
-func (f *flowsModel) chosen() []*fixtures.Flow {
+// chosen: the selected flows; explicit unless they are exactly the visible (tag-filtered) set.
+func (f *flowsModel) chosen() ([]*fixtures.Flow, bool) {
 	var out []*fixtures.Flow
 	for _, fl := range f.a.flows {
 		if f.selected[fl.Path] {
 			out = append(out, fl)
 		}
 	}
-	if len(out) == 0 {
-		out = append(out, f.visible...)
+	explicit := len(out) != len(f.visible)
+	for _, fl := range f.visible {
+		explicit = explicit || !f.selected[fl.Path]
 	}
-	return out
+	return out, explicit
 }
 
 func (f *flowsModel) key(k tea.KeyMsg) tea.Cmd {
@@ -163,11 +164,14 @@ func (f *flowsModel) key(k tea.KeyMsg) tea.Cmd {
 	case "n":
 		f.selected = map[string]bool{}
 	case "enter":
-		flows := f.chosen()
+		f.focusList = true
+	case "c":
+		flows, explicit := f.chosen()
 		if len(flows) == 0 {
+			f.a.log("warn", "select flows first (space, or a for all)")
 			return nil
 		}
-		f.a.cfg.open(flows, f.tags[f.tagIdx], len(f.selected) > 0)
+		f.a.cfg.open(flows, f.tags[f.tagIdx], explicit)
 	}
 	return nil
 }
@@ -228,9 +232,9 @@ func (f *flowsModel) view(w, h int) (string, string) {
 		focusPanel(!f.focusList, "Tags", tb.String(), tagW, listH+2),
 		focusPanel(f.focusList, "Flows", b.String(), listW, listH+2))
 	body := lipgloss.JoinVertical(lipgloss.Left, " "+head, panes, " "+truncate(detail, w-2))
-	help := navHelp + " · f switch panel · space select · a all · n none · / filter · esc clear · enter configure run"
+	help := navHelp + " · f switch panel · space select · a all · n none · / filter · esc clear · c configure run"
 	if !f.focusList {
-		help = navHelp + " tag · f switch panel · a all · n none · / filter · esc clear · enter configure run"
+		help = navHelp + " tag · enter/f flows · a all · n none · / filter · esc clear · c configure run"
 	}
 	if f.filtering {
 		help = "type to filter · enter/esc done"

@@ -15,19 +15,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/platform"
-	"github.com/feernandooff/trun/internal/project"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/platform"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 func testProject(t *testing.T) *project.Project {
 	t.Helper()
-	t.Setenv("TRUN_STATE_DIR", t.TempDir())
+	t.Setenv("MOCKSTRO_STATE_DIR", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("MAESTRO_AGENT_AVDS", "")
 	t.Setenv("MAESTRO_DEVICE_CLASS", "")
-	t.Setenv("TRUN_MAESTRO_TESTS_DIR", t.TempDir())
 	root := t.TempDir()
 	return &project.Project{
 		Root: root, MaestroRoot: filepath.Join(root, ".maestro"), Env: map[string]string{},
@@ -547,42 +546,6 @@ func TestSessionFoldsItsWorkerDirs(t *testing.T) {
 	}
 }
 
-func TestDeleteRemovesLinkedMaestroOutput(t *testing.T) {
-	e, _ := testEngine(t, "agent", func(c execx.Cmd) (string, error) { return "", nil })
-	root := e.P.RunsRoot()
-	tests := os.Getenv("TRUN_MAESTRO_TESTS_DIR")
-	stamp := time.Now().Add(-time.Hour).UTC()
-	id := stamp.Format("20060102T150405Z") + "-42-abc123"
-	other := stamp.Format("20060102T150405Z") + "-43-def456"
-	run := filepath.Join(root, id)
-	os.MkdirAll(run, 0o755)
-	os.WriteFile(filepath.Join(run, "result.tsv"), []byte("meta|x|1\n"), 0o644)
-	os.Chtimes(run, stamp.Add(time.Minute), stamp.Add(time.Minute))
-	os.Chtimes(filepath.Join(run, "result.tsv"), stamp.Add(time.Minute), stamp.Add(time.Minute))
-	mk := func(name, log string) string {
-		d := filepath.Join(tests, name)
-		os.MkdirAll(d, 0o755)
-		os.WriteFile(filepath.Join(d, "maestro.log"), []byte(log), 0o644)
-		return d
-	}
-	local := stamp.Add(10 * time.Second).Local().Format("2006-01-02_150405")
-	ours := mk(local, "Running .maestro/.runtime/runs/"+id+"/maestro-flows/flows/a.yaml")
-	shared := mk(stamp.Add(20*time.Second).Local().Format("2006-01-02_150405"),
-		"runs/"+id+"/x runs/"+other+"/y")
-	unrelated := mk(stamp.Add(30*time.Second).Local().Format("2006-01-02_150405"), "runs/"+other+"/y")
-	if err := e.DeleteRunDir(context.Background(), run); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(ours); err == nil {
-		t.Fatal("run's own Maestro output survived")
-	}
-	for _, d := range []string{shared, unrelated} {
-		if _, err := os.Stat(d); err != nil {
-			t.Fatalf("deleted output another run still references: %s", d)
-		}
-	}
-}
-
 func TestKeyboardAndroid(t *testing.T) {
 	ids := map[string]string{
 		"com.google.android.inputmethod.latin": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME",
@@ -607,11 +570,11 @@ func TestKeyboardAndroid(t *testing.T) {
 			disabled[last] = true
 		case strings.Contains(a, "pm enable"):
 			disabled[last] = false
-		case strings.Contains(a, "settings get global trun_disabled_ime_packages"):
+		case strings.Contains(a, "settings get global mockstro_disabled_ime_packages"):
 			return setting, nil
-		case strings.Contains(a, "settings put global trun_disabled_ime_packages"):
+		case strings.Contains(a, "settings put global mockstro_disabled_ime_packages"):
 			setting = last
-		case strings.Contains(a, "settings delete global trun_disabled_ime_packages"):
+		case strings.Contains(a, "settings delete global mockstro_disabled_ime_packages"):
 			setting = "null"
 		}
 		return "", nil
@@ -722,5 +685,42 @@ func TestLongestFirst(t *testing.T) {
 	// b has no history: gets the median (30s), stays behind d via stable sort.
 	if order, known := longestFirst(flows, est); known != 3 || fmt.Sprint(order) != "[2 1 3 0]" {
 		t.Fatalf("got %v known %d", order, known)
+	}
+}
+
+func TestLiteIsMapRemoteOnInstalledApp(t *testing.T) {
+	o := DefaultOptions()
+	o.Lite, o.Platform = true, "ios"
+	if err := o.Validate("run"); err != nil {
+		t.Fatal(err)
+	}
+	if !o.MapRemote || !o.SkipBuild {
+		t.Fatalf("map remote %v skip build %v", o.MapRemote, o.SkipBuild)
+	}
+	o = DefaultOptions()
+	o.Lite, o.Parallel = true, "2"
+	if err := o.Validate("run"); err == nil || !strings.Contains(err.Error(), "full integration") {
+		t.Fatalf("parallel in lite: %v", err)
+	}
+	o = DefaultOptions()
+	o.Lite, o.Attach = true, true
+	if err := o.Validate("mock"); err == nil || !strings.Contains(err.Error(), "full integration") {
+		t.Fatalf("attach in lite: %v", err)
+	}
+}
+
+func TestLiteTakesAppIDFromFlows(t *testing.T) {
+	p := testProject(t)
+	p.AppID, p.Integration = "", "lite"
+	for i, id := range []string{"com.a", "com.b", "com.b"} {
+		path := filepath.Join(p.FlowsRoot(), "f", fmt.Sprintf("%d.yaml", i))
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		if err := os.WriteFile(path, []byte("appId: "+id+"\n---\n- back\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	New(p, DefaultOptions(), &execx.Fake{}, nil)
+	if p.AppID != "com.b" {
+		t.Fatalf("app id %q", p.AppID)
 	}
 }

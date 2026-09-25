@@ -13,11 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/feernandooff/trun/internal/lock"
-	"github.com/feernandooff/trun/internal/registry"
+	"github.com/feernandooff/mockstro/internal/lock"
+	"github.com/feernandooff/mockstro/internal/paths"
+	"github.com/feernandooff/mockstro/internal/registry"
 )
 
-// DefaultKeepRuns is how many finished run dirs a project keeps (TRUN_KEEP_RUNS overrides).
+// DefaultKeepRuns is how many finished run dirs a project keeps (MOCKSTRO_KEEP_RUNS overrides).
 const DefaultKeepRuns = 20
 
 type RunDir struct {
@@ -31,7 +32,7 @@ type RunDir struct {
 }
 
 func KeepRuns() int {
-	if n, err := strconv.Atoi(os.Getenv("TRUN_KEEP_RUNS")); err == nil && n >= 0 {
+	if n, err := strconv.Atoi(os.Getenv("MOCKSTRO_KEEP_RUNS")); err == nil && n >= 0 {
 		return n
 	}
 	return DefaultKeepRuns
@@ -69,7 +70,7 @@ func HumanSize(n int64) string {
 // RunDirs lists this project's run dirs, newest first. withSize walks each dir.
 func (e *Engine) RunDirs(ctx context.Context, withSize bool) []RunDir {
 	active := map[string]bool{}
-	for _, r := range registry.Active(ctx, e.Exec, e.LockRoots(), e.RegistryRoots()) {
+	for _, r := range registry.Active(ctx, e.Exec, paths.LocksRoot(), paths.RegistryRoot()) {
 		if r.RunDir != "" {
 			active[filepath.Clean(r.RunDir)] = true
 		}
@@ -168,7 +169,7 @@ func (e *Engine) DeleteRunDir(ctx context.Context, path string) error {
 }
 
 // Prune keeps the newest `keep` finished run dirs and strips APK snapshots from the rest of
-// the finished ones (older runs, including test.sh's, kept a full copy each).
+// the finished ones.
 func (e *Engine) Prune(ctx context.Context, keep int) (removed int, freed int64) {
 	kept := 0
 	for _, rd := range e.RunDirs(ctx, false) {

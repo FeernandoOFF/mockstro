@@ -10,8 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/ojson"
 )
 
 // stubsModel shows a stub's own JSON (default) or the merged result of its extends chain, and
@@ -248,6 +248,12 @@ func (s *stubsModel) key(k tea.KeyMsg) tea.Cmd {
 		}
 	case "f":
 		s.focus = (s.focus + 1) % 3
+	case "enter":
+		s.focus = min(s.focus+1, 2)
+	case "y":
+		if s.cursor < len(s.visible) {
+			copyText(s.a, s.visible[s.cursor])
+		}
 	}
 	return nil
 }
@@ -302,7 +308,7 @@ func (s *stubsModel) view(w, h int) (string, string) {
 	if len(s.chain) > 1 {
 		chain = " · e/E walk extends chain"
 	}
-	help := navHelp + " · f switch panel · m own/merged" + chain + " · / filter · esc clear"
+	help := navHelp + " · f switch panel · enter focus right · m own/merged" + chain + " · / filter · esc clear"
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		focusPanel(s.focus == 0, "Stubs", lb.String(), listW, h),
 		focusPanel(s.focus == 1, s.stubTitle, stubBody, stubW, h),

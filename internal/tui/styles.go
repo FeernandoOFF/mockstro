@@ -69,14 +69,24 @@ func truncate(s string, w int) string {
 	return ansi.Truncate(s, w, "…")
 }
 func statusStyle(pass bool, stage string) string {
-	if pass {
-		return sOK.Render("PASS")
+	switch t := statusText(pass, stage); t {
+	case "PASS":
+		return sOK.Render(t)
+	case "FAIL":
+		return sBad.Render(t)
+	default:
+		return sWarn.Render(t)
 	}
-	switch stage {
-	case "UNSTARTED", "INTERRUPTED", "CANCELLED":
-		return sWarn.Render(stage)
+}
+
+func statusText(pass bool, stage string) string {
+	switch {
+	case pass:
+		return "PASS"
+	case stage == "UNSTARTED", stage == "INTERRUPTED", stage == "CANCELLED":
+		return stage
 	}
-	return sBad.Render("FAIL")
+	return "FAIL"
 }
 
 // window returns the [start,end) slice of n items keeping cursor visible in height rows.

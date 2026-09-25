@@ -15,17 +15,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fsx"
-	"github.com/feernandooff/trun/internal/ojson"
-	"github.com/feernandooff/trun/internal/project"
-	"github.com/feernandooff/trun/internal/registry"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fsx"
+	"github.com/feernandooff/mockstro/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/registry"
 )
 
 type Android struct {
 	P    *project.Project
 	Exec execx.Runner
-	// Cores / MemoryMB override the AVD's hw.cpu.ncore / hw.ramSize for emulators trun boots.
+	// Cores / MemoryMB override the AVD's hw.cpu.ncore / hw.ramSize for emulators mockstro boots.
 	Cores, MemoryMB int
 	// GPU is passed as -gpu (e.g. "host"). Headless defaults to SwiftShader, which renders on
 	// the CPU; "host" keeps rendering on the Mac's GPU.
@@ -52,9 +52,10 @@ func (a *Android) Devices(ctx context.Context) ([]Device, error) {
 	}
 	var devs []Device
 	for _, line := range strings.Split(out, "\n") {
-		f := strings.Fields(line)
-		if len(f) >= 2 && f[1] == "device" {
-			devs = append(devs, Device{Serial: f[0], Class: a.Class(f[0]), State: "device"})
+		// Tab-separated: wireless-debugging serials contain spaces ("adb-X (2)._adb-tls-connect._tcp").
+		serial, state, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if ok && strings.TrimSpace(state) == "device" {
+			devs = append(devs, Device{Serial: serial, Class: a.Class(serial), State: "device"})
 		}
 	}
 	return devs, nil
@@ -67,7 +68,7 @@ func (a *Android) Class(serial string) string {
 	return "physical"
 }
 
-// DeviceName is the AVD name behind an emulator serial.
+// DeviceName is the AVD name behind an emulator serial, or a phone's model.
 func (a *Android) DeviceName(ctx context.Context, serial string) string {
 	a.mu.Lock()
 	if n, ok := a.names[serial]; ok {
@@ -75,11 +76,12 @@ func (a *Android) DeviceName(ctx context.Context, serial string) string {
 		return n
 	}
 	a.mu.Unlock()
+	prop := "ro.boot.qemu.avd_name"
 	if a.Class(serial) != "emulator" {
-		return ""
+		prop = "ro.product.model"
 	}
-	name, _ := a.adb(ctx, serial, "shell", "getprop", "ro.boot.qemu.avd_name")
-	if name == "" {
+	name, _ := a.adb(ctx, serial, "shell", "getprop", prop)
+	if name == "" && a.Class(serial) == "emulator" {
 		out, _ := a.adb(ctx, serial, "emu", "avd", "name")
 		for _, l := range strings.Split(out, "\n") {
 			if l = strings.TrimSpace(l); l != "" && l != "OK" {
@@ -96,10 +98,9 @@ func (a *Android) DeviceName(ctx context.Context, serial string) string {
 	return name
 }
 
-// Designated: .maestro/agent-avds.txt, MAESTRO_AGENT_AVDS, and the global designated list.
+// Designated: MAESTRO_AGENT_AVDS (project.env or environment) and the global designated list.
 func (a *Android) Designated() []string {
 	var names []string
-	names = append(names, readNameList(a.P.AgentAVDsFile())...)
 	names = append(names, splitNames(a.P.Env["MAESTRO_AGENT_AVDS"])...)
 	names = append(names, globalDesignated()...)
 	return uniq(names)
@@ -277,7 +278,7 @@ func (a *Android) Install(ctx context.Context, serial, path string) error {
 	return nil
 }
 
-// AfterInstall grants WRITE_SECURE_SETTINGS so E2eConfig can publish its acceptance signal;
+// AfterInstall grants WRITE_SECURE_SETTINGS so the app can publish its acceptance signal;
 // a development permission does not survive a reinstall.
 func (a *Android) AfterInstall(ctx context.Context, serial string, overrideActive bool) error {
 	if !overrideActive {
@@ -298,7 +299,7 @@ var (
 func (a *Android) InstalledProvenance(ctx context.Context, serial string) (*registry.APK, error) {
 	dump, _ := a.adb(ctx, serial, "shell", "dumpsys", "package", a.P.AppID)
 	if strings.TrimSpace(dump) == "" || !strings.Contains(dump, "versionCode=") {
-		return nil, fmt.Errorf("%s is not installed on %s; drop --skip-build", a.P.AppID, serial)
+		return nil, notInstalled(a.P, serial)
 	}
 	apk := &registry.APK{Source: "preinstalled"}
 	if m := reVersionName.FindStringSubmatch(dump); m != nil {
@@ -353,11 +354,11 @@ func (a *Android) AssertNoProxy(ctx context.Context, serial string) error {
 	}
 	return fmt.Errorf(`%s has a device-wide proxy set: %s
   Traffic would go there instead of this run's mock, and flows would fail in the UI with no
-  visible cause. Clear it with `+"`trun proxy --clear --device %s`"+`, re-run with --clear-proxy,
+  visible cause. Clear it with `+"`mockstro proxy --clear --device %s`"+`, re-run with --clear-proxy,
   or press p on the device in the TUI dashboard`, serial, proxy, serial)
 }
 
-// Payload is the JSON E2eConfig accepts: schema 1, this app id, unexpired, loopback /api.
+// Payload is the JSON the app accepts: schema 1, this app id, unexpired, loopback /api.
 func (a *Android) Payload(o Override) ([]byte, error) {
 	return ojson.Marshal(struct {
 		Schema        string            `json:"schema"`
@@ -369,7 +370,7 @@ func (a *Android) Payload(o Override) ([]byte, error) {
 	}{"1", a.P.AppID, o.RunID, strconv.FormatInt(o.ExpiresAt, 10), o.APIURL(), nonNil(o.FBRC)})
 }
 
-// nonNil: E2eConfig expects remoteConfig to be an object, never null.
+// nonNil: the app expects remoteConfig to be an object, never null.
 func nonNil(m map[string]string) map[string]string {
 	if m == nil {
 		return map[string]string{}
@@ -472,7 +473,7 @@ func (a *Android) IsEmulator(ctx context.Context, serial string) bool {
 // disabled packages are recorded on the device so "shown" can re-enable exactly those.
 const (
 	maestroPkg      = "dev.mobile.maestro"
-	disabledIMEsKey = "trun_disabled_ime_packages"
+	disabledIMEsKey = "mockstro_disabled_ime_packages"
 )
 
 // imePackages lists packages providing an input method (all=false: only enabled ones).

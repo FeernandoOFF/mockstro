@@ -12,9 +12,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
 )
 
 type runDoneMsg struct{ s *engine.Summary }
@@ -65,6 +65,7 @@ type runModel struct {
 	confirm   bool
 	resCursor int
 	focusLog  bool // arrows scroll the output instead of picking results
+	picked    map[string]bool
 }
 
 func (r *runModel) running() bool { return r.done != nil && r.summary == nil }
@@ -83,7 +84,7 @@ func (r *runModel) worker(id int) *workerState {
 
 func (r *runModel) start(o engine.Options, total int) tea.Cmd {
 	a := r.a
-	*r = runModel{a: a, opts: o, total: total, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[*engine.Result]outputMark{}}
+	*r = runModel{a: a, opts: o, total: total, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[*engine.Result]outputMark{}, picked: map[string]bool{}}
 	r.worker(0)
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
@@ -240,7 +241,20 @@ func (r *runModel) key(k tea.KeyMsg) tea.Cmd {
 	case "f":
 		r.focusLog = !r.focusLog
 	case "enter":
-		r.jumpToResult()
+		if !r.focusLog {
+			r.jumpToResult()
+			r.focusLog = true
+		}
+	case " ":
+		if !r.focusLog && r.resCursor < len(r.results) {
+			if r.picked == nil {
+				r.picked = map[string]bool{}
+			}
+			togglePick(r.picked, r.results[r.resCursor])
+			r.resCursor = min(r.resCursor+1, len(r.results)-1)
+		}
+	case "y":
+		copyResults(r.a, r.results, r.picked, r.resCursor)
 	case "s":
 		if r.resCursor < len(r.results) {
 			openShot(r.a, r.results[r.resCursor])
@@ -383,7 +397,7 @@ func (r *runModel) view(w, h int) (string, string) {
 				name = sSel.Render(name)
 			}
 		}
-		rows = append(rows, fmt.Sprintf("%s%s %s%s", cur, statusStyle(res.Passed(), res.Stage), name, shotBadge(res)))
+		rows = append(rows, fmt.Sprintf("%s%s%s %s%s", cur, pickMark(r.picked[resultKey(res)]), statusStyle(res.Passed(), res.Stage), name, shotBadge(res)))
 		if !res.Passed() && res.Stage != "TEST" && res.Stage != "UNSTARTED" {
 			rows = append(rows, "     "+sMuted.Render(res.Stage))
 		}
@@ -440,9 +454,9 @@ func (r *runModel) view(w, h int) (string, string) {
 	if r.resCursor < len(r.results) {
 		sel = r.results[r.resCursor]
 	}
-	help := arrows + " · f toggle results/output · enter jump · ←→ worker · x cancel" + artifactKeys(sel) + " · o open dir"
+	help := arrows + " · f toggle results/output · enter output · ←→ worker · x cancel" + artifactKeys(sel) + " · o open dir"
 	if r.summary != nil {
-		help = arrows + " · f toggle results/output · enter jump · ←→ worker · F re-run failed" + artifactKeys(sel) + " · o open dir"
+		help = arrows + " · f toggle results/output · enter output · ←→ worker · F re-run failed" + artifactKeys(sel) + " · o open dir"
 	}
 	if r.confirm {
 		help = sWarn.Render("Cancel the run? Devices and locks are cleaned up. " + confirmHint)

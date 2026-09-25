@@ -1,5 +1,5 @@
 // Package ojson is JSON with insertion-ordered objects, so resolved stubs print in the same
-// key order their authors wrote them (jq's behaviour, which test.sh relied on).
+// key order their authors wrote them.
 package ojson
 
 import (

@@ -1,6 +1,5 @@
 // Package registry records active runs so `status` can show them from any project. Each run
-// writes run.json into its own run dir and a copy into every registry root (the global one and,
-// for test.sh compatibility, the repository's legacy one).
+// writes run.json into its own run dir and a copy into the machine-wide registry root.
 package registry
 
 import (
@@ -11,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fsx"
-	"github.com/feernandooff/trun/internal/lock"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fsx"
+	"github.com/feernandooff/mockstro/internal/lock"
 )
 
 type APK struct {
@@ -51,10 +50,10 @@ type Run struct {
 }
 
 type Registry struct {
-	Roots []string
+	Root string
 }
 
-// Save writes run.json and publishes it to every registry root.
+// Save writes run.json and publishes it to the registry root.
 func (r *Registry) Save(run *Run) error {
 	local := *run
 	local.Worktree = ""
@@ -63,16 +62,12 @@ func (r *Registry) Save(run *Run) error {
 		return err
 	}
 	pub, _ := json.Marshal(run)
-	for _, root := range r.Roots {
-		_ = fsx.WriteAtomic(filepath.Join(root, run.RunID+".json"), pub)
-	}
+	_ = fsx.WriteAtomic(filepath.Join(r.Root, run.RunID+".json"), pub)
 	return nil
 }
 
 func (r *Registry) Remove(runID string) {
-	for _, root := range r.Roots {
-		os.Remove(filepath.Join(root, runID+".json"))
-	}
+	os.Remove(filepath.Join(r.Root, runID+".json"))
 }
 
 // Stage records what a run is doing, read by status.
@@ -91,19 +86,14 @@ func readTrim(path string) string {
 }
 
 // Active is recomputed from live port locks every time.
-func Active(ctx context.Context, ex execx.Runner, lockRoots, registryRoots []string) []Run {
+func Active(ctx context.Context, ex execx.Runner, lockRoot, registryRoot string) []Run {
 	var runs []Run
-	for _, o := range lock.PortLocks(ctx, ex, lockRoots) {
+	for _, o := range lock.PortLocks(ctx, ex, lockRoot) {
 		var run *Run
-		for _, root := range registryRoots {
-			b, err := os.ReadFile(filepath.Join(root, o.RunID+".json"))
-			if err != nil {
-				continue
-			}
+		if b, err := os.ReadFile(filepath.Join(registryRoot, o.RunID+".json")); err == nil {
 			var rr Run
 			if json.Unmarshal(b, &rr) == nil {
 				run = &rr
-				break
 			}
 		}
 		if run == nil {

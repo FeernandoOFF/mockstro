@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/platform"
-	"github.com/feernandooff/trun/internal/project"
-	"github.com/feernandooff/trun/internal/wiremock"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/platform"
+	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
 // BuildMappings layers overrides (priority 1), the profile (3) and shared defaults (5).
@@ -102,7 +102,11 @@ func (e *Engine) ManualProxyInstructions(port int, device string) string {
 	if e.Opts.MapRemote {
 		s = fmt.Sprintf("\nManual interception (--map-remote on %s). Map Remote in Proxyman/Charles:\n", device)
 	}
-	for _, u := range []string{e.P.ProxyBaseURL, e.P.FBRCURL} {
+	api := e.P.ProxyBaseURL
+	if api == "" {
+		api = "<your API base URL>"
+	}
+	for _, u := range []string{api, e.P.FBRCURL} {
 		s += fmt.Sprintf("  Match:  %s/*\n  Map To: protocol=http, host=127.0.0.1, port=%d\n", u, port)
 	}
 	s += "  Leave Path and Query empty; disable Preserve Host Header.\n"

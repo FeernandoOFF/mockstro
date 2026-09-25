@@ -4,9 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/feernandooff/trun/internal/lock"
-	"github.com/feernandooff/trun/internal/platform"
-	"github.com/feernandooff/trun/internal/registry"
+	"github.com/feernandooff/mockstro/internal/lock"
+	"github.com/feernandooff/mockstro/internal/paths"
+	"github.com/feernandooff/mockstro/internal/platform"
+	"github.com/feernandooff/mockstro/internal/registry"
 )
 
 type StatusDevice struct {
@@ -24,7 +25,7 @@ type Available struct {
 	Eligible []string `json:"eligible"`
 }
 
-// Status is test.sh's `status --json` payload, extended with a few fields.
+// Status is the `status --json` payload.
 type Status struct {
 	SchemaVersion int            `json:"schemaVersion"`
 	GeneratedAt   string         `json:"generatedAt"`
@@ -39,7 +40,7 @@ type Status struct {
 }
 
 func (e *Engine) Status(ctx context.Context) *Status {
-	runs := registry.Active(ctx, e.Exec, e.LockRoots(), e.RegistryRoots())
+	runs := registry.Active(ctx, e.Exec, paths.LocksRoot(), paths.RegistryRoot())
 	if runs == nil {
 		runs = []registry.Run{}
 	}
@@ -94,5 +95,5 @@ func (e *Engine) Status(ctx context.Context) *Status {
 }
 
 func (e *Engine) Sweep(ctx context.Context, dryRun bool) []lock.SweepAction {
-	return lock.Sweep(ctx, e.Exec, e.LockRoots(), dryRun)
+	return lock.Sweep(ctx, e.Exec, paths.LocksRoot(), dryRun)
 }

@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/fsx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/fsx"
 )
 
 // Run executes the selected flows, single-device or parallel, and always returns a summary
@@ -21,7 +21,7 @@ import (
 func (e *Engine) Run(ctx context.Context) *Summary {
 	start := time.Now()
 	if removed, freed := e.Prune(ctx, KeepRuns()); removed > 0 || freed > 0 {
-		e.Logf("Pruned %d old run dir(s), freed %s (keeping %d; TRUN_KEEP_RUNS to change).", removed, HumanSize(freed), KeepRuns())
+		e.Logf("Pruned %d old run dir(s), freed %s (keeping %d; MOCKSTRO_KEEP_RUNS to change).", removed, HumanSize(freed), KeepRuns())
 	}
 	flows, err := e.DiscoverFlows()
 	if err != nil {
@@ -231,7 +231,7 @@ func (e *Engine) worker(ctx context.Context, w int, q *queue, sessionDir string)
 	return nil
 }
 
-// persist writes result.tsv (test.sh format), last-run and junit.xml.
+// persist writes result.tsv, last-run and junit.xml.
 func (e *Engine) persist(s *Summary, dir string) {
 	if dir == "" {
 		return
@@ -331,7 +331,7 @@ func JUnit(s *Summary, root string) []byte {
 	return append([]byte(xml.Header), append(b, '\n')...)
 }
 
-// LoadResults reads a result.tsv (test.sh or trun).
+// LoadResults reads a result.tsv.
 func LoadResults(path string) (time.Time, time.Duration, []*Result, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -366,8 +366,7 @@ func RunError(dir string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// FlowArtifacts is what a run recorded about one flow beyond result.tsv (which keeps test.sh's
-// exact format).
+// FlowArtifacts is what a run recorded about one flow beyond result.tsv.
 type FlowArtifacts struct {
 	Feature   string   `json:"feature"`
 	File      string   `json:"file"`

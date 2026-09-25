@@ -10,9 +10,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/execx"
-	"github.com/feernandooff/trun/internal/wiremock"
+	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
 type (
@@ -190,7 +190,7 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 		m.filter.SetValue("")
 		m.apply()
 	case "a":
-		if m.session == nil {
+		if m.session == nil && !m.a.p.Lite() {
 			m.attachIdx = (m.attachIdx + 1) % len(m.devices())
 		}
 	case "m":
@@ -198,6 +198,18 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 		m.jScroll = 0
 	case "f":
 		m.focusLog = !m.focusLog
+	case "y":
+		if m.cursor < len(m.visible) {
+			row := m.visible[m.cursor]
+			switch {
+			case row.target == nil:
+				copyText(m.a, row.label)
+			case row.target.rel != "":
+				copyText(m.a, row.target.rel)
+			default:
+				copyText(m.a, row.target.name)
+			}
+		}
 	case "x":
 		if m.session != nil && !m.busy {
 			sess := m.session
@@ -307,13 +319,21 @@ func (m *mockModel) view(w, h int) (string, string) {
 	case m.starting:
 		jb.WriteString(sWarn.Render("starting WireMock on :18080…") + "\n")
 	case m.session == nil:
-		fmt.Fprintf(&jb, "Target device: %s %s\n\n", sSel.Render(mode), sMuted.Render("(a to change)"))
+		if m.a.p.Lite() {
+			fmt.Fprintf(&jb, "Target device: %s %s\n\n", sSel.Render("server-only"), sMuted.Render("(attach needs full integration)"))
+		} else {
+			fmt.Fprintf(&jb, "Target device: %s %s\n\n", sSel.Render(mode), sMuted.Render("(a to change)"))
+		}
 		if m.cursor < len(m.visible) {
 			if t := m.visible[m.cursor].target; t != nil {
 				fmt.Fprintf(&jb, "%s %s\n%s\n\n", sMuted.Render(t.kind), sBold.Render(t.label), sMuted.Render(t.name))
 			}
 		}
-		jb.WriteString(sMuted.Render("server-only: point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nattach: installs the build on the device and writes the runtime override.\n\nenter on a target to start serving it."))
+		hint := "server-only: point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nattach: installs the build on the device and writes the runtime override.\n\nenter on a target to start serving it."
+		if m.a.p.Lite() {
+			hint = "point Proxyman/Charles Map Remote at 127.0.0.1:18080.\n\nenter on a target to start serving it."
+		}
+		jb.WriteString(sMuted.Render(hint))
 	default:
 		t := m.session.Target
 		unmatched := 0
@@ -347,7 +367,11 @@ func (m *mockModel) view(w, h int) (string, string) {
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
 		focusPanel(!m.focusLog, "Scenarios · profiles · flows", lb.String(), listW, h),
 		focusPanel(m.focusLog, "Request journal", jb.String(), w-listW, h))
-	help := navHelp + " · →← open/close folder · f switch panel · enter serve/switch · a attach device · m unmatched only · x stop · / filter · esc clear"
+	attach := " · a attach device"
+	if m.a.p.Lite() {
+		attach = ""
+	}
+	help := navHelp + " · f switch panel · enter serve/switch" + attach + " · m unmatched only · x stop · / filter · esc clear"
 	if m.filtering {
 		help = "type to filter · enter/esc done"
 	}

@@ -13,8 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/fixtures"
 )
 
 type histRun struct {
@@ -30,7 +30,7 @@ type histRun struct {
 	failed  int
 }
 
-// historyModel lists past runs from .maestro/.runtime/runs (test.sh's and trun's).
+// historyModel lists past runs from .maestro/.runtime/runs.
 type historyModel struct {
 	a       *app
 	runs    []*histRun
@@ -45,6 +45,7 @@ type historyModel struct {
 	linkedN int    // files outside the run dir the pending delete will also remove
 	linkedB int64
 	total   int64
+	picked  map[string]bool
 }
 
 func (hm *historyModel) load() {
@@ -76,7 +77,6 @@ func (hm *historyModel) load() {
 				hr.failed++
 			}
 		}
-		attachLegacyArtifacts(rd.Path, hr.results, hm.a.flows)
 		runs = append(runs, hr)
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].at.After(runs[j].at) })
@@ -112,7 +112,7 @@ func (hm *historyModel) loadPreview() {
 	}
 	path := hm.logFor(run, run.results[hm.resCur])
 	if path == "" {
-		hm.preview = []string{sMuted.Render("no log for this flow (test.sh runs do not keep per-flow logs)")}
+		hm.preview = []string{sMuted.Render("no log for this flow")}
 		return
 	}
 	b, err := os.ReadFile(path)
@@ -186,6 +186,22 @@ func (hm *historyModel) key(k tea.KeyMsg) tea.Cmd {
 	case "esc", "left":
 		if hm.focus > 0 {
 			hm.focus--
+			if hm.focus == 0 {
+				hm.picked = nil
+			}
+		}
+	case " ":
+		if run != nil && hm.focus >= 1 && hm.resCur < len(run.results) {
+			if hm.picked == nil {
+				hm.picked = map[string]bool{}
+			}
+			togglePick(hm.picked, run.results[hm.resCur])
+			hm.resCur = min(hm.resCur+1, len(run.results)-1)
+			hm.loadPreview()
+		}
+	case "y":
+		if run != nil && hm.focus >= 1 {
+			copyResults(hm.a, run.results, hm.picked, hm.resCur)
 		}
 	case "s", "A":
 		if run != nil && hm.focus >= 1 && hm.resCur < len(run.results) {
@@ -279,7 +295,7 @@ func (hm *historyModel) view(w, h int) (string, string) {
 				cur = sSel.Render("› ")
 				focusLine = len(rows)
 			}
-			rows = append(rows, fmt.Sprintf("%s%s %s %s%s", cur, statusStyle(r.Passed(), r.Stage), truncate(r.Feature+"/"+r.File, 34), sMuted.Render(fmt.Sprintf("%ds", int(r.Duration.Seconds()))), shotBadge(r)))
+			rows = append(rows, fmt.Sprintf("%s%s%s %s %s%s", cur, pickMark(hm.picked[resultKey(r)]), statusStyle(r.Passed(), r.Stage), truncate(r.Feature+"/"+r.File, 34), sMuted.Render(fmt.Sprintf("%ds", int(r.Duration.Seconds()))), shotBadge(r)))
 			if !r.Passed() {
 				rows = append(rows, "     "+sMuted.Render(r.Stage))
 			}
@@ -307,7 +323,7 @@ func (hm *historyModel) view(w, h int) (string, string) {
 	if run != nil && hm.focus >= 1 && hm.resCur < len(run.results) {
 		keys = artifactKeys(run.results[hm.resCur])
 	}
-	help := fmt.Sprintf(navHelp+" · enter/→ drill in · esc/← back · x delete · X delete all · P prune (keep %d)%s · F re-run failed · o open dir", engine.KeepRuns(), keys)
+	help := fmt.Sprintf(navHelp+" · x delete · X delete all · P prune (keep %d)%s · F re-run failed · o open dir", engine.KeepRuns(), keys)
 	switch hm.confirm {
 	case "delete":
 		if run != nil {
@@ -316,7 +332,7 @@ func (hm *historyModel) view(w, h int) (string, string) {
 				extra += fmt.Sprintf(" with its %d worker run(s)", len(run.rd.Workers))
 			}
 			if hm.linkedN > 0 {
-				extra += fmt.Sprintf(" + %d Maestro output/recording item(s) outside the project (%s)", hm.linkedN, engine.HumanSize(hm.linkedB))
+				extra += fmt.Sprintf(" + %d recording(s) outside the project (%s)", hm.linkedN, engine.HumanSize(hm.linkedB))
 			}
 			help = sWarn.Render(fmt.Sprintf("Delete %s (%s)%s? "+confirmHint, filepath.Base(run.dir), engine.HumanSize(run.size), extra))
 		}

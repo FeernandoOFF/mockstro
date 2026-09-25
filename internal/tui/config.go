@@ -10,14 +10,15 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/fixtures"
 )
 
 type cfgField struct {
 	group   string
 	label   string
 	options []string
+	vals    []string // what each option means when it differs from its label
 	idx     int
 	text    bool // free-text field
 }
@@ -25,6 +26,9 @@ type cfgField struct {
 func (f *cfgField) value() string {
 	if f.text || len(f.options) == 0 {
 		return ""
+	}
+	if f.idx < len(f.vals) && f.vals[f.idx] != "" {
+		return f.vals[f.idx]
 	}
 	return f.options[f.idx]
 }
@@ -42,6 +46,7 @@ type configModel struct {
 	fbrc     textinput.Model
 	err      string
 	note     string
+	real     map[string]bool // device serials that are phones, not emulators
 }
 
 const (
@@ -70,16 +75,39 @@ func newConfigModel(a *app) *configModel {
 func (c *configModel) open(flows []*fixtures.Flow, tag string, explicit bool) {
 	c.active, c.flows, c.byTag, c.explicit, c.err, c.note = true, flows, tag, explicit || c.a.flowTab.filter.Value() != "", "", ""
 	devices := []string{"auto"}
+	var serials []string
+	c.real = map[string]bool{}
 	if st := c.a.status; st != nil {
-		devices = append(devices, st.Available.Eligible...)
+		for _, d := range st.Available.Eligible {
+			if !slices.Contains(st.Available.Physical, d) {
+				devices = append(devices, d)
+			}
+		}
+		// A real device only runs with map remote: the user's own proxy does the mocking.
+		for _, d := range st.Devices {
+			if d.Class == "physical" && d.LockedBy == nil && c.a.opts.Platform != "ios" {
+				label := d.Serial
+				if d.Name != "" {
+					label = d.Name + " · " + d.Serial
+				}
+				for len(serials) < len(devices) {
+					serials = append(serials, "")
+				}
+				devices = append(devices, label+"  (real device · map remote)")
+				serials = append(serials, d.Serial)
+				c.real[d.Serial] = true
+			}
+		}
 	}
 	profiles := append([]string{"flow default"}, c.a.profiles...)
 	prev := map[int]string{}
 	for i, f := range c.fields {
-		prev[i] = f.value()
+		if f.idx < len(f.options) {
+			prev[i] = f.options[f.idx]
+		}
 	}
 	c.fields = []*cfgField{
-		{group: "Run", label: "Device", options: devices},
+		{group: "Run", label: "Device", options: devices, vals: serials},
 		{group: "Run", label: "Parallel", options: []string{"off", "auto", "2", "3", "4"}},
 		{group: "Run", label: "Build", options: []string{"build & install", "skip build (use installed app)"}},
 		{group: "Run", label: "Profile", options: profiles},
@@ -117,23 +145,24 @@ func (c *configModel) options() (engine.Options, error) {
 			o.FlowArgs = append(o.FlowArgs, c.a.p.Rel(f.Path))
 		}
 	}
+	real := c.realDevice()
 	if d := c.fields[fDevice].value(); d != "auto" {
 		o.DeviceArg = d
 	}
-	if p := c.fields[fParallel].value(); p != "off" {
+	o.MapRemote = real || c.fields[fIntercept].idx == 1 || o.Lite
+	if p := c.fields[fParallel].value(); p != "off" && !o.MapRemote {
 		o.Parallel = p
 		o.DeviceArg = ""
 	}
-	o.SkipBuild = c.fields[fBuild].idx == 1
-	o.BootRequest = c.fields[fBoot].idx == 0
+	o.SkipBuild = c.fields[fBuild].idx == 1 || o.Lite
+	o.BootRequest = c.fields[fBoot].idx == 0 && !real
 	if p := c.fields[fProfile].value(); p != "flow default" {
 		o.ProfileArg = p
 	}
 	o.FailFast = c.fields[fFailFast].idx == 1
 	o.Record = c.fields[fRecord].idx == 1
-	o.MapRemote = c.fields[fIntercept].idx == 1
 	o.ClearProxy = c.fields[fProxy].idx == 0 && !o.MapRemote
-	o.Headless = c.fields[fWindow].idx == 1
+	o.Headless = c.fields[fWindow].idx == 1 && !real
 	if kb := c.fields[fKeyboard].value(); kb != "leave as is" {
 		o.Keyboard = kb
 	}
@@ -151,14 +180,14 @@ func (c *configModel) options() (engine.Options, error) {
 	return o, o.Validate("run")
 }
 
-// commandLine renders the equivalent `trun run` invocation.
+// commandLine renders the equivalent `mockstro run` invocation.
 func commandLine(o engine.Options) string {
-	parts := []string{"trun run"}
+	parts := []string{"mockstro run"}
 	if len(o.FlowArgs) == 0 {
 		parts = append(parts, "--tags "+strings.Join(o.Tags, ","))
 	}
 	if o.DeviceArg != "" {
-		parts = append(parts, "--device "+o.DeviceArg)
+		parts = append(parts, "--device "+shellQuote(o.DeviceArg))
 	}
 	if o.Parallel != "" {
 		parts = append(parts, "--parallel "+o.Parallel)
@@ -267,24 +296,50 @@ func (c *configModel) key(k tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// disabled: Device proxy does not apply with map remote; the user's own proxy is the point.
-func (c *configModel) disabled(i int) bool {
-	return i == fProxy && c.fields[fIntercept].idx == 1
+func (c *configModel) realDevice() bool { return c.real[c.fields[fDevice].value()] }
+
+// disabledReason is why field i does not apply to the current choices ("" = it does).
+func (c *configModel) disabledReason(i int) string {
+	real, lite := c.realDevice(), c.a.p.Lite()
+	mapRemote := real || lite || c.fields[fIntercept].idx == 1
+	switch {
+	case lite && i == fBuild:
+		return "installed app (lite: mockstro does not build)"
+	case lite && i == fParallel:
+		return "n/a in lite (needs full integration)"
+	case lite && i == fIntercept:
+		return "map remote (lite: your Proxyman/Charles)"
+	case real && (i == fBoot || i == fWindow):
+		return "n/a on a real device"
+	case real && i == fIntercept:
+		return "map remote (required on a real device)"
+	case mapRemote && i == fParallel:
+		return "n/a with map remote (one device)"
+	case mapRemote && i == fProxy:
+		return "n/a with map remote (your proxy stays)"
+	}
+	return ""
 }
 
-// skipDisabled steps off a disabled field in the direction of travel, or back if at the end.
+func (c *configModel) disabled(i int) bool { return c.disabledReason(i) != "" }
+
+// skipDisabled steps past disabled fields in the direction of travel, or back if at the end.
 func (c *configModel) skipDisabled(cur, dir int) int {
-	if !c.disabled(cur) {
-		return cur
-	}
 	step := 1
 	if dir < 0 {
 		step = -1
 	}
-	if n := cur + step; n >= 0 && n < len(c.fields) {
-		return n
+	for n := cur; n >= 0 && n < len(c.fields); n += step {
+		if !c.disabled(n) {
+			return n
+		}
 	}
-	return cur - step
+	for n := cur; n >= 0 && n < len(c.fields); n -= step {
+		if !c.disabled(n) {
+			return n
+		}
+	}
+	return cur
 }
 
 func (c *configModel) view(w, h int) (string, string) {
@@ -317,7 +372,7 @@ func (c *configModel) view(w, h int) (string, string) {
 			}
 		} else if c.disabled(i) {
 			label = sMuted.Render(label)
-			val = sMuted.Render("n/a with map remote (your proxy stays)")
+			val = sMuted.Render(c.disabledReason(i))
 		} else {
 			val = "‹ " + f.value() + " ›"
 			if i != c.cursor {
@@ -348,4 +403,12 @@ func (c *configModel) view(w, h int) (string, string) {
 		help = "type key=value pairs separated by commas · enter done"
 	}
 	return panel("Configure run", b.String(), w, h), help
+}
+
+// shellQuote single-quotes s when a shell would split or expand it (wireless adb serials).
+func shellQuote(s string) string {
+	if strings.ContainsAny(s, " ()'\"$`\\&;|<>*?") {
+		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	}
+	return s
 }

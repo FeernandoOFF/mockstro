@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/feernandooff/trun/internal/engine"
-	"github.com/feernandooff/trun/internal/project"
+	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 // Printer renders engine events as plain text for terminals, agents and logs.
@@ -97,7 +97,7 @@ func PrintFailedReruns(w io.Writer, p *project.Project, s *engine.Summary) {
 	if len(paths) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "\nTo re-run the failed flow(s):\n  trun run %s\n", strings.Join(paths, " "))
+	fmt.Fprintf(w, "\nTo re-run the failed flow(s):\n  mockstro run %s\n", strings.Join(paths, " "))
 }
 
 func PrintRecordings(w io.Writer, p *project.Project, s *engine.Summary) {

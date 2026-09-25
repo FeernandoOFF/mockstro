@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/feernandooff/trun/internal/fixtures"
-	"github.com/feernandooff/trun/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/ojson"
 )
 
 func listCmd(g *globals, f *runFlags, args []string) error {
