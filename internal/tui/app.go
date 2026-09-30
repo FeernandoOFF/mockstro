@@ -179,6 +179,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if c := a.mock.onTick(); c != nil {
 			cmds = append(cmds, c)
 		}
+		if a.tab == tabHistory {
+			if c := a.hist.onTick(time.Time(m)); c != nil {
+				cmds = append(cmds, c)
+			}
+		}
 		return a, tea.Batch(cmds...)
 	case statusMsg:
 		a.statusBusy = false
@@ -194,6 +199,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.flowTab.refresh()
 		a.mock.refresh()
 		a.stubTab.refresh()
+		return a, nil
+	case histScanMsg:
+		a.hist.scanning = false
+		a.hist.apply(m)
 		return a, nil
 	case activityMsg:
 		a.log(m.level, "%s", m.text)

@@ -19,6 +19,7 @@ import (
 	"github.com/feernandooff/mockstro/internal/fixtures"
 	"github.com/feernandooff/mockstro/internal/platform"
 	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/registry"
 )
 
 func testProject(t *testing.T) *project.Project {
@@ -722,5 +723,31 @@ func TestLiteTakesAppIDFromFlows(t *testing.T) {
 	New(p, DefaultOptions(), &execx.Fake{}, nil)
 	if p.AppID != "com.b" {
 		t.Fatalf("app id %q", p.AppID)
+	}
+}
+
+func TestLiveProgress(t *testing.T) {
+	dir := t.TempDir()
+	flows := []*fixtures.Flow{
+		{Feature: "a", File: "1.yaml", Rel: "a/1.yaml"},
+		{Feature: "b", File: "2.yaml", Rel: "b/sub/2.yaml"},
+		{Feature: "c", File: "3.yaml", Rel: "c/3.yaml"},
+	}
+	results := make([]*Result, 3)
+	writeProgress(dir, flows, results)
+	results[0] = &Result{Feature: "a", File: "1.yaml", Stage: "PASS"}
+	writeProgress(dir, flows, results)
+	w := filepath.Join(t.TempDir(), "run")
+	os.MkdirAll(w, 0o755)
+	os.Symlink(w, filepath.Join(dir, "worker-1"))
+	registry.Stage(w, "FLOW", "b/sub/2.yaml")
+
+	got, stages := LiveProgress(dir)
+	var st []string
+	for _, r := range got {
+		st = append(st, r.Stage)
+	}
+	if strings.Join(st, ",") != "PASS,RUNNING,PENDING" || strings.Join(stages, ",") != "FLOW b/sub/2.yaml" {
+		t.Fatalf("stages %v runners %v", st, stages)
 	}
 }

@@ -28,62 +28,135 @@ type histRun struct {
 	results []*engine.Result
 	passed  int
 	failed  int
+	stages  []string // live runs: what each runner is doing
 }
+
+type histScanMsg []*histRun
+
+func unfinished(r *engine.Result) bool { return r.Stage == "RUNNING" || r.Stage == "PENDING" }
 
 // historyModel lists past runs from .maestro/.runtime/runs.
 type historyModel struct {
-	a       *app
-	runs    []*histRun
-	cursor  int
-	resCur  int
-	focus   int // 0 runs, 1 results
-	dirty   bool
-	loaded  bool
-	preview []string
-	scroll  int
-	confirm string // "delete" | "prune"
-	linkedN int    // files outside the run dir the pending delete will also remove
-	linkedB int64
-	total   int64
-	picked  map[string]bool
+	a        *app
+	runs     []*histRun
+	cursor   int
+	resCur   int
+	focus    int // 0 runs, 1 results
+	dirty    bool
+	loaded   bool
+	preview  []string
+	scroll   int
+	confirm  string // "delete" | "prune"
+	linkedN  int    // files outside the run dir the pending delete will also remove
+	linkedB  int64
+	total    int64
+	picked   map[string]bool
+	scanning bool
+
+	showStubs bool // right pane lists the selected flow's stubs instead of its log
+	stubsFor  string
+	stubs     []stubRef
+	stubErr   error
+	sCur      int
 }
 
-func (hm *historyModel) load() {
-	hm.loaded, hm.dirty = true, false
+func (hm *historyModel) load() { hm.apply(hm.scan()) }
+
+// scan reads every run dir; it touches no model state so it can run off the UI loop.
+func (hm *historyModel) scan() []*histRun {
 	var runs []*histRun
-	hm.total = 0
 	for _, rd := range hm.a.query.RunDirs(context.Background(), true) {
-		hm.total += rd.Size
 		hr := &histRun{dir: rd.Path, at: rd.ModTime, size: rd.Size, active: rd.Active, err: engine.RunError(rd.Path), rd: rd}
-		at, total, results, err := engine.LoadResults(filepath.Join(rd.Path, "result.tsv"))
-		if err == nil {
-			if !at.IsZero() {
-				hr.at = at
-			}
-			hr.total, hr.results = total, results
-		}
-		arts := engine.LoadArtifacts(rd.Path)
-		for _, r := range hr.results {
-			r.LogPath = filepath.Join(rd.Path, "logs", engine.FlowSlug(r.Feature, r.File)+".log")
-			if fa, ok := arts[r.Feature+"/"+r.File]; ok {
-				r.Artifacts, r.Shots = fa.Artifacts, fa.Shots
-				if fa.Log != "" {
-					r.LogPath = fa.Log
-				}
-			}
-			if r.Passed() {
-				hr.passed++
-			} else {
-				hr.failed++
-			}
-		}
+		readResults(hr)
 		runs = append(runs, hr)
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].at.After(runs[j].at) })
-	hm.runs = runs
+	return runs
+}
+
+// readResults loads result.tsv, or for a run still going (or one that died) its progress.
+func readResults(hr *histRun) {
+	hr.results, hr.stages, hr.passed, hr.failed = nil, nil, 0, 0
+	at, total, results, err := engine.LoadResults(filepath.Join(hr.dir, "result.tsv"))
+	if err == nil {
+		if !at.IsZero() {
+			hr.at = at
+		}
+		hr.total, hr.results = total, results
+	} else {
+		hr.results, hr.stages = engine.LiveProgress(hr.dir)
+		if !hr.active {
+			hr.stages = nil
+			for _, r := range hr.results {
+				if unfinished(r) {
+					r.Stage, r.Exit = "UNSTARTED", 1
+				}
+			}
+		}
+	}
+	arts := engine.LoadArtifacts(hr.dir)
+	for _, r := range hr.results {
+		r.LogPath = filepath.Join(hr.dir, "logs", engine.FlowSlug(r.Feature, r.File)+".log")
+		if fa, ok := arts[r.Feature+"/"+r.File]; ok {
+			r.Artifacts, r.Shots = fa.Artifacts, fa.Shots
+			if fa.Log != "" {
+				r.LogPath = fa.Log
+			}
+		}
+		switch {
+		case unfinished(r):
+		case r.Passed():
+			hr.passed++
+		default:
+			hr.failed++
+		}
+	}
+}
+
+// apply swaps in a fresh scan, keeping the selected run and flow.
+func (hm *historyModel) apply(runs []*histRun) {
+	hm.loaded, hm.dirty = true, false
+	sel := ""
+	if r := hm.selected(); r != nil {
+		sel = r.dir
+	}
+	hm.runs, hm.total = runs, 0
+	for i, r := range runs {
+		hm.total += r.size
+		if r.dir == sel {
+			hm.cursor = i
+		}
+	}
 	if hm.cursor >= len(runs) {
 		hm.cursor = max(0, len(runs)-1)
 	}
+	if r := hm.selected(); r != nil && r.dir != sel {
+		hm.resCur, hm.focus = 0, 0
+	}
+}
+
+// onTick follows live runs: their progress every second, a full rescan (new or finished
+// runs) every few seconds in the background.
+func (hm *historyModel) onTick(t time.Time) tea.Cmd {
+	if !hm.loaded {
+		return nil
+	}
+	for _, r := range hm.runs {
+		if r.active {
+			readResults(r)
+		}
+	}
+	if run := hm.selected(); run != nil && run.active && hm.focus >= 1 {
+		hm.resCur = min(hm.resCur, max(0, len(run.results)-1))
+		scroll := hm.scroll
+		hm.loadPreview()
+		hm.scroll = scroll
+	}
+	if t.Second()%5 != 0 || hm.scanning {
+		return nil
+	}
+	hm.scanning = true
+	return func() tea.Msg { return histScanMsg(hm.scan()) }
 }
 func (hm *historyModel) selected() *histRun {
 	if hm.cursor < len(hm.runs) {
@@ -176,10 +249,27 @@ func (hm *historyModel) key(k tea.KeyMsg) tea.Cmd {
 	case "X":
 		hm.confirm = "all"
 		return nil
+	case "m":
+		if hm.focus >= 1 {
+			hm.showStubs = !hm.showStubs
+		}
 	case "enter", "right":
+		if hm.focus == 2 && hm.showStubs && k.String() == "enter" {
+			if hm.sCur < len(hm.stubs) {
+				hm.a.tab = tabStubs
+				hm.a.stubTab.show(hm.stubs[hm.sCur].name)
+			}
+			return nil
+		}
 		if hm.focus < 2 && run != nil {
 			hm.focus++
 			if hm.focus == 1 {
+				for i, r := range run.results {
+					if r.Stage == "RUNNING" {
+						hm.resCur = i
+						break
+					}
+				}
 				hm.loadPreview()
 			}
 		}
@@ -215,24 +305,24 @@ func (hm *historyModel) key(k tea.KeyMsg) tea.Cmd {
 		if run != nil {
 			_ = exec.Command("open", run.dir).Start()
 		}
-	case "F":
+	case "F", "a":
 		if run == nil {
 			return nil
 		}
-		var failed []*fixtures.Flow
+		var picked []*fixtures.Flow
 		for _, res := range run.results {
-			if res.Passed() {
+			if k.String() == "F" && (res.Passed() || unfinished(res)) {
 				continue
 			}
 			for _, f := range hm.a.flows {
 				if f.Feature == res.Feature && f.File == res.File {
-					failed = append(failed, f)
+					picked = append(picked, f)
 				}
 			}
 		}
-		if len(failed) > 0 {
+		if len(picked) > 0 {
 			hm.a.tab = tabFlows
-			hm.a.cfg.open(failed, "", true)
+			hm.a.cfg.open(picked, "", true)
 		}
 	}
 	return nil
@@ -254,6 +344,9 @@ func (hm *historyModel) view(w, h int) (string, string) {
 		res := sOK.Render(fmt.Sprintf("%d✔", r.passed))
 		if r.failed > 0 {
 			res += " " + sBad.Render(fmt.Sprintf("%d✘", r.failed))
+		}
+		if r.active && len(r.results) > 0 {
+			res = sWarn.Render(fmt.Sprintf("%d/%d", r.passed+r.failed, len(r.results))) + " " + res
 		}
 		if len(r.results) == 0 {
 			res = sMuted.Render("no results")
@@ -281,6 +374,12 @@ func (hm *historyModel) view(w, h int) (string, string) {
 	run := hm.selected()
 	if run != nil {
 		fmt.Fprintf(&rb, "%s\n%s\n\n", sMuted.Render(hm.a.p.Rel(run.dir)), sMuted.Render(fmt.Sprintf("total %s · runners %d", run.total, max(1, len(run.rd.Workers)))))
+		for _, st := range run.stages {
+			rb.WriteString(sWarn.Render("▶ "+truncate(st, midW-6)) + "\n")
+		}
+		if len(run.stages) > 0 {
+			rb.WriteString("\n")
+		}
 		if run.err != "" {
 			for _, l := range strings.Split(run.err, "\n") {
 				rb.WriteString(sBad.Render(l) + "\n")
@@ -294,6 +393,10 @@ func (hm *historyModel) view(w, h int) (string, string) {
 			if hm.focus >= 1 && i == hm.resCur {
 				cur = sSel.Render("› ")
 				focusLine = len(rows)
+			}
+			if unfinished(r) {
+				rows = append(rows, fmt.Sprintf("%s%s%s %s", cur, pickMark(hm.picked[resultKey(r)]), statusStyle(false, r.Stage), truncate(r.Feature+"/"+r.File, 34)))
+				continue
 			}
 			rows = append(rows, fmt.Sprintf("%s%s%s %s %s%s", cur, pickMark(hm.picked[resultKey(r)]), statusStyle(r.Passed(), r.Stage), truncate(r.Feature+"/"+r.File, 34), sMuted.Render(fmt.Sprintf("%ds", int(r.Duration.Seconds()))), shotBadge(r)))
 			if !r.Passed() {
@@ -310,20 +413,26 @@ func (hm *historyModel) view(w, h int) (string, string) {
 	end := len(hm.preview) - hm.scroll
 	start := max(0, end-lh)
 	var preview string
-	if hm.focus == 0 {
+	title := "Flow log · m stubs"
+	switch {
+	case hm.focus == 0:
+		title = "Flow log"
 		preview = sMuted.Render("enter to inspect a run's flows")
-	} else {
+	case hm.showStubs:
+		title = "Flow stubs · m log"
+		preview = hm.stubsView(run, logW-4, lh)
+	default:
 		preview = strings.Join(hm.preview[start:end], "\n")
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
 		focusPanel(hm.focus == 0, fmt.Sprintf("Runs · %d · %s", len(hm.runs), engine.HumanSize(hm.total)), lb.String(), listW, h),
 		focusPanel(hm.focus == 1, "Flows", rb.String(), midW, h),
-		focusPanel(hm.focus == 2, "Flow log", preview, logW, h))
+		focusPanel(hm.focus == 2, title, preview, logW, h))
 	keys := ""
 	if run != nil && hm.focus >= 1 && hm.resCur < len(run.results) {
 		keys = artifactKeys(run.results[hm.resCur])
 	}
-	help := fmt.Sprintf(navHelp+" · x delete · X delete all · P prune (keep %d)%s · F re-run failed · o open dir", engine.KeepRuns(), keys)
+	help := fmt.Sprintf(navHelp+" · x delete · X delete all · P prune (keep %d)%s · a re-run all · F re-run failed · o open dir", engine.KeepRuns(), keys)
 	switch hm.confirm {
 	case "delete":
 		if run != nil {
@@ -364,6 +473,12 @@ func (hm *historyModel) navKey(k string, run *histRun) bool {
 		}
 		return ok
 	}
+	if hm.showStubs {
+		hm.loadStubs(run)
+		c, ok := navKey(k, hm.sCur, len(hm.stubs))
+		hm.sCur = c
+		return ok
+	}
 	switch k {
 	case "up", "k":
 		hm.scroll++
@@ -381,4 +496,48 @@ func (hm *historyModel) navKey(k string, run *histRun) bool {
 		return false
 	}
 	return true
+}
+
+// loadStubs resolves the selected flow's stubs from its file as it is now, not as it ran.
+func (hm *historyModel) loadStubs(run *histRun) {
+	key := ""
+	var flow *fixtures.Flow
+	if run != nil && hm.resCur < len(run.results) {
+		r := run.results[hm.resCur]
+		key = r.Feature + "/" + r.File
+		for _, f := range hm.a.flows {
+			if f.Feature == r.Feature && f.File == r.File {
+				flow = f
+			}
+		}
+	}
+	if key == hm.stubsFor {
+		return
+	}
+	hm.stubsFor, hm.stubs, hm.stubErr, hm.sCur = key, nil, nil, 0
+	switch {
+	case key == "":
+	case flow == nil:
+		hm.stubErr = fmt.Errorf("%s no longer exists", key)
+	default:
+		hm.stubs, hm.stubErr = hm.a.targetStubs(hm.a.p.Rel(flow.Path))
+	}
+}
+
+func (hm *historyModel) stubsView(run *histRun, w, h int) string {
+	hm.loadStubs(run)
+	head := sMuted.Render("from the flow file as it is now") + "\n\n"
+	if hm.stubErr != nil {
+		return head + sBad.Render(hm.stubErr.Error())
+	}
+	if len(hm.stubs) == 0 {
+		return head + sMuted.Render("no stubs")
+	}
+	lines, at := stubListLines(hm.stubs, hm.sCur, hm.focus == 2, w)
+	if hm.focus == 2 {
+		st, en := window(len(lines), at, h-2)
+		return head + strings.Join(lines[st:en], "\n")
+	}
+	st, en := window(len(lines), at, h-4)
+	return head + strings.Join(lines[st:en], "\n") + "\n\n" + sMuted.Render("→ to pick a stub · enter opens it in Stubs")
 }

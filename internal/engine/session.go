@@ -48,9 +48,13 @@ func (e *Engine) runSingle(ctx context.Context, flows []*fixtures.Flow, start ti
 		return s
 	}
 	var results []*Result
-	for _, f := range flows {
+	done := make([]*Result, len(flows))
+	writeProgress(run.Dir, flows, done)
+	for i, f := range flows {
 		res := run.RunFlow(ctx, f)
 		results = append(results, res)
+		done[i] = res
+		writeProgress(run.Dir, flows, done)
 		if res.Stage == "CANCELLED" {
 			break
 		}
@@ -77,6 +81,7 @@ type queue struct {
 	claimed []bool
 	results []*Result
 	stop    bool
+	dir     string // session dir that progress.tsv is written to
 }
 
 func (q *queue) claim() (int, *fixtures.Flow, bool) {
@@ -97,6 +102,7 @@ func (q *queue) claim() (int, *fixtures.Flow, bool) {
 func (q *queue) put(i int, r *Result) {
 	q.mu.Lock()
 	q.results[i] = r
+	writeProgress(q.dir, q.flows, q.results)
 	q.mu.Unlock()
 }
 
@@ -151,6 +157,7 @@ func (e *Engine) runParallel(ctx context.Context, flows []*fixtures.Flow, start 
 	}
 	e.Logf("Running %d flow(s) across %d worker(s).", len(flows), workers)
 
+	writeProgress(sessionDir, flows, make([]*Result, len(flows)))
 	// One build for the whole session; each worker re-hashes it before installing.
 	if !e.Opts.SkipBuild && e.Opts.SessionAPK == "" {
 		path, sha, err := e.Plat.Build(ctx, sessionDir, e.outputWriter(0, ""))
@@ -160,7 +167,7 @@ func (e *Engine) runParallel(ctx context.Context, flows []*fixtures.Flow, start 
 		e.Opts.SessionAPK, e.Opts.SessionAPKSHA = path, sha
 	}
 
-	q := &queue{flows: flows, claimed: make([]bool, len(flows)), results: make([]*Result, len(flows))}
+	q := &queue{flows: flows, claimed: make([]bool, len(flows)), results: make([]*Result, len(flows)), dir: sessionDir}
 	if workers > 1 {
 		order, known := longestFirst(flows, e.FlowEstimates(ctx))
 		if known > 0 {
@@ -351,6 +358,66 @@ func LoadResults(path string) (time.Time, time.Duration, []*Result, error) {
 		}
 	}
 	return at, total, results, nil
+}
+
+// writeProgress records a run's plan as it goes: finished flows as result lines, the rest as
+// plan lines, so History can follow runs started by other processes.
+func writeProgress(dir string, flows []*fixtures.Flow, results []*Result) {
+	if dir == "" {
+		return
+	}
+	var b strings.Builder
+	for i, f := range flows {
+		if results[i] != nil {
+			b.WriteString("result|" + results[i].TSV() + "\n")
+		} else {
+			fmt.Fprintf(&b, "plan|%s|%s|%s\n", f.Feature, f.File, f.Rel)
+		}
+	}
+	_ = fsx.WriteAtomic(filepath.Join(dir, "progress.tsv"), []byte(b.String()))
+}
+
+// LiveProgress reads a run that has no result.tsv yet: finished flows, the ones in flight as
+// RUNNING, the rest PENDING, plus each runner's current stage.
+func LiveProgress(dir string) (results []*Result, stages []string) {
+	b, _ := os.ReadFile(filepath.Join(dir, "progress.tsv"))
+	runners, _ := filepath.Glob(filepath.Join(dir, "worker-*"))
+	if len(runners) == 0 {
+		runners = []string{dir}
+	}
+	inFlight := map[string]bool{}
+	for _, r := range runners {
+		stage := readLine(filepath.Join(r, "stage"))
+		flow := readLine(filepath.Join(r, "current-flow"))
+		if stage == "" || stage == "DONE" {
+			continue
+		}
+		if stage == "FLOW" {
+			inFlight[flow] = true
+		}
+		stages = append(stages, strings.TrimSpace(stage+" "+flow))
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(line, "result|"); ok {
+			results = append(results, ParseResultTSV(rest))
+		} else if rest, ok := strings.CutPrefix(line, "plan|"); ok {
+			f := strings.SplitN(rest, "|", 3)
+			if len(f) < 3 {
+				continue
+			}
+			stage := "PENDING"
+			if inFlight[f[2]] {
+				stage = "RUNNING"
+			}
+			results = append(results, &Result{Feature: f[0], File: f[1], Stage: stage})
+		}
+	}
+	return results, stages
+}
+
+func readLine(path string) string {
+	b, _ := os.ReadFile(path)
+	return strings.TrimSpace(string(b))
 }
 
 // writeRunError records why a run produced no results (shown by History).

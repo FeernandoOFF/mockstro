@@ -83,7 +83,7 @@ func statusText(pass bool, stage string) string {
 	switch {
 	case pass:
 		return "PASS"
-	case stage == "UNSTARTED", stage == "INTERRUPTED", stage == "CANCELLED":
+	case stage == "UNSTARTED", stage == "INTERRUPTED", stage == "CANCELLED", stage == "RUNNING", stage == "PENDING":
 		return stage
 	}
 	return "FAIL"

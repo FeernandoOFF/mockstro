@@ -58,6 +58,18 @@ func (s *stubsModel) refresh() {
 	s.shown = ""
 }
 
+// show selects name, clearing any filter that would hide it.
+func (s *stubsModel) show(name string) {
+	s.filter.SetValue("")
+	s.refresh()
+	for i, n := range s.visible {
+		if n == name {
+			s.cursor = i
+		}
+	}
+	s.focus = 0
+}
+
 func indent(v any) []string {
 	b, err := ojson.MarshalIndent(v)
 	if err != nil {

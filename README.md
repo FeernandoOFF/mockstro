@@ -132,6 +132,8 @@ filter, `space` select, `x` stop/delete, `y` copy, `r` refresh, `q` quit.
 - **Reports**: every run writes `result.tsv`, `junit.xml`, `run.json` and per-flow Maestro logs
   to `.maestro/.runtime/runs/<runId>/`. `--junit <path>` writes an extra copy of the report
   where CI expects it.
+- **Progress**: `progress.tsv` in the run dir is rewritten as each flow finishes (done flows as
+  `result|…`, the rest as `plan|…`); the TUI's History tab uses it to follow headless runs live.
 - **Exit status**: `run` exits 0 when every flow passed, 1 otherwise, and 130 if interrupted.
 - **Scheduling**: `mockstro status --quiet` exits 0 when idle, 10 when runs are active and a
   device is free, and 11 when runs are active and nothing is free. `status --json` gives the

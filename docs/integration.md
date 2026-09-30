@@ -3,7 +3,7 @@
 mockstro integrates with a project in one of two ways, picked automatically:
 
 | | Lite · proxy (drop-in) | Full · runtime override |
-|---|---|---|
+| --- | --- | --- |
 | Detected when | `.maestro/` exists, **no** `.maestro/project.env` | `.maestro/project.env` exists |
 | App changes | none | an E2E seam in a debug/test build |
 | How traffic reaches WireMock | your Proxyman/Charles Map Remote → `127.0.0.1:18080` | mockstro tells the app where WireMock is (per run, per device) |
@@ -62,8 +62,7 @@ which makes parallel runs possible.
    - on launch, read the override; ignore it if it has expired or names another app;
    - use its `apiUrl` as the API base URL;
    - apply its `remoteConfig` key/values on top of Remote Config;
-   - publish the `runId` it honoured as soon as it has read the override (mockstro fails the flow
-     if the app never does);
+   - publish the `runId` it honoured as soon as it has read the override (mockstro fails the flow if the app never does);
    - allow cleartext HTTP to `127.0.0.1`.
 3. Designate reusable emulators/simulators for agents/CI in `project.env`:
    `MAESTRO_AGENT_AVDS=Pixel_9a,Maestro_Pixel_6_API_30_1` (Android) or `IOS_SIMULATOR_NAMES`
@@ -71,7 +70,7 @@ which makes parallel runs possible.
 
 **Android**
 
-Recommended structure, with the reasoning: [android-integration.md](android-integration.md).
+Recommended structure: [android-integration.md](android-integration.md).
 
 - Build: `MAESTRO_APP_VARIANT` (`debugEnvTest`, the default, or `envtest`);
   `ANDROID_GRADLE_TASK` / `ANDROID_APK_GLOB` override the `debugEnvTest` task and APK path.

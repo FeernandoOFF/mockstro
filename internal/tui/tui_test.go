@@ -450,3 +450,90 @@ func TestResultLinesPickedOrCursor(t *testing.T) {
 		t.Fatalf("picked: %q", got)
 	}
 }
+
+func TestMockShowsTargetStubsAndOpensThem(t *testing.T) {
+	a := testApp(t)
+	key(a, "5")
+	m := a.mock
+	for i, r := range m.visible {
+		if r.target != nil && r.target.name == "usage" {
+			m.cursor = i
+		}
+	}
+	v := a.View()
+	for _, want := range []string{"Stubs served", "profile smart", "profile shared", "GET url=/b", "shared/a"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("missing %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "m unmatched only") {
+		t.Fatalf("journal toggle shown while idle:\n%s", v)
+	}
+	key(a, "f")
+	key(a, "down")
+	key(a, "enter")
+	if a.tab != tabStubs || a.stubTab.visible[a.stubTab.cursor] != "shared/a" {
+		t.Fatalf("tab %d cursor %v", a.tab, a.stubTab.visible)
+	}
+}
+
+func TestHistoryFollowsLiveRun(t *testing.T) {
+	a := testApp(t)
+	dir := filepath.Join(a.p.RunsRoot(), "run-live")
+	write(t, filepath.Join(dir, "progress.tsv"), "result|a|1.yaml|PASS|0|3s|\nresult|a|2.yaml|TEST|1|5s|\nplan|b|3.yaml|b/3.yaml\nplan|b|4.yaml|b/4.yaml\n")
+	write(t, filepath.Join(dir, "stage"), "FLOW\n")
+	write(t, filepath.Join(dir, "current-flow"), "b/3.yaml\n")
+	write(t, filepath.Join(dir, "logs", "b-3.log"), "tapping login\n")
+	hr := &histRun{dir: dir, active: true}
+	readResults(hr)
+	key(a, "4")
+	a.hist.apply([]*histRun{hr})
+	key(a, "enter")
+	v := a.View()
+	for _, want := range []string{"2/4", "1✔", "1✘", "▶ FLOW b/3.yaml", "RUNNING b/3.yaml", "PENDING b/4.yaml", "tapping login"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("missing %q:\n%s", want, v)
+		}
+	}
+	if a.hist.resCur != 2 {
+		t.Fatalf("enter should land on the running flow, got %d", a.hist.resCur)
+	}
+}
+
+func TestHistoryRerunAll(t *testing.T) {
+	a := testApp(t)
+	dir := filepath.Join(a.p.RunsRoot(), "run-done")
+	write(t, filepath.Join(dir, "result.tsv"), "meta|2026-01-01T00:00:00Z|8\nresult|account|account-smart.yaml|PASS|0|3s|\nresult|top-up|top-up-smart.yaml|TEST|1|5s|\n")
+	hr := &histRun{dir: dir}
+	readResults(hr)
+	key(a, "4")
+	a.hist.apply([]*histRun{hr})
+	key(a, "a")
+	if a.tab != tabFlows || !a.cfg.active || len(a.cfg.flows) != 2 {
+		t.Fatalf("tab %d active %v flows %d", a.tab, a.cfg.active, len(a.cfg.flows))
+	}
+}
+
+func TestHistoryShowsFlowStubs(t *testing.T) {
+	a := testApp(t)
+	dir := filepath.Join(a.p.RunsRoot(), "run-done")
+	write(t, filepath.Join(dir, "result.tsv"), "meta|2026-01-01T00:00:00Z|3\nresult|account|account-smart.yaml|PASS|0|3s|\n")
+	hr := &histRun{dir: dir}
+	readResults(hr)
+	key(a, "4")
+	a.hist.apply([]*histRun{hr})
+	key(a, "enter")
+	key(a, "m")
+	v := a.View()
+	for _, want := range []string{"Flow stubs", "profile smart", "GET url=/b", "profile shared", "shared/a"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("missing %q:\n%s", want, v)
+		}
+	}
+	key(a, "enter")
+	key(a, "down")
+	key(a, "enter")
+	if a.tab != tabStubs || a.stubTab.visible[a.stubTab.cursor] != "shared/a" {
+		t.Fatalf("tab %d", a.tab)
+	}
+}

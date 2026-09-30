@@ -12,6 +12,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
 	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
@@ -38,6 +39,9 @@ type mockTarget struct {
 	rel              string // flows: path under flows/
 }
 
+// stubRef is one stub a target serves, in priority order (overrides, profile, shared).
+type stubRef struct{ layer, name, route string }
+
 // mockModel serves scenarios/profiles/flows on 18080 and shows the request journal live,
 // highlighting requests no stub matched.
 type mockModel struct {
@@ -53,12 +57,18 @@ type mockModel struct {
 	eng       *engine.Engine
 	starting  bool
 	busy      bool // stopping or switching
+	startErr  error
 	journal   []wiremock.LoggedRequest
 	jErr      error
 	polling   bool
 	onlyMiss  bool
-	focusLog  bool // arrows scroll the journal instead of picking targets
-	jScroll   int
+	focusLog  bool // arrows move in the right pane instead of picking targets
+	jCur      int
+	showStubs bool // while serving, the right pane lists stubs instead of the journal
+	stubsFor  string
+	stubList  []stubRef
+	stubErr   error
+	sCur      int
 }
 
 func newMockModel(a *app) *mockModel {
@@ -149,6 +159,7 @@ func (m *mockModel) update(msg tea.Msg) tea.Cmd {
 		}
 	case mockStartedMsg:
 		m.starting = false
+		m.startErr = x.err
 		if x.err != nil {
 			m.a.log("error", "mock: %v", x.err)
 			return nil
@@ -173,9 +184,15 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 		m.apply()
 		return cmd
 	}
-	if m.focusLog {
-		if c, ok := navKey(k.String(), m.jScroll, len(m.journalRows())); ok {
-			m.jScroll = c
+	m.loadStubs()
+	if m.focusLog && m.stubsPane() {
+		if c, ok := navKey(k.String(), m.sCur, len(m.stubList)); ok {
+			m.sCur = c
+			return nil
+		}
+	} else if m.focusLog {
+		if c, ok := navKey(k.String(), m.jCur, len(m.journalRows())); ok {
+			m.jCur = c
 			return nil
 		}
 	} else if c, ok := navKey(k.String(), m.cursor, len(m.visible)); ok {
@@ -194,8 +211,14 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 			m.attachIdx = (m.attachIdx + 1) % len(m.devices())
 		}
 	case "m":
-		m.onlyMiss = !m.onlyMiss
-		m.jScroll = 0
+		if !m.stubsPane() {
+			m.onlyMiss = !m.onlyMiss
+			m.jCur = 0
+		}
+	case "s":
+		if m.session != nil {
+			m.showStubs = !m.showStubs
+		}
 	case "f":
 		m.focusLog = !m.focusLog
 	case "y":
@@ -221,6 +244,13 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 			m.toggle(map[string]int{"right": 1, "left": 0, " ": -1}[k.String()])
 		}
 	case "enter":
+		if m.focusLog {
+			if name := m.paneStub(); name != "" {
+				m.a.tab = tabStubs
+				m.a.stubTab.show(name)
+			}
+			return nil
+		}
 		if m.cursor >= len(m.visible) || m.starting {
 			return nil
 		}
@@ -246,7 +276,7 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 				return mockSwitchedMsg{target, err}
 			}
 		}
-		m.starting = true
+		m.starting, m.startErr = true, nil
 		devs := m.devices()
 		device := ""
 		if m.attachIdx > 0 && m.attachIdx < len(devs) {
@@ -319,21 +349,29 @@ func (m *mockModel) view(w, h int) (string, string) {
 	case m.starting:
 		jb.WriteString(sWarn.Render("starting WireMock on :18080…") + "\n")
 	case m.session == nil:
+		if m.startErr != nil {
+			jb.WriteString(sBad.Width(w-listW-8).Render("failed to start: "+m.startErr.Error()) + "\n\n")
+		}
 		if m.a.p.Lite() {
 			fmt.Fprintf(&jb, "Target device: %s %s\n\n", sSel.Render("server-only"), sMuted.Render("(attach needs full integration)"))
 		} else {
 			fmt.Fprintf(&jb, "Target device: %s %s\n\n", sSel.Render(mode), sMuted.Render("(a to change)"))
 		}
+		hint := "server-only: point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nattach: installs the build on the device and writes the runtime override.\nenter on a target to start serving it."
+		if m.a.p.Lite() {
+			hint = "point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nenter on a target to start serving it."
+		}
+		jb.WriteString(sMuted.Render(hint) + "\n\n")
 		if m.cursor < len(m.visible) {
 			if t := m.visible[m.cursor].target; t != nil {
 				fmt.Fprintf(&jb, "%s %s\n%s\n\n", sMuted.Render(t.kind), sBold.Render(t.label), sMuted.Render(t.name))
+				m.writeStubs(&jb, w-listW-6, h)
 			}
 		}
-		hint := "server-only: point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nattach: installs the build on the device and writes the runtime override.\n\nenter on a target to start serving it."
-		if m.a.p.Lite() {
-			hint = "point Proxyman/Charles Map Remote at 127.0.0.1:18080.\n\nenter on a target to start serving it."
-		}
-		jb.WriteString(sMuted.Render(hint))
+	case m.showStubs:
+		t := m.session.Target
+		fmt.Fprintf(&jb, "%s %s · %s\n\n", sOK.Render("● serving"), sBold.Render(t.Name), sMuted.Render("s show journal"))
+		m.writeStubs(&jb, w-listW-6, h)
 	default:
 		t := m.session.Target
 		unmatched := 0
@@ -343,35 +381,52 @@ func (m *mockModel) view(w, h int) (string, string) {
 			}
 		}
 		fmt.Fprintf(&jb, "%s %s · profile %s · %d overrides · :%d · %s\n", sOK.Render("● serving"), sBold.Render(t.Name), t.Profile, len(t.Overrides), m.session.Run.Port, deviceLabel(m.session.Run.Device))
-		fmt.Fprintf(&jb, "%d requests · %s\n\n", len(m.journal), sBad.Render(fmt.Sprintf("%d unmatched", unmatched)))
+		showing, toggle := "all requests", "m unmatched only"
+		if m.onlyMiss {
+			showing, toggle = "unmatched only", "m all requests"
+		}
+		fmt.Fprintf(&jb, "%d requests · %s\n", len(m.journal), sBad.Render(fmt.Sprintf("%d unmatched", unmatched)))
+		fmt.Fprintf(&jb, "%s %s · %s\n\n", sMuted.Render("showing"), showing, sMuted.Render(toggle+" · s stubs"))
 		if m.jErr != nil {
 			jb.WriteString(sBad.Render(m.jErr.Error()) + "\n")
 		}
 		rows := m.journalRows()
-		m.jScroll = min(m.jScroll, max(0, len(rows)-1))
-		for i, r := range rows[m.jScroll:] {
-			if i >= h-8 {
-				break
+		m.jCur = min(m.jCur, max(0, len(rows)-1))
+		st, en := window(len(rows), m.jCur, h-9)
+		for i := st; i < en; i++ {
+			r := rows[i]
+			cur := "  "
+			if i == m.jCur && m.focusLog {
+				cur = sSel.Render("› ")
 			}
+			jb.WriteString(cur)
 			miss := r.StubName() == wiremock.Fallback
 			at := time.UnixMilli(r.Request.LoggedDate).Format("15:04:05")
 			stub := r.StubName()
 			line := fmt.Sprintf("%s %-6s %s", at, r.Request.Method, r.Request.URL)
 			if miss {
-				jb.WriteString(sBad.Render(truncate(line+"  ← 599 unstubbed", w-listW-6)) + "\n")
+				jb.WriteString(sBad.Render(truncate(line+"  ← 599 unstubbed", w-listW-8)) + "\n")
 			} else {
-				jb.WriteString(truncate(line+"  "+sMuted.Render(stub), w-listW-6) + "\n")
+				jb.WriteString(truncate(line+"  "+sMuted.Render(stub), w-listW-8) + "\n")
 			}
 		}
 	}
+	title := "Request journal"
+	if m.stubsPane() {
+		title = "Stubs served"
+	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
 		focusPanel(!m.focusLog, "Scenarios · profiles · flows", lb.String(), listW, h),
-		focusPanel(m.focusLog, "Request journal", jb.String(), w-listW, h))
+		focusPanel(m.focusLog, title, jb.String(), w-listW, h))
 	attach := " · a attach device"
 	if m.a.p.Lite() {
 		attach = ""
 	}
-	help := navHelp + " · f switch panel · enter serve/switch" + attach + " · m unmatched only · x stop · / filter · esc clear"
+	enter := " · enter serve/switch"
+	if m.focusLog {
+		enter = " · enter open in Stubs"
+	}
+	help := navHelp + " · f switch panel" + enter + attach + " · x stop · / filter · esc clear"
 	if m.filtering {
 		help = "type to filter · enter/esc done"
 	}
@@ -410,4 +465,117 @@ func (m *mockModel) toggle(to int) {
 	}
 	m.open[row.folder] = open
 	m.apply()
+}
+
+func (m *mockModel) stubsPane() bool { return m.session == nil || m.showStubs }
+
+// paneTarget is the target whose stubs the right pane lists: the served one, else the highlighted one.
+func (m *mockModel) paneTarget() string {
+	if m.session != nil {
+		return m.session.Target.Name
+	}
+	if m.cursor < len(m.visible) && m.visible[m.cursor].target != nil {
+		return m.visible[m.cursor].target.name
+	}
+	return ""
+}
+
+func (m *mockModel) loadStubs() {
+	name := m.paneTarget()
+	if name == m.stubsFor {
+		return
+	}
+	m.stubsFor, m.stubList, m.stubErr, m.sCur = name, nil, nil, 0
+	if name != "" {
+		m.stubList, m.stubErr = m.a.targetStubs(name)
+	}
+}
+
+// targetStubs lists what a mock target (scenario, profile or flow path) serves, as its
+// fixtures are now: overrides, then its profile, then shared.
+func (a *app) targetStubs(name string) ([]stubRef, error) {
+	t, err := a.query.ResolveMockTarget([]string{name})
+	if err != nil {
+		return nil, err
+	}
+	var out []stubRef
+	add := func(layer string, names []string) {
+		for _, n := range names {
+			ref := stubRef{layer: layer, name: n}
+			if st, err := a.store.ResolvedStub(n); err == nil {
+				ref.route = fixtures.Route(st)
+			}
+			out = append(out, ref)
+		}
+	}
+	add("overrides", t.Overrides)
+	for _, p := range []string{t.Profile, "shared"} {
+		if p == "" {
+			continue
+		}
+		pm, err := a.store.ProfileMappings(p)
+		if err != nil {
+			return out, err
+		}
+		add("profile "+p, pm)
+	}
+	return out, nil
+}
+
+// stubListLines renders refs grouped by layer; at is the line holding the cursor.
+func stubListLines(refs []stubRef, cur int, focused bool, w int) (lines []string, at int) {
+	layer := ""
+	for i, r := range refs {
+		if r.layer != layer {
+			layer = r.layer
+			lines = append(lines, sMuted.Render(layer))
+		}
+		mark, name := "  ", r.name
+		if i == cur && focused {
+			mark, name = sSel.Render("› "), sSel.Render(name)
+			at = len(lines)
+		}
+		lines = append(lines, truncate(mark+name+"  "+sMuted.Render(r.route), w))
+	}
+	return lines, at
+}
+
+// paneStub is the stub under the right-pane cursor, if any.
+func (m *mockModel) paneStub() string {
+	if m.stubsPane() {
+		if m.sCur < len(m.stubList) {
+			return m.stubList[m.sCur].name
+		}
+		return ""
+	}
+	rows := m.journalRows()
+	if m.jCur >= len(rows) {
+		return ""
+	}
+	if n := rows[m.jCur].StubName(); n != wiremock.Fallback && m.a.store.StubExists(n) {
+		return n
+	}
+	return ""
+}
+
+func (m *mockModel) writeStubs(b *strings.Builder, w, h int) {
+	m.loadStubs()
+	if m.stubErr != nil {
+		b.WriteString(sBad.Render(m.stubErr.Error()))
+		return
+	}
+	lines, at := stubListLines(m.stubList, m.sCur, m.focusLog, w)
+	if len(lines) == 0 {
+		b.WriteString(sMuted.Render("no stubs"))
+		return
+	}
+	room := h - 4 - strings.Count(b.String(), "\n")
+	if !m.focusLog {
+		room -= 2
+	}
+	st, en := window(len(lines), at, room)
+	b.WriteString(strings.Join(lines[st:en], "\n"))
+	if !m.focusLog {
+		b.WriteString("\n\n" + sMuted.Render("f to pick a stub · enter opens it in Stubs"))
+	}
 }
