@@ -238,6 +238,8 @@ func (d *dashModel) view(w, h int) (string, string) {
 	fmt.Fprintf(&info, "Integration %s\n", a.p.IntegrationLabel())
 	if a.p.Lite() {
 		fmt.Fprintf(&info, "Build      %s\n", sMuted.Render("none: runs use the installed app"))
+	} else if a.p.BuildSystem == "kotlin-toolchain" {
+		fmt.Fprintf(&info, "Build      Kotlin Toolchain (%s)\n", a.p.KotlinVariant)
 	} else if a.opts.Platform == "ios" {
 		fmt.Fprintf(&info, "Scheme     %s (%s)\n", a.p.IOSScheme, a.p.IOSConfig)
 	} else {

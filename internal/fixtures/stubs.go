@@ -3,6 +3,7 @@
 package fixtures
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -147,6 +148,9 @@ func (s *Store) ResolvedStub(name string) (*ojson.Object, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid JSON in %s: %w", s.P.Rel(file), err)
 	}
+	if IsMessage(obj) && obj.Has("extends") {
+		return nil, fmt.Errorf("message stub %s does not support extends", name)
+	}
 	if obj.String("extends") == "" {
 		return obj, nil
 	}
@@ -183,7 +187,14 @@ func prune(v any) any {
 }
 
 // Route is "<METHOD> <matcher>=<value>".
+func IsMessage(stub *ojson.Object) bool { return stub.Has("trigger") }
+
 func Route(stub *ojson.Object) string {
+	if IsMessage(stub) {
+		trigger, _ := stub.Get("trigger")
+		b, _ := ojson.Marshal(trigger)
+		return "MESSAGE " + string(b)
+	}
 	req := stub.Object("request")
 	if req == nil {
 		return ""
@@ -204,6 +215,13 @@ func Route(stub *ojson.Object) string {
 
 // Identity is what makes two stubs compete for the same request.
 func Identity(stub *ojson.Object) string {
+	if IsMessage(stub) {
+		b, _ := ojson.Marshal(stub.Object("trigger"))
+		var canonical any
+		_ = json.Unmarshal(b, &canonical)
+		b, _ = json.Marshal(canonical)
+		return "MESSAGE " + string(b)
+	}
 	return Route(stub) + "\t" + stub.String("scenarioName") + "\t" + stub.String("requiredScenarioState")
 }
 
@@ -223,6 +241,15 @@ var allowedFaults = map[string]bool{
 // ValidateStub checks a resolved stub before WireMock receives it.
 func (s *Store) ValidateStub(stub *ojson.Object, expectedName, sourceFile string) error {
 	rel := s.P.Rel(sourceFile)
+	if IsMessage(stub) {
+		return s.validateMessage(stub, expectedName, rel)
+	}
+	if stub.Has("actions") {
+		return fmt.Errorf("message stub requires trigger in %s", rel)
+	}
+	if resp := stub.Object("response"); resp != nil && resp.Has("openWebsocketChannel") && s.P.WireMockVersion != "4.0.0-beta.40" {
+		return fmt.Errorf("WebSocket upgrades require WIREMOCK_VERSION=4.0.0-beta.40 in %s", rel)
+	}
 	req := stub.Object("request")
 	if req == nil {
 		return fmt.Errorf("missing request object in %s", rel)

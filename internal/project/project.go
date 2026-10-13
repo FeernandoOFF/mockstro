@@ -25,8 +25,17 @@ type Project struct {
 	MaestroRoot string // <root>/.maestro
 	Env         map[string]string
 
+	BuildSystem         string
+	KotlinAndroidModule string
+	KotlinIOSModule     string
+	KotlinVariant       string
+	IOSAppGlob          string
+	WireMockVersion     string
+	WebSocketPath       string
+
 	Platform    string
 	AppID       string
+	IOSAppID    string
 	Variant     string
 	GradleTask  string
 	APKGlob     string
@@ -146,18 +155,44 @@ func Load(root string) (*Project, error) {
 		p.Platform = "android"
 	}
 	p.AppID = get("APP_PACKAGE", "ie.prepaypower.envtest")
-	p.Variant = get("MAESTRO_APP_VARIANT", "debugEnvTest")
-	switch p.Variant {
-	case "debugEnvTest":
-		p.GradleTask = get("ANDROID_GRADLE_TASK", "assembleDebugEnvTest")
-		p.APKGlob = get("ANDROID_APK_GLOB", "app/build/outputs/apk/debugEnvTest/*.apk")
-	case "envtest":
-		p.GradleTask = "assembleEnvtest"
-		p.APKGlob = "app/build/outputs/apk/envtest/*-envtest.apk"
-	case "":
-		// Lite: mockstro never builds.
-	default:
-		return nil, fmt.Errorf("unknown MAESTRO_APP_VARIANT: %s (expected debugEnvTest or envtest)", p.Variant)
+	p.IOSAppID = get("IOS_APP_PACKAGE", "")
+	p.BuildSystem = get("BUILD_SYSTEM", "native")
+	if p.BuildSystem != "" && p.BuildSystem != "native" && p.BuildSystem != "kotlin-toolchain" {
+		return nil, fmt.Errorf("unknown BUILD_SYSTEM: %s (expected native or kotlin-toolchain)", p.BuildSystem)
+	}
+	p.KotlinAndroidModule = get("KOTLIN_ANDROID_MODULE", "android")
+	p.KotlinIOSModule = get("KOTLIN_IOS_MODULE", "ios")
+	p.KotlinVariant = get("KOTLIN_VARIANT", "debug")
+	if p.BuildSystem == "kotlin-toolchain" && p.KotlinVariant != "debug" && p.KotlinVariant != "release" {
+		return nil, fmt.Errorf("KOTLIN_VARIANT must be debug or release")
+	}
+	p.APKGlob = get("ANDROID_APK_GLOB", "")
+	p.IOSAppGlob = get("IOS_APP_GLOB", "")
+	p.WireMockVersion = get("WIREMOCK_VERSION", "3.13.2")
+	if p.WireMockVersion != "" && p.WireMockVersion != "3.13.2" && p.WireMockVersion != "4.0.0-beta.40" {
+		return nil, fmt.Errorf("unsupported WIREMOCK_VERSION: %s", p.WireMockVersion)
+	}
+	p.WebSocketPath = get("E2E_WEBSOCKET_PATH", "")
+	if p.WebSocketPath != "" && (!strings.HasPrefix(p.WebSocketPath, "/") || strings.ContainsAny(p.WebSocketPath, "?#\\ 	\r\n")) {
+		return nil, fmt.Errorf("E2E_WEBSOCKET_PATH must be an absolute URL path")
+	}
+	if p.WebSocketPath != "" && p.WireMockVersion != "4.0.0-beta.40" {
+		return nil, fmt.Errorf("E2E_WEBSOCKET_PATH requires WIREMOCK_VERSION=4.0.0-beta.40")
+	}
+	if p.BuildSystem != "kotlin-toolchain" {
+		p.Variant = get("MAESTRO_APP_VARIANT", "debugEnvTest")
+		switch p.Variant {
+		case "debugEnvTest":
+			p.GradleTask = get("ANDROID_GRADLE_TASK", "assembleDebugEnvTest")
+			p.APKGlob = get("ANDROID_APK_GLOB", "app/build/outputs/apk/debugEnvTest/*.apk")
+		case "envtest":
+			p.GradleTask = "assembleEnvtest"
+			p.APKGlob = "app/build/outputs/apk/envtest/*-envtest.apk"
+		case "":
+			// Lite: mockstro never builds.
+		default:
+			return nil, fmt.Errorf("unknown MAESTRO_APP_VARIANT: %s (expected debugEnvTest or envtest)", p.Variant)
+		}
 	}
 	p.IOSProject = get("IOS_PROJECT", "")
 	p.IOSScheme = get("IOS_SCHEME", "")

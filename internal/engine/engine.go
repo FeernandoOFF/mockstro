@@ -81,6 +81,11 @@ func New(p *project.Project, opts Options, ex execx.Runner, sink Sink) *Engine {
 	if opts.Platform == "" {
 		opts.Platform = p.Platform
 	}
+	if opts.Platform == "ios" && p.IOSAppID != "" {
+		copy := *p
+		copy.AppID = p.IOSAppID
+		p = &copy
+	}
 	opts.Lite = p.Lite()
 	if opts.FBRC == nil {
 		opts.FBRC = map[string]string{}

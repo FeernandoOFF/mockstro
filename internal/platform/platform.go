@@ -33,13 +33,21 @@ type Device struct {
 
 // Override is what the app reads to point itself at a run's WireMock.
 type Override struct {
-	RunID     string
-	Port      int
-	FBRC      map[string]string
-	ExpiresAt int64 // unix millis
+	WebSocketPath string
+	RunID         string
+	Port          int
+	FBRC          map[string]string
+	ExpiresAt     int64 // unix millis
 }
 
 func (o Override) APIURL() string { return "http://127.0.0.1:" + strconv.Itoa(o.Port) + "/api" }
+
+func (o Override) WebSocketURL() string {
+	if o.WebSocketPath == "" {
+		return ""
+	}
+	return "ws://127.0.0.1:" + strconv.Itoa(o.Port) + o.WebSocketPath
+}
 
 type Platform interface {
 	// Devices lists devices the runner can see: ready adb devices, or available simulators.
@@ -70,6 +78,7 @@ type Platform interface {
 	SetKeyboard(ctx context.Context, serial string, show bool) error
 	// Shutdown stops an emulator/simulator and waits until it is gone; physical devices refuse.
 	Shutdown(ctx context.Context, serial string) error
+	StopApp(ctx context.Context, serial string) error
 	WriteOverride(ctx context.Context, serial string, o Override) error
 	PreflightOverride(ctx context.Context, serial string, o Override) (string, error)
 	AcceptedRunID(ctx context.Context, serial string) string

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feernandooff/mockstro/internal/build"
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fsx"
 	"github.com/feernandooff/mockstro/internal/ojson"
@@ -228,41 +229,9 @@ func (a *Android) EnsureBooted(context.Context, string, func(string)) error { re
 
 // Build runs the incremental gradle task and snapshots the single matching APK into the run.
 func (a *Android) Build(ctx context.Context, artifactDir string, out io.Writer) (string, string, error) {
-	if out == nil {
-		out = io.Discard
-	}
-	fmt.Fprintf(out, "Building %s (incremental)...\n", a.P.GradleTask)
-	if err := a.Exec.Run(ctx, execx.Cmd{Name: "./gradlew", Args: []string{a.P.GradleTask, "-q"}, Dir: a.P.Root, Stdout: out, Stderr: out}); err != nil {
-		return "", "", fmt.Errorf("gradle build failed: %s: %w", a.P.GradleTask, err)
-	}
-	matches, _ := filepath.Glob(filepath.Join(a.P.Root, a.P.APKGlob))
-	var built []string
-	for _, m := range matches {
-		if st, err := os.Stat(m); err == nil && !st.IsDir() {
-			built = append(built, m)
-		}
-	}
-	if len(built) == 0 {
-		return "", "", fmt.Errorf("no APK produced at %s", filepath.Join(a.P.Root, a.P.APKGlob))
-	}
-	if len(built) > 1 {
-		return "", "", fmt.Errorf("multiple APKs match %s; refusing an ambiguous artifact", a.P.APKGlob)
-	}
-	dir := filepath.Join(artifactDir, "artifacts")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", "", err
-	}
-	dst := filepath.Join(dir, "app.apk")
-	if err := fsx.CopyAtomic(built[0], dst); err != nil {
-		return "", "", fmt.Errorf("could not snapshot built APK: %w", err)
-	}
-	sha, err := fsx.SHA256(dst)
-	if err != nil {
-		return "", "", err
-	}
-	_ = os.WriteFile(filepath.Join(artifactDir, "apk.sha256"), []byte(sha+"  "+dst+"\n"), 0o644)
-	return dst, sha, nil
+	return build.Build(ctx, a.P, "android", a.Exec, artifactDir, out)
 }
+
 func (a *Android) ArtifactSHA(path string) (string, error) { return fsx.SHA256(path) }
 
 func (a *Android) ArtifactExists(path string) bool {
@@ -366,8 +335,9 @@ func (a *Android) Payload(o Override) ([]byte, error) {
 		RunID         string            `json:"runId"`
 		ExpiresAt     string            `json:"expiresAt"`
 		APIURL        string            `json:"apiUrl"`
+		WebSocketURL  string            `json:"websocketUrl,omitempty"`
 		RemoteConfig  map[string]string `json:"remoteConfig"`
-	}{"1", a.P.AppID, o.RunID, strconv.FormatInt(o.ExpiresAt, 10), o.APIURL(), nonNil(o.FBRC)})
+	}{"1", a.P.AppID, o.RunID, strconv.FormatInt(o.ExpiresAt, 10), o.APIURL(), o.WebSocketURL(), nonNil(o.FBRC)})
 }
 
 // nonNil: the app expects remoteConfig to be an object, never null.
@@ -378,7 +348,17 @@ func nonNil(m map[string]string) map[string]string {
 	return m
 }
 
+func (a *Android) StopApp(ctx context.Context, serial string) error {
+	_, err := a.adb(ctx, serial, "shell", "am", "force-stop", a.P.AppID)
+	return err
+}
+
 func (a *Android) WriteOverride(ctx context.Context, serial string, o Override) error {
+	if o.WebSocketURL() != "" {
+		if _, err := a.adb(ctx, serial, "shell", "settings delete global "+a.P.AcceptKey); err != nil {
+			return err
+		}
+	}
 	payload, err := a.Payload(o)
 	if err != nil {
 		return err
@@ -416,7 +396,7 @@ func (a *Android) PreflightOverride(ctx context.Context, serial string, o Overri
 		return "", err
 	}
 	m := a.readOverride(ctx, serial)
-	if m == nil || m["runId"] != o.RunID || m["apiUrl"] != o.APIURL() {
+	if m == nil || m["runId"] != o.RunID || m["apiUrl"] != o.APIURL() || o.WebSocketURL() != "" && m["websocketUrl"] != o.WebSocketURL() {
 		return "", fmt.Errorf("override did not round-trip with this run identity on %s", serial)
 	}
 	list, _ := a.adb(ctx, serial, "reverse", "--list")

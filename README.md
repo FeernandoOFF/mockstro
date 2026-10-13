@@ -241,3 +241,11 @@ The GitHub workflow tests and vets before building. Manual dispatch uploads buil
 only; pushing a version tag publishes a GitHub release (marked as a prerelease for tags such as `v0.1.0-rc.1`). No release is published by local builds.
 Checksums detect corruption against release metadata fetched over HTTPS; they are not
 independent signatures or protection against a compromised release publisher.
+
+## WebSockets and Kotlin Toolchain
+
+Full integration supports Kotlin Toolchain builds with `BUILD_SYSTEM=kotlin-toolchain`.
+Native WebSocket fixtures are available with the checksum-pinned
+`WIREMOCK_VERSION=4.0.0-beta.40`; HTTP-only projects keep WireMock 3.13.2 by default.
+See [Kotlin Toolchain setup](docs/kotlin-toolchain.md) and
+[WebSocket fixtures, verification and pushes](docs/websockets.md).

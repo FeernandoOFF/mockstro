@@ -15,6 +15,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/ojson"
 	"github.com/feernandooff/mockstro/internal/platform"
 	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/internal/wiremock"
@@ -59,7 +60,7 @@ func (e *Engine) BuildMappings(profile string, overrides []string) ([]any, error
 
 func (r *Run) override(fbrc map[string]string) platform.Override {
 	return platform.Override{
-		RunID: r.ID, Port: r.Port, FBRC: fbrc,
+		RunID: r.ID, Port: r.Port, FBRC: fbrc, WebSocketPath: r.e.P.WebSocketPath,
 		ExpiresAt: time.Now().Add(project.OverrideTTLSecs * time.Second).UnixMilli(),
 	}
 }
@@ -71,6 +72,41 @@ func (r *Run) Activate(ctx context.Context, profile string, fbrc map[string]stri
 	if err != nil {
 		return err
 	}
+	var httpMappings, messageMappings []any
+	for _, mapping := range mappings {
+		if stub, ok := mapping.(*ojson.Object); ok && fixtures.IsMessage(stub) {
+			messageMappings = append(messageMappings, mapping)
+		} else {
+			httpMappings = append(httpMappings, mapping)
+		}
+	}
+	websocket := len(messageMappings) > 0 || e.P.WebSocketPath != ""
+	if websocket && !r.WM.MessageSupport {
+		return fmt.Errorf("WebSocket fixtures require WIREMOCK_VERSION=%s", wiremock.WebSocketVersion)
+	}
+	if websocket || r.websocketActive {
+		if r.Device != "" {
+			if err := e.Plat.StopApp(ctx, r.Device); err != nil {
+				return fmt.Errorf("stop app before WebSocket scenario: %w", err)
+			}
+		}
+		if r.websocketActive {
+			r.WM.Stop()
+			r.WM = nil
+			if err := r.startWiremock(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	mappings = httpMappings
+	if !r.overrideAuto {
+		mappings = append(mappings, wiremock.FBRCMappings(fbrc)...)
+	}
+	mappings = append(mappings, wiremock.FallbackMapping(e.P.FallbackURL), wiremock.NonceMapping(r.ID))
+	if err := r.WM.Replace(mappings, messageMappings); err != nil {
+		return err
+	}
+	r.websocketActive = websocket
 	// Remote Config rides in the device override; only Map Remote setups serve it over HTTP.
 	if r.Device != "" && r.overrideAuto {
 		if err := e.Plat.WriteOverride(ctx, r.Device, r.override(fbrc)); err != nil {
@@ -78,9 +114,7 @@ func (r *Run) Activate(ctx context.Context, profile string, fbrc map[string]stri
 		}
 		r.overrideApplied = true
 	}
-	if !r.overrideAuto {
-		mappings = append(mappings, wiremock.FBRCMappings(fbrc)...)
-	}
+
 	if !r.preflightDone && r.Device != "" {
 		if r.overrideAuto {
 			msg, err := e.Plat.PreflightOverride(ctx, r.Device, r.override(fbrc))
@@ -93,8 +127,7 @@ func (r *Run) Activate(ctx context.Context, profile string, fbrc map[string]stri
 		}
 		r.preflightDone = true
 	}
-	mappings = append(mappings, wiremock.FallbackMapping(e.P.FallbackURL), wiremock.NonceMapping(r.ID))
-	return r.WM.Replace(mappings)
+	return nil
 }
 
 func (e *Engine) ManualProxyInstructions(port int, device string) string {
@@ -208,10 +241,10 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 			target = rawPath(res.Recording)
 		}
 		r.logf("Recording %s/%s [%s]", f.Feature, f.File, profile)
-		args = append(args, "record", "--local", "--config", r.configPath, "--debug-output", debugDir, "-e", envArg, flowPath, target)
+		args = append(args, "record", "--local", "--config", r.configPath, "--debug-output", debugDir, "-e", envArg, "-e", "APP_ID="+e.P.AppID, flowPath, target)
 	} else {
 		r.logf("Running %s/%s [%s]", f.Feature, f.File, profile)
-		args = append(args, "test", "--config", r.configPath, "--debug-output", debugDir, "-e", envArg, flowPath)
+		args = append(args, "test", "--config", r.configPath, "--debug-output", debugDir, "-e", envArg, "-e", "APP_ID="+e.P.AppID, flowPath)
 	}
 	before := r.resultDirs()
 	runErr := e.Exec.Run(ctx, execx.Cmd{Name: "maestro", Args: args, Stdout: lw, Stderr: lw})
@@ -284,12 +317,24 @@ func (r *Run) Verify(vs []fixtures.Verification) ([]VerificationResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	var messages []wiremock.LoggedMessage
+	if r.WM.MessageSupport {
+		messages, err = r.WM.MessageJournal(true)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var out []VerificationResult
 	r.logf("API verifications:")
 	for _, v := range vs {
 		count := 0
 		for _, req := range journal {
 			if req.StubName() == v.Stub {
+				count++
+			}
+		}
+		for _, message := range messages {
+			if message.EventType == "received" && message.StubName() == v.Stub {
 				count++
 			}
 		}
@@ -326,6 +371,18 @@ func (r *Run) reportFallback() []string {
 			continue
 		}
 		unmatched = append(unmatched, req.Request.Method+" "+req.Request.URL)
+	}
+	if r.WM.MessageSupport {
+		messages, err := r.WM.MessageJournal(true)
+		if err != nil {
+			r.warnf("%v", err)
+		} else {
+			for _, m := range messages {
+				if m.EventType == "received" && !m.WasMatched {
+					unmatched = append(unmatched, "WS "+m.Channel.InitiatingRequest.URL+" "+m.Message.Body)
+				}
+			}
+		}
 	}
 	switch {
 	case len(unmatched) > 0:

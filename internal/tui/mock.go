@@ -133,7 +133,7 @@ func (m *mockModel) onTick() tea.Cmd {
 	m.polling = true
 	wm := m.session.Run.WM
 	return func() tea.Msg {
-		reqs, err := wm.Journal(false)
+		reqs, err := wm.Traffic(false)
 		return journalMsg{reqs, err}
 	}
 }
@@ -376,16 +376,16 @@ func (m *mockModel) view(w, h int) (string, string) {
 		t := m.session.Target
 		unmatched := 0
 		for _, r := range m.journal {
-			if r.StubName() == wiremock.Fallback {
+			if r.Unmatched() {
 				unmatched++
 			}
 		}
 		fmt.Fprintf(&jb, "%s %s · profile %s · %d overrides · :%d · %s\n", sOK.Render("● serving"), sBold.Render(t.Name), t.Profile, len(t.Overrides), m.session.Run.Port, deviceLabel(m.session.Run.Device))
-		showing, toggle := "all requests", "m unmatched only"
+		showing, toggle := "all traffic", "m unmatched only"
 		if m.onlyMiss {
-			showing, toggle = "unmatched only", "m all requests"
+			showing, toggle = "unmatched only", "m all traffic"
 		}
-		fmt.Fprintf(&jb, "%d requests · %s\n", len(m.journal), sBad.Render(fmt.Sprintf("%d unmatched", unmatched)))
+		fmt.Fprintf(&jb, "%d events · %s\n", len(m.journal), sBad.Render(fmt.Sprintf("%d unmatched", unmatched)))
 		fmt.Fprintf(&jb, "%s %s · %s\n\n", sMuted.Render("showing"), showing, sMuted.Render(toggle+" · s stubs"))
 		if m.jErr != nil {
 			jb.WriteString(sBad.Render(m.jErr.Error()) + "\n")
@@ -400,18 +400,21 @@ func (m *mockModel) view(w, h int) (string, string) {
 				cur = sSel.Render("› ")
 			}
 			jb.WriteString(cur)
-			miss := r.StubName() == wiremock.Fallback
+			miss := r.Unmatched()
 			at := time.UnixMilli(r.Request.LoggedDate).Format("15:04:05")
 			stub := r.StubName()
 			line := fmt.Sprintf("%s %-6s %s", at, r.Request.Method, r.Request.URL)
+			if r.Request.Body != "" {
+				line += " " + r.Request.Body
+			}
 			if miss {
-				jb.WriteString(sBad.Render(truncate(line+"  ← 599 unstubbed", w-listW-8)) + "\n")
+				jb.WriteString(sBad.Render(truncate(line+"  ← unstubbed", w-listW-8)) + "\n")
 			} else {
 				jb.WriteString(truncate(line+"  "+sMuted.Render(stub), w-listW-8) + "\n")
 			}
 		}
 	}
-	title := "Request journal"
+	title := "Traffic journal"
 	if m.stubsPane() {
 		title = "Stubs served"
 	}
@@ -447,7 +450,7 @@ func (m *mockModel) journalRows() []wiremock.LoggedRequest {
 	}
 	var out []wiremock.LoggedRequest
 	for _, r := range m.journal {
-		if r.StubName() == wiremock.Fallback {
+		if r.Unmatched() {
 			out = append(out, r)
 		}
 	}

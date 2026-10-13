@@ -95,3 +95,10 @@ Recommended structure: [android-integration.md](android-integration.md).
 - The simulator shares the Mac's loopback, so nothing is forwarded.
 
 A phone under full integration still runs with `--map-remote` (lite behaviour, one device).
+
+## Additional build and transport support
+
+For Kotlin Toolchain projects, see [kotlin-toolchain.md](kotlin-toolchain.md).
+For message fixtures and the optional WebSocket endpoint in the runtime override, see
+[websockets.md](websockets.md). These extend full integration's existing device and
+acceptance mechanisms.

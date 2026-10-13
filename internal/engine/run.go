@@ -29,10 +29,11 @@ type Run struct {
 	Port    int
 	Command string
 
-	locks *lock.Manager
-	reg   *registry.Registry
-	info  *registry.Run
-	WM    *wiremock.Server
+	locks           *lock.Manager
+	reg             *registry.Registry
+	info            *registry.Run
+	websocketActive bool
+	WM              *wiremock.Server
 
 	overrideAuto    bool
 	overrideApplied bool
@@ -324,7 +325,7 @@ func (e *Engine) EnsureJar(ctx context.Context) (string, error) {
 	if e.jar != "" {
 		return e.jar, nil
 	}
-	jar, err := wiremock.EnsureJar(ctx, filepath.Join(e.P.RuntimeRoot(), "wiremock", "wiremock-standalone-"+wiremock.Version+".jar"), e.Logf)
+	jar, err := wiremock.EnsureJarVersion(ctx, e.P.WireMockVersion, filepath.Join(e.P.RuntimeRoot(), "wiremock", "wiremock-standalone-"+e.P.WireMockVersion+".jar"), e.Logf)
 	if err != nil {
 		return "", err
 	}

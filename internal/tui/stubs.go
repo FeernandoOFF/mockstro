@@ -149,6 +149,10 @@ func (s *stubsModel) load(force bool) {
 
 // response summarises status, headers, faults/delays and the body, reading bodyFileName.
 func (s *stubsModel) response(st *fixtures.Store, stub *ojson.Object) []string {
+	if fixtures.IsMessage(stub) {
+		actions, _ := stub.Get("actions")
+		return append([]string{sBold.Render("WebSocket message actions"), sMuted.Render(fixtures.Route(stub)), ""}, indent(actions)...)
+	}
 	resp := stub.Object("response")
 	if resp == nil {
 		return []string{sMuted.Render("no response")}

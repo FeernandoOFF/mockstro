@@ -31,3 +31,29 @@ func TestIntegrationFollowsProjectEnv(t *testing.T) {
 		t.Fatalf("full expected: %+v", p)
 	}
 }
+
+func TestKotlinAndWebSocketConfiguration(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".maestro"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, ".maestro/project.env")
+	if err := os.WriteFile(config, []byte("BUILD_SYSTEM=kotlin-toolchain\nMAESTRO_APP_VARIANT=custom\nWIREMOCK_VERSION=4.0.0-beta.40\nE2E_WEBSOCKET_PATH=/ws\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.GradleTask != "" || p.KotlinVariant != "debug" || p.KotlinIOSModule != "ios" || p.WebSocketPath != "/ws" {
+		t.Fatalf("config: %+v", p)
+	}
+	for _, bad := range []string{"BUILD_SYSTEM=unknown", "BUILD_SYSTEM=kotlin-toolchain\nKOTLIN_VARIANT=custom", "WIREMOCK_VERSION=arbitrary", "E2E_WEBSOCKET_PATH=/ws", "WIREMOCK_VERSION=4.0.0-beta.40\nE2E_WEBSOCKET_PATH=ws://host/ws"} {
+		if err := os.WriteFile(config, []byte(bad), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(root); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}

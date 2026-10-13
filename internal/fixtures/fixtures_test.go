@@ -119,3 +119,23 @@ func TestLayerDuplicatesAndMergeByRoute(t *testing.T) {
 		t.Fatalf("merged %v", merged)
 	}
 }
+
+func TestPlatformTagsAllowSharedFlows(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		tags         []string
+		android, ios bool
+	}{
+		{"legacy", nil, true, false},
+		{"android", []string{"android"}, true, false},
+		{"ios", []string{"ios"}, false, true},
+		{"shared", []string{"android", "ios"}, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flow := &Flow{Header: &Header{Tags: tc.tags}}
+			if flow.MatchesPlatform("android") != tc.android || flow.MatchesPlatform("ios") != tc.ios {
+				t.Fatalf("platform selection for %v", tc.tags)
+			}
+		})
+	}
+}

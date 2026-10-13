@@ -13,14 +13,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feernandooff/mockstro/internal/build"
 	"github.com/feernandooff/mockstro/internal/execx"
-	"github.com/feernandooff/mockstro/internal/fsx"
 	"github.com/feernandooff/mockstro/internal/ojson"
 	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/internal/registry"
 )
 
-var iosEnvKeys = []string{"E2E_API_URL", "E2E_RUN_ID", "E2E_REMOTE_CONFIG", "E2E_EXPIRES_AT"}
+var iosEnvKeys = []string{"E2E_API_URL", "E2E_RUN_ID", "E2E_REMOTE_CONFIG", "E2E_EXPIRES_AT", "E2E_WEBSOCKET_URL"}
 
 type IOS struct {
 	P    *project.Project
@@ -165,59 +165,10 @@ func (i *IOS) showSimulator(ctx context.Context, progress func(string)) {
 }
 
 func (i *IOS) Build(ctx context.Context, artifactDir string, out io.Writer) (string, string, error) {
-	if i.P.IOSProject == "" || i.P.IOSScheme == "" {
-		return "", "", fmt.Errorf("set IOS_PROJECT and IOS_SCHEME in .maestro/project.env")
-	}
-	if out == nil {
-		out = io.Discard
-	}
-	derived := filepath.Join(i.P.Root, "build", "maestro-derived-data")
-	fmt.Fprintf(out, "Building %s (%s, incremental)...\n", i.P.IOSScheme, i.P.IOSConfig)
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		return "", "", err
-	}
-	logPath := filepath.Join(artifactDir, "xcodebuild.log")
-	logf, err := os.Create(logPath)
-	if err != nil {
-		return "", "", err
-	}
-	projFlag := "-project"
-	if strings.HasSuffix(i.P.IOSProject, ".xcworkspace") {
-		projFlag = "-workspace"
-	}
-	err = i.Exec.Run(ctx, execx.Cmd{Name: "xcodebuild", Args: []string{
-		projFlag, filepath.Join(i.P.Root, i.P.IOSProject),
-		"-scheme", i.P.IOSScheme,
-		"-configuration", i.P.IOSConfig,
-		"-sdk", "iphonesimulator",
-		"-destination", "generic/platform=iOS Simulator",
-		"-derivedDataPath", derived,
-		"CODE_SIGNING_ALLOWED=NO",
-		"build",
-	}, Stdout: logf, Stderr: logf})
-	logf.Close()
-	if err != nil {
-		return "", "", fmt.Errorf("xcodebuild failed; see %s", i.P.Rel(logPath))
-	}
-	matches, _ := filepath.Glob(filepath.Join(derived, "Build", "Products", "*", "*.app"))
-	if len(matches) == 0 {
-		return "", "", fmt.Errorf("no .app produced under %s", derived)
-	}
-	app := matches[0]
-	sha, _ := i.ArtifactSHA(app)
-	_ = os.WriteFile(filepath.Join(artifactDir, "apk.sha256"), []byte(sha+"  "+app+"\n"), 0o644)
-	return app, sha, nil
+	return build.Build(ctx, i.P, "ios", i.Exec, artifactDir, out)
 }
 
-// A bundle is a directory, so hash its executable.
-func (i *IOS) ArtifactSHA(path string) (string, error) {
-	exe := filepath.Join(path, strings.TrimSuffix(filepath.Base(path), ".app"))
-	sum, err := fsx.SHA256(exe)
-	if err != nil {
-		return "unhashed", nil
-	}
-	return sum, nil
-}
+func (i *IOS) ArtifactSHA(path string) (string, error) { return build.BundleSHA(path) }
 
 func (i *IOS) ArtifactExists(path string) bool {
 	st, err := os.Stat(path)
@@ -329,23 +280,39 @@ func fbrcJSON(m map[string]string) string {
 // WriteOverride puts the config into the installed bundle (what the app reads on launch) and
 // the simulator environment (what a manual `simctl launch` inherits). Neither is touched by
 // clearState, which lives in the data container.
+func (i *IOS) StopApp(ctx context.Context, serial string) error {
+	out, err := i.simctl(ctx, "terminate", serial, i.P.AppID)
+	if err != nil && (strings.Contains(strings.ToLower(out+err.Error()), "not running") || strings.Contains(strings.ToLower(out+err.Error()), "found nothing to terminate")) {
+		return nil
+	}
+	return err
+}
+
 func (i *IOS) WriteOverride(ctx context.Context, serial string, o Override) error {
 	bundle := i.container(ctx, serial, "app")
 	if bundle == "" {
 		return fmt.Errorf("could not locate the installed app on %s", serial)
 	}
+	if o.WebSocketURL() != "" {
+		if data := i.container(ctx, serial, "data"); data != "" {
+			if err := os.Remove(filepath.Join(data, "Documents", "e2e-accepted-run-id")); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
 	fbrc := fbrcJSON(o.FBRC)
 	exp := strconv.FormatInt(o.ExpiresAt, 10)
 	b, _ := ojson.Marshal(struct {
 		APIURL       string `json:"e2eApiUrl"`
+		WebSocketURL string `json:"e2eWebsocketUrl,omitempty"`
 		RunID        string `json:"e2eRunId"`
 		RemoteConfig string `json:"e2eRemoteConfig"`
 		ExpiresAt    string `json:"e2eExpiresAt"`
-	}{o.APIURL(), o.RunID, fbrc, exp})
+	}{o.APIURL(), o.WebSocketURL(), o.RunID, fbrc, exp})
 	if err := os.WriteFile(filepath.Join(bundle, "e2e-config.json"), b, 0o644); err != nil {
 		return fmt.Errorf("could not write the override into %s: %w", bundle, err)
 	}
-	for k, v := range map[string]string{"E2E_API_URL": o.APIURL(), "E2E_RUN_ID": o.RunID, "E2E_REMOTE_CONFIG": fbrc, "E2E_EXPIRES_AT": exp} {
+	for k, v := range map[string]string{"E2E_API_URL": o.APIURL(), "E2E_WEBSOCKET_URL": o.WebSocketURL(), "E2E_RUN_ID": o.RunID, "E2E_REMOTE_CONFIG": fbrc, "E2E_EXPIRES_AT": exp} {
 		if _, err := i.simctl(ctx, "spawn", serial, "launchctl", "setenv", k, v); err != nil {
 			return fmt.Errorf("could not set %s on simulator %s: %w", k, serial, err)
 		}
@@ -362,11 +329,17 @@ func (i *IOS) PreflightOverride(ctx context.Context, serial string, o Override) 
 	b, _ := os.ReadFile(filepath.Join(bundle, "e2e-config.json"))
 	_ = json.Unmarshal(b, &cfg)
 	seen, _ := cfg["e2eApiUrl"].(string)
-	if seen != o.APIURL() {
+	if seen != o.APIURL() || o.WebSocketURL() != "" && cfg["e2eWebsocketUrl"] != o.WebSocketURL() {
 		if seen == "" {
 			seen = "nothing"
 		}
 		return "", fmt.Errorf("the app bundle on %s does not carry this run's endpoint (got '%s')", serial, seen)
+	}
+	if o.WebSocketURL() != "" {
+		seen, err := i.simctl(ctx, "spawn", serial, "launchctl", "getenv", "E2E_WEBSOCKET_URL")
+		if err != nil || seen != o.WebSocketURL() {
+			return "", fmt.Errorf("iOS WebSocket environment did not round-trip")
+		}
 	}
 	return fmt.Sprintf("Simulator interception active: %s -> 127.0.0.1:%d (simulator environment)", serial, o.Port), nil
 }

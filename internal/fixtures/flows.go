@@ -355,12 +355,12 @@ func (f *Flow) MatchesTags(tags []string) bool {
 	return false
 }
 
-// MatchesPlatform: iOS runs only flows tagged ios; Android runs everything else.
+// Tag both android and ios to share a flow across platforms.
 func (f *Flow) MatchesPlatform(platform string) bool {
 	if platform == "ios" {
 		return f.HasTag("ios")
 	}
-	return !f.HasTag("ios")
+	return !f.HasTag("ios") || f.HasTag("android")
 }
 
 // Profiles.

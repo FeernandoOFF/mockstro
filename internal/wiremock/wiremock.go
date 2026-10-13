@@ -23,11 +23,13 @@ import (
 )
 
 const (
-	Version   = "3.13.2"
-	SHA256    = "d097b19bd483c5038479b13a5c71e9faf8f2f5106584f0c120a7770ab0bdb367"
-	jarURL    = "https://repo1.maven.org/maven2/org/wiremock/wiremock-standalone/" + Version + "/wiremock-standalone-" + Version + ".jar"
-	NoncePath = "/__maestro/nonce"
-	Fallback  = "maestro-fallback"
+	WebSocketVersion = "4.0.0-beta.40"
+	WebSocketSHA256  = "3a53dec6c814ff73da4abb0bc51624215ea2b913beec8d19aa6d54e4c62161d3"
+	Version          = "3.13.2"
+	SHA256           = "d097b19bd483c5038479b13a5c71e9faf8f2f5106584f0c120a7770ab0bdb367"
+	jarURL           = "https://repo1.maven.org/maven2/org/wiremock/wiremock-standalone/" + Version + "/wiremock-standalone-" + Version + ".jar"
+	NoncePath        = "/__maestro/nonce"
+	Fallback         = "maestro-fallback"
 )
 
 func JarPath() string {
@@ -36,9 +38,25 @@ func JarPath() string {
 
 // EnsureJar returns a SHA-verified jar, reusing a project's copy before downloading.
 func EnsureJar(ctx context.Context, projectCopy string, logf func(string, ...any)) (string, error) {
-	jar := JarPath()
+	return EnsureJarVersion(ctx, Version, projectCopy, logf)
+}
+
+func EnsureJarVersion(ctx context.Context, version, projectCopy string, logf func(string, ...any)) (string, error) {
+	if version == "" {
+		version = Version
+	}
+	checksum := SHA256
+	switch version {
+	case Version:
+	case WebSocketVersion:
+		checksum = WebSocketSHA256
+	default:
+		return "", fmt.Errorf("unsupported WireMock version: %s", version)
+	}
+	jarURL := "https://repo1.maven.org/maven2/org/wiremock/wiremock-standalone/" + version + "/wiremock-standalone-" + version + ".jar"
+	jar := filepath.Join(paths.CacheRoot(), "wiremock", "wiremock-standalone-"+version+".jar")
 	if sum, err := fsx.SHA256(jar); err == nil {
-		if sum == SHA256 {
+		if sum == checksum {
 			return jar, nil
 		}
 		logf("Setting aside WireMock JAR with invalid SHA-256: %s", sum)
@@ -50,13 +68,13 @@ func EnsureJar(ctx context.Context, projectCopy string, logf func(string, ...any
 	tmp := fmt.Sprintf("%s.download.%d", jar, os.Getpid())
 	defer os.Remove(tmp)
 	if projectCopy != "" {
-		if sum, err := fsx.SHA256(projectCopy); err == nil && sum == SHA256 {
+		if sum, err := fsx.SHA256(projectCopy); err == nil && sum == checksum {
 			if err := fsx.CopyAtomic(projectCopy, tmp); err == nil {
-				return jar, publish(tmp, jar)
+				return jar, publish(tmp, jar, checksum)
 			}
 		}
 	}
-	logf("Downloading WireMock standalone %s...", Version)
+	logf("Downloading WireMock standalone %s...", version)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, jarURL, nil)
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -84,15 +102,15 @@ func EnsureJar(ctx context.Context, projectCopy string, logf func(string, ...any
 		return "", fmt.Errorf("failed to download WireMock from %s: %w", jarURL, lastErr)
 	}
 	sum, _ := fsx.SHA256(tmp)
-	if sum != SHA256 {
-		return "", fmt.Errorf("WireMock SHA-256 mismatch: expected %s, got %s", SHA256, sum)
+	if sum != checksum {
+		return "", fmt.Errorf("WireMock SHA-256 mismatch: expected %s, got %s", checksum, sum)
 	}
-	return jar, publish(tmp, jar)
+	return jar, publish(tmp, jar, checksum)
 }
 
 // publish only replaces the jar if nobody else already won the race with a valid one.
-func publish(tmp, jar string) error {
-	if sum, err := fsx.SHA256(jar); err == nil && sum == SHA256 {
+func publish(tmp, jar, checksum string) error {
+	if sum, err := fsx.SHA256(jar); err == nil && sum == checksum {
 		return nil
 	}
 	return os.Rename(tmp, jar)
@@ -115,12 +133,13 @@ func PortListener(ctx context.Context, ex execx.Runner, port int) string {
 
 // Server is one run's WireMock.
 type Server struct {
-	Port  int
-	RunID string
-	Log   string
-	cmd   *exec.Cmd
-	exit  chan struct{}
-	http  *http.Client
+	MessageSupport bool
+	Port           int
+	RunID          string
+	Log            string
+	cmd            *exec.Cmd
+	exit           chan struct{}
+	http           *http.Client
 }
 
 func (s *Server) base() string { return "http://127.0.0.1:" + strconv.Itoa(s.Port) }
@@ -146,7 +165,7 @@ func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, run
 		logf.Close()
 		return nil, fmt.Errorf("start WireMock: %w", err)
 	}
-	s := &Server{Port: port, RunID: runID, Log: logPath, cmd: cmd, exit: make(chan struct{}), http: &http.Client{Timeout: 10 * time.Second}}
+	s := &Server{Port: port, RunID: runID, Log: logPath, MessageSupport: strings.Contains(filepath.Base(jar), WebSocketVersion), cmd: cmd, exit: make(chan struct{}), http: &http.Client{Timeout: 10 * time.Second}}
 	go func() { _ = cmd.Wait(); logf.Close(); close(s.exit) }()
 
 	deadline := time.Now().Add(30 * time.Second)
@@ -260,12 +279,29 @@ func (s *Server) post(path string, body any) error {
 }
 
 // Replace wipes every mapping and imports the given set (the nonce must be in it).
-func (s *Server) Replace(mappings []any) error {
+func (s *Server) Replace(mappings []any, messageSets ...[]any) error {
+	var messages []any
+	for _, set := range messageSets {
+		messages = append(messages, set...)
+	}
+	if len(messages) > 0 && !s.MessageSupport {
+		return fmt.Errorf("message fixtures require WireMock %s", WebSocketVersion)
+	}
 	if err := s.AssertOwn(); err != nil {
 		return err
 	}
 	if _, err := s.do(http.MethodDelete, "/__admin/mappings", nil); err != nil {
 		return fmt.Errorf("failed to clear WireMock mappings: %w", err)
+	}
+	if s.MessageSupport {
+		if _, err := s.do(http.MethodDelete, "/__admin/message-mappings", nil); err != nil {
+			return fmt.Errorf("clear message mappings: %w", err)
+		}
+		for _, mapping := range messages {
+			if err := s.post("/__admin/message-mappings", mapping); err != nil {
+				return fmt.Errorf("load message mapping: %w", err)
+			}
+		}
 	}
 	payload := map[string]any{"mappings": mappings}
 	if err := s.post("/__admin/mappings/import", payload); err != nil {
@@ -277,11 +313,18 @@ func (s *Server) Replace(mappings []any) error {
 	if _, err := s.do(http.MethodDelete, "/__admin/requests", nil); err != nil {
 		return fmt.Errorf("failed to reset WireMock request journal: %w", err)
 	}
+	if s.MessageSupport {
+		if _, err := s.do(http.MethodDelete, "/__admin/messages", nil); err != nil {
+			return fmt.Errorf("clear message journal: %w", err)
+		}
+	}
 	return nil
 }
 
 type LoggedRequest struct {
-	Request struct {
+	MessageUnmatched bool `json:"-"`
+	Request          struct {
+		Body       string `json:"body,omitempty"`
 		URL        string `json:"url"`
 		Method     string `json:"method"`
 		LoggedDate int64  `json:"loggedDate"`
@@ -297,6 +340,8 @@ func (r LoggedRequest) StubName() string {
 	}
 	return r.StubMapping.Name
 }
+
+func (r LoggedRequest) Unmatched() bool { return r.MessageUnmatched || r.StubName() == Fallback }
 
 func (r LoggedRequest) Path() string {
 	p, _, _ := strings.Cut(r.Request.URL, "?")
