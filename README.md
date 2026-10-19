@@ -12,13 +12,53 @@ reports the result. It has a CLI for scripts, agents and CI, and a TUI for human
 
 ## Install
 
+From an app repository that already has `.maestro/`, run the project installer.
+No global mockstro or Go installation is needed:
+
 ```bash
-make install          # builds ~/.local/bin/mockstro
+# Replace vX.Y.Z with a published release containing the installer assets.
+version=vX.Y.Z
+installer=$(mktemp)
+curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+  "https://github.com/FeernandoOFF/mockstro/releases/download/$version/install.sh" \
+  -o "$installer"
+sh "$installer" "$version" "$PWD"
+rm "$installer"
+
+./mockstrow --version
+./mockstrow skill install --claude   # optional Claude link; canonical skill is in .agents/skills
+# Commit mockstrow, .maestro/.mockstro-version and the installed skill/link.
 ```
 
-Build: Go 1.25+. Runtime: Java 17+, the Maestro CLI, and `adb` (Android) or Xcode (iOS).
-`mockstro setup` validates the project's fixtures and fetches the pinned WireMock jar, whose
-SHA is verified.
+The installer verifies the released wrapper, uses it to download and verify the pinned
+CLI, then calls that CLI's bootstrap command. It preserves `.maestro/` configuration
+and refuses to overwrite an existing wrapper or pin. It installs no global binary.
+If a CLI is already available, `mockstro bootstrap --cli-version vX.Y.Z` adds the same files.
+The release workflow must publish the new assets before installation from GitHub works;
+older releases may lack them. Source installation remains `make install` (Go 1.25.6+).
+
+After cloning the app, teammates simply run:
+
+```bash
+./mockstrow setup
+./mockstrow run         # smoke flows; ./mockstrow opens the TUI in a terminal
+```
+
+The wrapper supports macOS/Linux on arm64/amd64, downloads the exact pinned release,
+verifies SHA256, and atomically caches the binary under `~/.cache/mockstro/cli/`
+(or `MOCKSTRO_CACHE_DIR`). It verifies cached binaries before reuse, works offline
+after the first download, and never substitutes a global `mockstro`. Installation and
+first use need `curl` and `sha256sum` or `shasum`.
+
+Runtime: Java 17+, the Maestro CLI, and `adb` (Android) or Xcode (iOS), plus a configured
+device. `./mockstrow setup` validates fixtures and fetches the checksum-pinned WireMock jar.
+External mobile tools and devices are managed separately.
+
+The built-in skill ships with the CLI release. `skill install` copies it into
+`.agents/skills/mockstro`; `--claude` adds a relative `.claude/skills/mockstro` symlink to
+the same files. Existing skills/links are preserved. For upgrades, change the version pin;
+review and remove the previous skill directory/link before explicitly reinstalling from
+the new CLI. Keep local edits separately if you want to retain them.
 
 ## Project layout
 
@@ -26,6 +66,7 @@ mockstro works on the nearest parent directory that contains `.maestro/`. Use `-
 
 ```
 .maestro/
+├── .mockstro-version         # CLI release pin read by the root mockstrow launcher
 ├── config.yaml
 ├── project.env               # optional: enables full integration (see below)
 ├── flows/<feature>/*.yaml    # Maestro flows, grouped by feature
@@ -180,3 +221,13 @@ is deleted (its SHA-256 is kept in `run.json`), and the project is pruned to the
 make test             # hermetic engine checks + TUI render tests
 make vet
 ```
+
+### Release assets
+
+`scripts/build-release.sh vX.Y.Z` builds four static CLI binaries, the standalone
+`mockstrow`, `install.sh`, and `checksums.txt` into an empty `dist/` directory. The canonical skill is
+embedded from `skills/mockstro/`; the canonical launcher is `internal/bootstrap/mockstrow`.
+The GitHub workflow tests and vets before building. Manual dispatch uploads build artifacts
+only; pushing a `vX.Y.Z` tag publishes a GitHub release. No release is published by local builds.
+Checksums detect corruption against release metadata fetched over HTTPS; they are not
+independent signatures or protection against a compromised release publisher.
