@@ -1,4 +1,13 @@
+<p align="center">
+  <img src="docs/assets/monstruo.png" alt="Mockstro's friendly mint monster mascot holding a conductor's baton" width="220">
+</p>
+
 # Mockstro
+
+**Deterministic mobile UI testing, orchestrated.**
+
+Mockstro brings Maestro flows and WireMock API fixtures together in a Go CLI and TUI
+for reliable Android and iOS end-to-end tests—locally, with agents, and in CI.
 
 Runs a repository's [Maestro](https://maestro.mobile.dev) UI flows against a local
 [WireMock](https://wiremock.org), on Android emulators or iOS simulators. Every flow says which
