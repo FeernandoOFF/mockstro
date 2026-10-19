@@ -2,8 +2,8 @@
 # Build the same assets locally and in CI; this script never publishes them.
 set -eu
 version=${1:?usage: scripts/build-release.sh vX.Y.Z [output-directory]}
-case "$version" in *[!v0-9.]*|"") echo 'expected vX.Y.Z' >&2; exit 1 ;; esac
-printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || exit 1
+case "$version" in *[!0-9A-Za-z.-]*|"") echo 'expected vX.Y.Z' >&2; exit 1 ;; esac
+printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || exit 1
 out=${2:-dist}
 mkdir -p "$out"
 # Refuse stale assets in a reused directory.

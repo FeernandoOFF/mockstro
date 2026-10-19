@@ -15,7 +15,7 @@ import (
 //go:embed mockstrow
 var Wrapper []byte
 
-var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
 
 // Project adds a wrapper and explicit pin to an existing .maestro project.
 // Existing files are never replaced, including symlinks.

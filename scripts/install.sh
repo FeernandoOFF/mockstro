@@ -6,8 +6,8 @@ usage() { echo 'Usage: sh install.sh vX.Y.Z [project-directory]'; }
 if [ "${1:-}" = --help ]; then usage; exit 0; fi
 [ "$#" -ge 1 ] && [ "$#" -le 2 ] || { usage >&2; exit 1; }
 version=$1
-case "$version" in *[!v0-9.]*|"") fail "version must be one release tag such as v1.2.3" ;; esac
-printf '%s\n' "$version" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || fail "version must be a release tag such as v1.2.3"
+case "$version" in *[!0-9A-Za-z.-]*|"") fail "version must be one release tag such as v1.2.3" ;; esac
+printf '%s\n' "$version" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || fail "version must be a release tag such as v1.2.3"
 project=$(CDPATH='' cd -- "${2:-.}" && pwd)
 [ -d "$project/.maestro" ] || fail "expected an existing .maestro directory in $project"
 for path in "$project/mockstrow" "$project/.maestro/.mockstro-version"; do

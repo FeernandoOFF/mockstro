@@ -16,8 +16,8 @@ From an app repository that already has `.maestro/`, run the project installer.
 No global mockstro or Go installation is needed:
 
 ```bash
-# Replace vX.Y.Z with a published release containing the installer assets.
-version=vX.Y.Z
+# Run after this release is published.
+version=v0.1.0-rc.1
 installer=$(mktemp)
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
   "https://github.com/FeernandoOFF/mockstro/releases/download/$version/install.sh" \
@@ -44,6 +44,7 @@ After cloning the app, teammates simply run:
 ./mockstrow run         # smoke flows; ./mockstrow opens the TUI in a terminal
 ```
 
+Stable and prerelease pins (such as `v0.1.0-rc.1`) are supported.
 The wrapper supports macOS/Linux on arm64/amd64, downloads the exact pinned release,
 verifies SHA256, and atomically caches the binary under `~/.cache/mockstro/cli/`
 (or `MOCKSTRO_CACHE_DIR`). It verifies cached binaries before reuse, works offline
@@ -228,6 +229,6 @@ make vet
 `mockstrow`, `install.sh`, and `checksums.txt` into an empty `dist/` directory. The canonical skill is
 embedded from `skills/mockstro/`; the canonical launcher is `internal/bootstrap/mockstrow`.
 The GitHub workflow tests and vets before building. Manual dispatch uploads build artifacts
-only; pushing a `vX.Y.Z` tag publishes a GitHub release. No release is published by local builds.
+only; pushing a version tag publishes a GitHub release (marked as a prerelease for tags such as `v0.1.0-rc.1`). No release is published by local builds.
 Checksums detect corruption against release metadata fetched over HTTPS; they are not
 independent signatures or protection against a compromised release publisher.

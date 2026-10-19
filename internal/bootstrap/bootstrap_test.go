@@ -75,3 +75,22 @@ func TestSkillInstall(t *testing.T) {
 		t.Fatal("lost user edits")
 	}
 }
+
+func TestReleaseTags(t *testing.T) {
+	for _, version := range []string{"v1.2.3", "v0.1.0-rc.1", "v0.1.0-beta", "v0.1.0-alpha.2"} {
+		t.Run(version, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, ".maestro"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := Project(root, version); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, version := range []string{"v0.1.0-", "v0.1.0-rc..1", "v0.1.0-rc.1/other", "v0.1.0-rc.1\nv1.0.0"} {
+		if releaseTag.MatchString(version) {
+			t.Fatalf("accepted malformed release tag %q", version)
+		}
+	}
+}

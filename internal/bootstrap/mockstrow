@@ -5,8 +5,8 @@ fail() { echo "mockstrow: $*" >&2; exit 1; }
 root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 [ -f "$root/.maestro/.mockstro-version" ] || fail "missing $root/.maestro/.mockstro-version; ask the project maintainer to pin a release"
 version=$(cat "$root/.maestro/.mockstro-version")
-case "$version" in *[!v0-9.]*|"") fail "pin must contain one release tag" ;; esac
-printf '%s\n' "$version" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || fail "pin must be a release tag such as v1.2.3"
+case "$version" in *[!0-9A-Za-z.-]*|"") fail "pin must contain one release tag" ;; esac
+printf '%s\n' "$version" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || fail "pin must be a release tag such as v1.2.3"
 case $(uname -s) in
     Darwin) os=darwin ;;
     Linux) os=linux ;;

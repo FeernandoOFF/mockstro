@@ -36,7 +36,7 @@ cp "$ASSETS/${3##*/}" "$2"
 `), 0755)
 	os.WriteFile(filepath.Join(bin, "mockstro"), []byte("#!/bin/sh\necho wrong-global; exit 99\n"), 0755)
 	payload := []byte("#!/bin/sh\nprintf '<%s>\\n' \"$@\"\nexit \"${CLI_EXIT:-0}\"\n")
-	asset := "mockstro_v1.2.3_" + runtime.GOOS + "_" + runtime.GOARCH
+	asset := "mockstro_v0.1.0-rc.1_" + runtime.GOOS + "_" + runtime.GOARCH
 	os.WriteFile(filepath.Join(assets, asset), payload, 0644)
 	os.WriteFile(filepath.Join(assets, "mockstrow"), Wrapper, 0644)
 	checksums := []byte(fmt.Sprintf("%x  mockstrow\n%x  %s\n", sha256.Sum256(Wrapper), sha256.Sum256(payload), asset))
@@ -52,17 +52,17 @@ cp "$ASSETS/${3##*/}" "$2"
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	out, err := run("v1.2.3", "0")
-	want := "<-C>\n<" + project + ">\n<bootstrap>\n<--cli-version>\n<v1.2.3>\n"
+	out, err := run("v0.1.0-rc.1", "0")
+	want := "<-C>\n<" + project + ">\n<bootstrap>\n<--cli-version>\n<v0.1.0-rc.1>\n"
 	if err != nil || !strings.Contains(out, want) || strings.Contains(out, "wrong-global") {
 		t.Fatalf("bootstrap delegation failed: %q, %v", out, err)
 	}
-	out, err = run("v1.2.3", "17")
+	out, err = run("v0.1.0-rc.1", "17")
 	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 17 {
 		t.Fatalf("lost CLI failure status: %q, %v", out, err)
 	}
 	os.WriteFile(filepath.Join(assets, "mockstrow"), []byte("#!/bin/sh\necho unverified-wrapper\n"), 0644)
-	out, err = run("v1.2.3", "0")
+	out, err = run("v0.1.0-rc.1", "0")
 	if err == nil || !strings.Contains(out, "checksum mismatch") || strings.Contains(out, "unverified-wrapper") {
 		t.Fatalf("accepted corrupt wrapper: %q, %v", out, err)
 	}
@@ -70,7 +70,7 @@ cp "$ASSETS/${3##*/}" "$2"
 		// Even a dangling symlink must block installation before network access.
 		os.Remove(filepath.Join(assets, "requests"))
 		os.Symlink("missing", path)
-		out, err = run("v1.2.3", "0")
+		out, err = run("v0.1.0-rc.1", "0")
 		if err == nil || !strings.Contains(out, "refusing to overwrite") {
 			t.Fatalf("accepted existing path: %q, %v", out, err)
 		}
@@ -79,7 +79,7 @@ cp "$ASSETS/${3##*/}" "$2"
 		}
 		os.Remove(path)
 	}
-	for _, version := range []string{"latest", "v1.2.3\n../../other", "v1.2.3/other"} {
+	for _, version := range []string{"latest", "v0.1.0-rc.1\n../../other", "v0.1.0-rc.1/other"} {
 		if out, err := run(version, "0"); err == nil {
 			t.Fatalf("accepted %q: %s", version, out)
 		}
@@ -88,7 +88,7 @@ cp "$ASSETS/${3##*/}" "$2"
 		t.Fatal("changed existing config")
 	}
 	os.RemoveAll(filepath.Join(project, ".maestro"))
-	if out, err := run("v1.2.3", "0"); err == nil || !strings.Contains(out, "existing .maestro") {
+	if out, err := run("v0.1.0-rc.1", "0"); err == nil || !strings.Contains(out, "existing .maestro") {
 		t.Fatalf("accepted project without .maestro: %q, %v", out, err)
 	}
 }

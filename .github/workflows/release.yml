@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version for build-only validation (vX.Y.Z)'
+        description: 'Version for build-only validation (e.g. v0.1.0-rc.1)'
         required: true
         type: string
 permissions:
@@ -51,4 +51,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes
+        run: |
+          case "$RELEASE_TAG" in
+            *-*) set -- --prerelease ;;
+            *) set -- ;;
+          esac
+          gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes "$@"

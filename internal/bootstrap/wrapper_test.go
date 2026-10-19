@@ -23,7 +23,7 @@ func TestWrapper(t *testing.T) {
 	for _, dir := range []string{filepath.Join(project, ".maestro"), bin, assets} {
 		os.MkdirAll(dir, 0755)
 	}
-	if err := Project(project, "v1.2.3"); err != nil {
+	if err := Project(project, "v0.1.0-rc.1"); err != nil {
 		t.Fatal(err)
 	}
 	// Fake only the network transport. Exercise the real checksum tools and shell.
@@ -38,7 +38,7 @@ cp "$ASSETS/${url##*/}" "$out"
 	os.WriteFile(filepath.Join(bin, "curl"), []byte(curl), 0755)
 	os.WriteFile(filepath.Join(bin, "mockstro"), []byte("#!/bin/sh\necho wrong-global; exit 99\n"), 0755)
 	payload := []byte("#!/bin/sh\nprintf '<%s>\\n' \"$@\"\nexit 7\n")
-	asset := "mockstro_v1.2.3_" + runtime.GOOS + "_" + runtime.GOARCH
+	asset := "mockstro_v0.1.0-rc.1_" + runtime.GOOS + "_" + runtime.GOARCH
 	os.WriteFile(filepath.Join(assets, asset), payload, 0644)
 	checksums := filepath.Join(assets, "checksums.txt")
 	os.WriteFile(checksums, []byte(fmt.Sprintf("%x  %s\n", sha256.Sum256(payload), asset)), 0644)
@@ -59,7 +59,7 @@ cp "$ASSETS/${url##*/}" "$out"
 	assertRun()
 	os.WriteFile(filepath.Join(assets, "offline"), nil, 0644)
 	assertRun() // Verified cached binary needs no network.
-	cached := filepath.Join(cache, "cli", "v1.2.3", runtime.GOOS+"_"+runtime.GOARCH, "mockstro")
+	cached := filepath.Join(cache, "cli", "v0.1.0-rc.1", runtime.GOOS+"_"+runtime.GOARCH, "mockstro")
 	os.WriteFile(cached, []byte("#!/bin/sh\necho corrupted\n"), 0755)
 	out, err := run()
 	if err == nil || strings.Contains(out, "corrupted") || !strings.Contains(out, "download failed") {
@@ -72,7 +72,7 @@ cp "$ASSETS/${url##*/}" "$out"
 		t.Fatalf("accepted invalid download: %q, %v", out, err)
 	}
 	// A malformed multiline pin must fail before any cache/network activity.
-	os.WriteFile(filepath.Join(project, ".maestro", ".mockstro-version"), []byte("v1.2.3\n../../other\n"), 0644)
+	os.WriteFile(filepath.Join(project, ".maestro", ".mockstro-version"), []byte("v0.1.0-rc.1\n../../other\n"), 0644)
 	out, err = run()
 	if err == nil || !strings.Contains(out, "one release tag") {
 		t.Fatalf("accepted multiline pin: %q, %v", out, err)
