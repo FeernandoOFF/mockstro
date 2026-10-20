@@ -33,6 +33,10 @@ func (p *Printer) prefix(w int) string {
 func (p *Printer) Handle(ev engine.Event) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	prefix := p.prefix(ev.Worker)
+	if ev.Platform != "" {
+		prefix = "[" + ev.Platform + "] " + prefix
+	}
 	switch ev.Kind {
 	case engine.EvLog:
 		w := p.Out
@@ -40,15 +44,15 @@ func (p *Printer) Handle(ev engine.Event) {
 			w = p.Err
 		}
 		for _, line := range strings.Split(ev.Text, "\n") {
-			fmt.Fprintln(w, p.prefix(ev.Worker)+line)
+			fmt.Fprintln(w, prefix+line)
 		}
 	case engine.EvOutput:
 		if !p.Quiet {
-			fmt.Fprintln(p.Out, p.prefix(ev.Worker)+ev.Text)
+			fmt.Fprintln(p.Out, prefix+ev.Text)
 		}
 	case engine.EvWorker:
 		if p.Parallel {
-			fmt.Fprintf(p.Out, "%sdevice %s, port %d, run dir %s\n", p.prefix(ev.Worker), ev.Device, ev.Port, ev.Text)
+			fmt.Fprintf(p.Out, "%sdevice %s, port %d, run dir %s\n", prefix, ev.Device, ev.Port, ev.Text)
 		}
 	case engine.EvFlowResult:
 		r := ev.Result
@@ -56,7 +60,10 @@ func (p *Printer) Handle(ev engine.Event) {
 		if !r.Passed() {
 			status = "FAIL (" + r.Stage + ")"
 		}
-		fmt.Fprintf(p.Out, "%s%s %s/%s in %ds\n", p.prefix(ev.Worker), status, r.Feature, r.File, int(r.Duration.Seconds()))
+		fmt.Fprintf(p.Out, "%s%s %s/%s in %ds\n", prefix, status, r.Feature, r.File, int(r.Duration.Seconds()))
+		if r.Message != "" {
+			fmt.Fprintln(p.Err, prefix+r.Message)
+		}
 	}
 }
 
@@ -68,14 +75,14 @@ func fit(s string, w int) string {
 }
 
 func PrintSummary(w io.Writer, s *engine.Summary) {
-	fmt.Fprintf(w, "\n%s %s %-8s %-11s %-6s %s\n", fit("Feature", 14), fit("Flow", 42), "Status", "Stage", "Exit", "Duration")
+	fmt.Fprintf(w, "\n%-8s %s %s %-8s %-11s %-6s %s\n", "Platform", fit("Feature", 14), fit("Flow", 42), "Status", "Stage", "Exit", "Duration")
 	fmt.Fprintln(w, strings.Repeat("-", 94))
 	for _, r := range s.Results {
 		status := "PASS"
 		if !r.Passed() {
 			status = "FAIL"
 		}
-		fmt.Fprintf(w, "%s %s %-8s %-11s %-6d %ds\n", fit(r.Feature, 14), fit(r.File, 42), status, r.Stage, r.Exit, int(r.Duration.Seconds()))
+		fmt.Fprintf(w, "%-8s %s %s %-8s %-11s %-6d %ds\n", r.Platform, fit(r.Feature, 14), fit(r.File, 42), status, r.Stage, r.Exit, int(r.Duration.Seconds()))
 	}
 	fmt.Fprintln(w, strings.Repeat("-", 94))
 	t := int(s.Total.Seconds())
@@ -83,7 +90,7 @@ func PrintSummary(w io.Writer, s *engine.Summary) {
 }
 
 func PrintFailedReruns(w io.Writer, p *project.Project, s *engine.Summary) {
-	var paths []string
+	byPlatform := map[string][]string{}
 	for _, r := range s.Results {
 		if r.Passed() {
 			continue
@@ -92,12 +99,21 @@ func PrintFailedReruns(w io.Writer, p *project.Project, s *engine.Summary) {
 		if path == "" {
 			path = filepath.Join(p.FlowsRoot(), r.Feature, r.File)
 		}
-		paths = append(paths, shellQuote(p.Rel(path)))
+		byPlatform[r.Platform] = append(byPlatform[r.Platform], shellQuote(p.Rel(path)))
 	}
-	if len(paths) == 0 {
+	if len(byPlatform) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "\nTo re-run the failed flow(s):\n  mockstro run %s\n", strings.Join(paths, " "))
+	fmt.Fprintln(w, "\nTo re-run the failed flow/platform pairs:")
+	for _, name := range []string{"", "android", "ios"} {
+		if paths := byPlatform[name]; len(paths) > 0 {
+			flag := ""
+			if name != "" {
+				flag = " --platform " + name
+			}
+			fmt.Fprintf(w, "  ./mockstrow run%s %s\n", flag, strings.Join(paths, " "))
+		}
+	}
 }
 
 func PrintRecordings(w io.Writer, p *project.Project, s *engine.Summary) {

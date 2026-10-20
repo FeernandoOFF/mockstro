@@ -73,9 +73,6 @@ func (f *flowsModel) apply() {
 	f.visible = f.visible[:0]
 	f.tagCount = make([]int, len(f.tags))
 	for _, fl := range f.a.flows {
-		if !fl.MatchesPlatform(f.a.opts.Platform) {
-			continue
-		}
 		if q != "" {
 			hay := strings.ToLower(fl.Rel + " " + strings.Join(fl.Header.Tags, " ") + " " + fl.Header.Profile + " " + fl.Header.Name)
 			if !strings.Contains(hay, q) {
@@ -146,6 +143,10 @@ func (f *flowsModel) key(k tea.KeyMsg) tea.Cmd {
 		f.apply()
 	case "f":
 		f.focusList = !f.focusList
+	case "e":
+		if f.focusList && f.cursor < len(f.visible) {
+			return f.a.editFile(f.visible[f.cursor].Path)
+		}
 	case " ":
 		if f.focusList && f.cursor < len(f.visible) {
 			p := f.visible[f.cursor].Path
@@ -215,7 +216,12 @@ func (f *flowsModel) view(w, h int) (string, string) {
 			feature = fl.Feature
 			lastFeature = fl.Feature
 		}
-		tags := sMuted.Render(strings.Join(fl.Header.Tags, ","))
+		names := []string{}
+		targets, _ := f.a.p.Selected(f.a.opts.Platform)
+		for _, target := range targets {
+			names = append(names, target.Platform)
+		}
+		tags := sMuted.Render("[" + strings.Join(names, "+") + "] " + strings.Join(fl.Header.Tags, ","))
 		line := fmt.Sprintf("%s%s %s %s %s %s", cur, mark, pad(sMuted.Render(feature), 12), pad(name, 44), pad(fl.Header.Profile, 11), tags)
 		b.WriteString(truncate(line, listW-4) + "\n")
 	}
@@ -232,7 +238,7 @@ func (f *flowsModel) view(w, h int) (string, string) {
 		focusPanel(!f.focusList, "Tags", tb.String(), tagW, listH+2),
 		focusPanel(f.focusList, "Flows", b.String(), listW, listH+2))
 	body := lipgloss.JoinVertical(lipgloss.Left, " "+head, panes, " "+truncate(detail, w-2))
-	help := navHelp + " · f switch panel · space select · a all · n none · / filter · esc clear · c configure run"
+	help := navHelp + " · f switch panel · space select · a all · n none · e edit · / filter · esc clear · c configure run"
 	if !f.focusList {
 		help = navHelp + " tag · enter/f flows · a all · n none · / filter · esc clear · c configure run"
 	}

@@ -52,10 +52,11 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 		if dv := d.device(serial); dv != nil {
 			was = dv.Proxy
 		}
+		query := a.deviceQuery(serial)
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			return proxyClearedMsg{serial, was, a.query.Plat.ClearProxy(ctx, serial)}
+			return proxyClearedMsg{serial, was, query.Plat.ClearProxy(ctx, serial)}
 		}
 	}
 	if d.confirmStop != "" {
@@ -66,10 +67,11 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 		}
 		d.clearing = serial
 		a.log("info", "stopping %s…", serial)
+		query := a.deviceQuery(serial)
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			return deviceStoppedMsg{serial, a.query.Plat.Shutdown(ctx, serial)}
+			return deviceStoppedMsg{serial, query.Plat.Shutdown(ctx, serial)}
 		}
 	}
 	if d.confirmSweep {
@@ -129,10 +131,11 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 				state := map[bool]string{true: "shown", false: "hidden"}[show]
 				d.clearing = dv.Serial
 				a.log("info", "setting on-screen keyboard %s on %s…", state, dv.Serial)
+				query := a.deviceQuery(dv.Serial)
 				return func() tea.Msg {
 					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 					defer cancel()
-					return keyboardSetMsg{dv.Serial, state, a.query.Plat.SetKeyboard(ctx, dv.Serial, show)}
+					return keyboardSetMsg{dv.Serial, state, query.Plat.SetKeyboard(ctx, dv.Serial, show)}
 				}
 			}
 		}
@@ -142,6 +145,13 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		name := boot[i]
+		query := a.query
+		if platform, rest, ok := strings.Cut(name, "/"); ok && (platform == "android" || platform == "ios") {
+			o := a.opts
+			o.Platform = platform
+			query = engine.New(a.p, o, a.query.Exec, nil)
+			name = rest
+		}
 		headless := k.String() == "B"
 		d.booting = name
 		mode := ""
@@ -152,7 +162,7 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 			defer cancel()
-			serial, err := a.query.Plat.Boot(ctx, name, headless, func(s string) { a.prog.Send(activityMsg{"info", s}) })
+			serial, err := query.Plat.Boot(ctx, name, headless, func(s string) { a.prog.Send(activityMsg{"info", s}) })
 			return bootDoneMsg{name, serial, err}
 		}
 	case "S":
@@ -191,7 +201,7 @@ func (d *dashModel) view(w, h int) (string, string) {
 			if x.Designated {
 				des = sTitle.Render(" ★")
 			}
-			fmt.Fprintf(&dev, "%s%s %s%s  %s\n", cur, pad(x.Serial, 16), pad(x.Name, 22), des, state)
+			fmt.Fprintf(&dev, "%s%s %s%s  %s\n", cur, pad(strings.TrimPrefix(x.Platform+"/"+x.Serial, "/"), 24), pad(x.Name, 22), des, state)
 			switch x.Keyboard {
 			case "shown", "hidden":
 				dev.WriteString(sMuted.Render("    ⌨ keyboard "+x.Keyboard) + "\n")
@@ -205,7 +215,7 @@ func (d *dashModel) view(w, h int) (string, string) {
 		}
 		dev.WriteString("\n" + sBold.Render("Bootable") + sMuted.Render("  (b to boot, B headless)") + "\n")
 		if len(st.Bootable) == 0 {
-			dev.WriteString(sMuted.Render("none — set MAESTRO_AGENT_AVDS in .maestro/project.env or list AVDs in "+paths.DesignatedFile()) + "\n")
+			dev.WriteString(sMuted.Render("none — set platforms.android.devices in .maestro/mockstro.yaml or list AVDs in "+paths.DesignatedFile()) + "\n")
 		}
 		for i, n := range st.Bootable {
 			cur := "  "
@@ -234,16 +244,18 @@ func (d *dashModel) view(w, h int) (string, string) {
 	}
 
 	var info strings.Builder
-	fmt.Fprintf(&info, "App id     %s\n", a.p.AppID)
-	fmt.Fprintf(&info, "Integration %s\n", a.p.IntegrationLabel())
-	if a.p.Lite() {
-		fmt.Fprintf(&info, "Build      %s\n", sMuted.Render("none: runs use the installed app"))
-	} else if a.p.BuildSystem == "kotlin-toolchain" {
-		fmt.Fprintf(&info, "Build      Kotlin Toolchain (%s)\n", a.p.KotlinVariant)
-	} else if a.opts.Platform == "ios" {
-		fmt.Fprintf(&info, "Scheme     %s (%s)\n", a.p.IOSScheme, a.p.IOSConfig)
-	} else {
-		fmt.Fprintf(&info, "Build      %s\n", a.p.GradleTask)
+	targets, _ := a.p.Selected(a.opts.Platform)
+	for _, target := range targets {
+		fmt.Fprintf(&info, "%s: %s · %s\n", target.Platform, target.AppID, target.IntegrationLabel())
+		if target.Lite() {
+			fmt.Fprintf(&info, "Build      %s\n", sMuted.Render("none: runs use the installed app"))
+		} else if target.BuildSystem == "kotlin-toolchain" {
+			fmt.Fprintf(&info, "Build      Kotlin Toolchain (%s)\n", target.KotlinVariant)
+		} else if target.Platform == "ios" {
+			fmt.Fprintf(&info, "Scheme     %s (%s)\n", target.IOSScheme, target.IOSConfig)
+		} else {
+			fmt.Fprintf(&info, "Build      %s\n", target.GradleTask)
+		}
 	}
 	if a.fixErr != nil {
 		fmt.Fprintf(&info, "Fixtures   %s\n", sBad.Render(a.fixErr.Error()))

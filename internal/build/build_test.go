@@ -26,9 +26,10 @@ func kotlinProject(t *testing.T) *project.Project {
 }
 func TestKotlinBuildSnapshotsAndroid(t *testing.T) {
 	p := kotlinProject(t)
-	source := filepath.Join(p.Root, "build/tasks/_android_buildAndroidDebug/app.apk")
+	p.BuildRoot = t.TempDir()
+	source := filepath.Join(p.SourceRoot(), "build/tasks/_android_buildAndroidDebug/app.apk")
 	fake := &execx.Fake{Handler: func(c execx.Cmd) (string, error) {
-		if c.String() != "./kotlin build -m android -p android -v debug" || c.Dir != p.Root {
+		if c.String() != "./kotlin build -m android -p android -v debug" || c.Dir != p.SourceRoot() {
 			t.Fatalf("wrong build: %+v", c)
 		}
 		write(t, source, "original")

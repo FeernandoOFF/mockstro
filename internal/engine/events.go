@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -20,18 +21,19 @@ const (
 )
 
 type Event struct {
-	Kind    EventKind
-	Time    time.Time
-	Worker  int // 0 = single run / parallel parent
-	RunID   string
-	Level   string // info | warn | error
-	Text    string
-	Stage   string
-	Flow    string
-	Device  string
-	Port    int
-	Result  *Result
-	Summary *Summary
+	Platform string
+	Kind     EventKind
+	Time     time.Time
+	Worker   int // 0 = single run / parallel parent
+	RunID    string
+	Level    string // info | warn | error
+	Text     string
+	Stage    string
+	Flow     string
+	Device   string
+	Port     int
+	Result   *Result
+	Summary  *Summary
 }
 
 type Sink func(Event)
@@ -44,38 +46,39 @@ type VerificationResult struct {
 }
 
 type Result struct {
-	Feature   string
-	File      string
-	Path      string
-	Stage     string // PASS TEST VERIFY OVERRIDE CANCELLED RECORD OPTIMIZE INTERRUPTED UNSTARTED SETUP
-	Exit      int
-	Duration  time.Duration
-	Recording string
-	Worker    int
-	Device    string
-	LogPath   string
-	Artifacts string   // Maestro's per-flow output: screenshots, screen hierarchy, logcat
-	Shots     []string // screenshots Maestro captured (the last one is usually the failure)
-	Verifs    []VerificationResult
-	Unmatched []string
-	Message   string
+	Platform  string               `json:"platform"`
+	Feature   string               `json:"feature"`
+	File      string               `json:"file"`
+	Path      string               `json:"path"`
+	Stage     string               `json:"stage"` // PASS TEST VERIFY OVERRIDE CANCELLED RECORD OPTIMIZE INTERRUPTED UNSTARTED SETUP
+	Exit      int                  `json:"exit"`
+	Duration  time.Duration        `json:"duration"`
+	Recording string               `json:"recording"`
+	Worker    int                  `json:"worker"`
+	Device    string               `json:"device"`
+	LogPath   string               `json:"logPath"`
+	Artifacts string               `json:"artifacts"` // Maestro's per-flow output: screenshots, screen hierarchy, logcat
+	Shots     []string             `json:"shots"`     // screenshots Maestro captured (the last one is usually the failure)
+	Verifs    []VerificationResult `json:"verifs"`
+	Unmatched []string             `json:"unmatched"`
+	Message   string               `json:"message"`
 }
 
 func (r *Result) Passed() bool { return r.Stage == "PASS" && r.Exit == 0 }
 
 // TSV is a result.tsv line: feature|flow|stage|exit|<n>s|recording.
 func (r *Result) TSV() string {
-	return strings.Join([]string{r.Feature, r.File, r.Stage, strconv.Itoa(r.Exit), fmt.Sprintf("%ds", int(r.Duration.Seconds())), r.Recording}, "|")
+	return strings.Join([]string{r.Feature, r.File, r.Stage, strconv.Itoa(r.Exit), fmt.Sprintf("%ds", int(r.Duration.Seconds())), r.Recording, r.Platform, r.Path}, "|")
 }
 
 func ParseResultTSV(line string) *Result {
 	f := strings.Split(line, "|")
-	for len(f) < 6 {
+	for len(f) < 8 {
 		f = append(f, "")
 	}
 	exit, _ := strconv.Atoi(f[3])
 	secs, _ := strconv.Atoi(strings.TrimSuffix(f[4], "s"))
-	return &Result{Feature: f[0], File: f[1], Stage: f[2], Exit: exit, Duration: time.Duration(secs) * time.Second, Recording: f[5]}
+	return &Result{Platform: f[6], Path: f[7], Feature: f[0], File: f[1], Stage: f[2], Exit: exit, Duration: time.Duration(secs) * time.Second, Recording: f[5]}
 }
 
 type Summary struct {
@@ -101,4 +104,34 @@ func NewSummary(results []*Result, total time.Duration, dir string) *Summary {
 		}
 	}
 	return s
+}
+
+// Key distinguishes the same flow executed on different platforms.
+func (r *Result) Key() string {
+	key := r.Feature + "/" + r.File
+	if r.Platform != "" {
+		return r.Platform + "/" + key
+	}
+	return key
+}
+
+// FailedPairs selects only unsuccessful flow/platform results, preserving other options.
+func FailedPairs(o Options, results []*Result, root string) Options {
+	o.Only = map[string][]string{}
+	o.FlowArgs = nil
+	for _, r := range results {
+		if r.Passed() {
+			continue
+		}
+		path := r.Path
+		if path == "" {
+			path = filepath.Join(root, ".maestro", "flows", r.Feature, r.File)
+		}
+		platform := r.Platform
+		if platform == "" {
+			platform = o.Platform
+		}
+		o.Only[platform] = append(o.Only[platform], path)
+	}
+	return o
 }

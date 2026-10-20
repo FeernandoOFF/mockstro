@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,7 +84,7 @@ func (r *Run) Activate(ctx context.Context, profile string, fbrc map[string]stri
 	}
 	websocket := len(messageMappings) > 0 || e.P.WebSocketPath != ""
 	if websocket && !r.WM.MessageSupport {
-		return fmt.Errorf("WebSocket fixtures require WIREMOCK_VERSION=%s", wiremock.WebSocketVersion)
+		return fmt.Errorf("WebSocket fixtures require wiremockVersion: %s", wiremock.WebSocketVersion)
 	}
 	if websocket || r.websocketActive {
 		if r.Device != "" {
@@ -187,40 +189,68 @@ func (r *Run) recordingPath(f *fixtures.Flow) string {
 
 func trimExt(s string) string { return s[:len(s)-len(filepath.Ext(s))] }
 
-// RunFlow executes one flow end to end and always returns exactly one result.
+// flowRun is one flow's in-progress result, shared by isolated and batched execution.
+type flowRun struct {
+	f       *fixtures.Flow
+	res     *Result
+	start   time.Time
+	profile string
+	held    bool // finishFlow leaves publishing to the caller (batches attach artifacts first)
+}
+
+func (r *Run) beginFlow(f *fixtures.Flow) *flowRun {
+	e := r.e
+	fr := &flowRun{f: f, start: time.Now(), profile: e.Opts.ProfileArg,
+		res: &Result{Platform: e.Opts.Platform, Feature: f.Feature, File: f.File, Path: f.Path, Worker: r.Worker, Device: r.Device}}
+	if fr.profile == "" {
+		fr.profile = f.Header.Profile
+	}
+	logDir := filepath.Join(r.Dir, "logs")
+	_ = os.MkdirAll(logDir, 0o755)
+	fr.res.LogPath = filepath.Join(logDir, FlowSlug(f.Feature, f.File)+".log")
+	e.emit(Event{Kind: EvFlowStart, Worker: r.Worker, RunID: r.ID, Flow: f.Rel, Device: r.Device, Text: fr.profile})
+	r.stage("FLOW", f.Rel)
+	return fr
+}
+
+func (r *Run) finishFlow(fr *flowRun, stage string, exit int) *Result {
+	fr.res.Stage, fr.res.Exit, fr.res.Duration = stage, exit, time.Since(fr.start)
+	if !fr.held {
+		r.publishFlow(fr)
+	}
+	return fr.res
+}
+
+func (r *Run) publishFlow(fr *flowRun) {
+	r.e.emit(Event{Kind: EvFlowResult, Worker: r.Worker, RunID: r.ID, Flow: fr.f.Rel, Result: fr.res})
+}
+
+// activateFlow loads the flow's scenario; on failure the flow is finished as SETUP.
+func (r *Run) activateFlow(ctx context.Context, fr *flowRun) error {
+	err := r.Activate(ctx, fr.profile, r.e.FBRCFor(fr.f.Header), fr.f.Header.Overrides)
+	if err != nil {
+		fr.res.Message = err.Error()
+		r.warnf("%v", err)
+	}
+	return err
+}
+
+// RunFlow executes one flow in its own Maestro process and always returns exactly one result.
 func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 	e := r.e
-	res := &Result{Feature: f.Feature, File: f.File, Path: f.Path, Worker: r.Worker, Device: r.Device}
-	start := time.Now()
-	finish := func(stage string, exit int) *Result {
-		res.Stage, res.Exit, res.Duration = stage, exit, time.Since(start)
-		r.e.emit(Event{Kind: EvFlowResult, Worker: r.Worker, RunID: r.ID, Flow: f.Rel, Result: res})
-		return res
-	}
-
-	profile := e.Opts.ProfileArg
-	if profile == "" {
-		profile = f.Header.Profile
-	}
-	r.e.emit(Event{Kind: EvFlowStart, Worker: r.Worker, RunID: r.ID, Flow: f.Rel, Device: r.Device, Text: profile})
-	r.stage("FLOW", f.Rel)
-	if err := r.Activate(ctx, profile, e.FBRCFor(f.Header), f.Header.Overrides); err != nil {
-		res.Message = err.Error()
-		r.warnf("%v", err)
-		return finish("SETUP", 1)
+	fr := r.beginFlow(f)
+	res := fr.res
+	if r.activateFlow(ctx, fr) != nil {
+		return r.finishFlow(fr, "SETUP", 1)
 	}
 	flowPath, err := r.sanitize(f)
 	if err != nil {
 		res.Message = err.Error()
-		return finish("SETUP", 1)
+		return r.finishFlow(fr, "SETUP", 1)
 	}
 
-	logDir := filepath.Join(r.Dir, "logs")
-	_ = os.MkdirAll(logDir, 0o755)
-	slug := FlowSlug(f.Feature, f.File)
-	res.LogPath = filepath.Join(logDir, slug+".log")
 	// Maestro's own debug log would otherwise pile up in ~/.maestro/tests forever.
-	debugDir := filepath.Join(r.Dir, "maestro-debug", slug)
+	debugDir := filepath.Join(r.Dir, "maestro-debug", FlowSlug(f.Feature, f.File))
 	logFile, _ := os.Create(res.LogPath)
 	lw := &lineWriter{tee: logFile, emit: func(line string) {
 		e.emit(Event{Kind: EvOutput, Worker: r.Worker, RunID: r.ID, Flow: f.Rel, Text: line})
@@ -231,7 +261,11 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 		args = append(args, "--device", r.Device)
 	}
 	stage := "TEST"
-	envArg := "WIREMOCK_PORT=" + strconv.Itoa(r.Port)
+	values := e.flowVariables(f, r.Port)
+	var envArgs []string
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		envArgs = append(envArgs, "-e", key+"="+values[key])
+	}
 	if e.Opts.Record {
 		stage = "RECORD"
 		res.Recording = r.recordingPath(f)
@@ -240,11 +274,15 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 		if e.Opts.Optimize {
 			target = rawPath(res.Recording)
 		}
-		r.logf("Recording %s/%s [%s]", f.Feature, f.File, profile)
-		args = append(args, "record", "--local", "--config", r.configPath, "--debug-output", debugDir, "-e", envArg, "-e", "APP_ID="+e.P.AppID, flowPath, target)
+		r.logf("Recording %s/%s [%s]", f.Feature, f.File, fr.profile)
+		args = append(args, "record", "--local", "--config", r.configPath, "--debug-output", debugDir)
+		args = append(args, envArgs...)
+		args = append(args, flowPath, target)
 	} else {
-		r.logf("Running %s/%s [%s]", f.Feature, f.File, profile)
-		args = append(args, "test", "--config", r.configPath, "--debug-output", debugDir, "-e", envArg, "-e", "APP_ID="+e.P.AppID, flowPath)
+		r.logf("Running %s/%s [%s]", f.Feature, f.File, fr.profile)
+		args = append(args, "test", "--config", r.configPath, "--debug-output", debugDir)
+		args = append(args, envArgs...)
+		args = append(args, flowPath)
 	}
 	before := r.resultDirs()
 	runErr := e.Exec.Run(ctx, execx.Cmd{Name: "maestro", Args: args, Stdout: lw, Stderr: lw})
@@ -265,17 +303,29 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 				res.Recording = ""
 			}
 		}
-		return finish("CANCELLED", exit)
+		return r.finishFlow(fr, "CANCELLED", exit)
 	}
 	if runErr != nil && exit < 0 {
 		res.Message = runErr.Error()
 		exit = 1
 	}
+	return r.concludeFlow(ctx, fr, stage, exit)
+}
 
+// concludeFlow runs the post-flow checks (acceptance, API verifications, fallback report)
+// against Maestro's outcome and finishes the flow.
+func (r *Run) concludeFlow(ctx context.Context, fr *flowRun, stage string, exit int) *Result {
+	res, f := fr.res, fr.f
 	if !r.acceptedOverride(ctx) {
+		// A failed Maestro run may never have launched the app (e.g. a flow parse error).
+		if exit != 0 {
+			res.Message = fmt.Sprintf("Maestro failed and the app never accepted run %s on %s (flow error, or a stale build without the E2E seam?)", r.ID, r.Device)
+			r.warnf("%s", res.Message)
+			return r.finishFlow(fr, stage, exit)
+		}
 		res.Message = fmt.Sprintf("App never accepted run %s on %s: no matching acceptance signal (stale build without the E2E seam?)", r.ID, r.Device)
 		r.warnf("%s", res.Message)
-		return finish("OVERRIDE", 1)
+		return r.finishFlow(fr, "OVERRIDE", 1)
 	}
 	verifyOK := true
 	if len(f.Header.Verifications) > 0 {
@@ -292,13 +342,14 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 		}
 	}
 	res.Unmatched = r.reportFallback()
-	if !verifyOK {
+	// VERIFY means the UI passed but the API counts did not; a UI failure keeps its own stage.
+	if !verifyOK && exit == 0 {
 		stage, exit = "VERIFY", 1
 	}
 	if exit == 0 {
 		stage = "PASS"
 	}
-	return finish(stage, exit)
+	return r.finishFlow(fr, stage, exit)
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
@@ -461,3 +512,16 @@ func FlowSlug(feature, file string) string { return safeName(feature) + "-" + sa
 
 // rawPath is where a recording is written before HandBrake optimises it.
 func rawPath(recording string) string { return strings.TrimSuffix(recording, ".mp4") + ".raw.mp4" }
+
+// flowVariables resolves the agreed input layers without exporting them to builds.
+func (e *Engine) flowVariables(f *fixtures.Flow, port int) map[string]string {
+	values := map[string]string{}
+	maps.Copy(values, e.P.Variables)
+	maps.Copy(values, e.P.TargetVariables)
+	maps.Copy(values, f.Header.Variables)
+	maps.Copy(values, e.P.LocalVariables)
+	maps.Copy(values, e.Opts.Variables)
+	values["APP_ID"] = e.P.AppID
+	values["WIREMOCK_PORT"] = strconv.Itoa(port)
+	return values
+}

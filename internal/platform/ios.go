@@ -140,7 +140,7 @@ func (i *IOS) Boot(ctx context.Context, name string, headless bool, progress fun
 	return udid, nil
 }
 
-func (i *IOS) EnsureBooted(ctx context.Context, serial string, progress func(string)) error {
+func (i *IOS) EnsureBooted(ctx context.Context, serial string, headless bool, progress func(string)) error {
 	state := ""
 	for _, s := range i.sims(ctx, true) {
 		if s.UDID == serial {
@@ -153,7 +153,9 @@ func (i *IOS) EnsureBooted(ctx context.Context, serial string, progress func(str
 			return fmt.Errorf("simulator %s did not finish booting", serial)
 		}
 	}
-	i.showSimulator(ctx, progress)
+	if !headless {
+		i.showSimulator(ctx, progress)
+	}
 	return nil
 }
 

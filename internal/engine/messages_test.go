@@ -14,6 +14,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
@@ -131,11 +132,13 @@ func TestRealWebSocketScenarioLifecycleAndVerification(t *testing.T) {
 
 func TestIOSPackageSelectionDoesNotChangeAndroidProject(t *testing.T) {
 	p := testProject(t)
-	p.IOSAppID = "dev.example.ios"
+	ios := *p
+	ios.Platform, ios.AppID = "ios", "dev.example.ios"
+	p.Targets = map[string]*project.Project{"ios": &ios}
 	opts := DefaultOptions()
 	opts.Platform = "ios"
 	e := New(p, opts, &execx.Fake{}, nil)
-	if e.P.AppID != p.IOSAppID || p.AppID != "ie.example.envtest" {
+	if e.P.AppID != ios.AppID || p.AppID != "ie.example.envtest" {
 		t.Fatalf("package selection: %s %s", e.P.AppID, p.AppID)
 	}
 }

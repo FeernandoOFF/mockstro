@@ -69,9 +69,9 @@ func (e *Engine) requireDesignation() error {
 		return nil
 	}
 	if e.Opts.Platform == "ios" {
-		return errors.New("no simulators designated. Set IOS_SIMULATOR_NAMES in .maestro/project.env or list names in ~/.config/mockstro/designated.txt")
+		return errors.New("no simulators designated. Set platforms.ios.devices in .maestro/mockstro.yaml or list names in ~/.config/mockstro/designated.txt")
 	}
-	return errors.New("no reusable agent AVDs configured. Set MAESTRO_AGENT_AVDS=name[,name] in .maestro/project.env, or list names in ~/.config/mockstro/designated.txt")
+	return errors.New("no reusable agent AVDs configured. Set platforms.android.devices in .maestro/mockstro.yaml, or list names in ~/.config/mockstro/designated.txt")
 }
 
 func (e *Engine) DeviceLocked(serial string) bool {
@@ -91,9 +91,9 @@ func (e *Engine) candidates(ctx context.Context, devs []platform.Device) []strin
 			continue
 		}
 		designated := e.isDesignated(ctx, d.Serial)
-		// A shut-down simulator is only picked (and booted) when designated; otherwise a
-		// human run could boot an arbitrary iPad.
-		if e.Opts.Platform == "ios" && d.State != "Booted" && !designated {
+		// simctl also lists shut-down devices. They are boot candidates, not free
+		// workers; counting them here makes auto start every designated simulator.
+		if e.Opts.Platform == "ios" && d.State != "Booted" {
 			continue
 		}
 		if designated {
@@ -135,14 +135,14 @@ func (e *Engine) BootCandidates(ctx context.Context) []string {
 func (e *Engine) offerBoot(ctx context.Context) bool {
 	avds := e.BootCandidates(ctx)
 	if len(avds) == 0 {
-		e.Warnf("No installed AVD is designated for Maestro. Set MAESTRO_AGENT_AVDS in .maestro/project.env.")
+		e.Warnf("No installed AVD is designated for Maestro. Set platforms.android.devices in .maestro/mockstro.yaml.")
 		return false
 	}
 	pick := ""
 	switch {
 	case e.Opts.BootAVD != "":
 		if !slices.Contains(avds, e.Opts.BootAVD) {
-			e.Warnf("AVD '%s' is not designated (MAESTRO_AGENT_AVDS in .maestro/project.env, or ~/.config/mockstro/designated.txt).", e.Opts.BootAVD)
+			e.Warnf("AVD '%s' is not designated (platforms.android.devices in .maestro/mockstro.yaml, or ~/.config/mockstro/designated.txt).", e.Opts.BootAVD)
 			return false
 		}
 		pick = e.Opts.BootAVD
@@ -268,7 +268,7 @@ func (e *Engine) EnsureParallelDevices(ctx context.Context, wanted int) error {
 		}
 	}
 	if free+len(toBoot) < wanted {
-		return fmt.Errorf("--parallel %d needs %d devices: %d free now and %d more designated AVD(s) to boot.\n  Designate another AVD in MAESTRO_AGENT_AVDS (.maestro/project.env) or ~/.config/mockstro/designated.txt, or lower --parallel", wanted, wanted, free, len(toBoot))
+		return fmt.Errorf("--parallel %d needs %d devices: %d free now and %d more designated AVD(s) to boot.\n  Designate another AVD in platforms.android.devices (.maestro/mockstro.yaml) or ~/.config/mockstro/designated.txt, or lower --parallel", wanted, wanted, free, len(toBoot))
 	}
 	e.Logf("Need %d more device(s) for %d worker(s); %d free now.", wanted-free, wanted, free)
 	booted := 0

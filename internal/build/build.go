@@ -23,7 +23,8 @@ func Build(ctx context.Context, p *project.Project, platform string, ex execx.Ru
 	if out == nil {
 		out = io.Discard
 	}
-	cmd := execx.Cmd{Dir: p.Root, Stdout: out, Stderr: out}
+	root := p.SourceRoot()
+	cmd := execx.Cmd{Dir: root, Stdout: out, Stderr: out}
 	glob := p.APKGlob
 	if p.BuildSystem == "kotlin-toolchain" {
 		module, target := p.KotlinAndroidModule, "android"
@@ -32,7 +33,7 @@ func Build(ctx context.Context, p *project.Project, platform string, ex execx.Ru
 			module, target, task = p.KotlinIOSModule, "iosSimulatorArm64", "buildIosAppIosSimulatorArm64"
 		}
 		if module == "" || p.KotlinVariant != "debug" && p.KotlinVariant != "release" {
-			return "", "", fmt.Errorf("configure Kotlin module and KOTLIN_VARIANT (debug or release)")
+			return "", "", fmt.Errorf("configure build.module and build.variant (debug or release) for %s", platform)
 		}
 		cmd.Name, cmd.Args = "./kotlin", []string{"build", "-m", module, "-p", target, "-v", p.KotlinVariant}
 		variant := strings.ToUpper(p.KotlinVariant[:1]) + p.KotlinVariant[1:]
@@ -49,17 +50,17 @@ func Build(ctx context.Context, p *project.Project, platform string, ex execx.Ru
 		}
 	} else if platform == "ios" {
 		if p.IOSProject == "" || p.IOSScheme == "" {
-			return "", "", fmt.Errorf("set IOS_PROJECT and IOS_SCHEME in .maestro/project.env")
+			return "", "", fmt.Errorf("set platforms.ios.build.project and platforms.ios.build.scheme in .maestro/mockstro.yaml")
 		}
 		flag := "-project"
 		if strings.HasSuffix(p.IOSProject, ".xcworkspace") {
 			flag = "-workspace"
 		}
-		derived := filepath.Join(p.Root, "build", "maestro-derived-data")
-		cmd.Name, cmd.Args = "xcodebuild", []string{flag, filepath.Join(p.Root, p.IOSProject), "-scheme", p.IOSScheme, "-configuration", p.IOSConfig, "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", derived, "CODE_SIGNING_ALLOWED=NO", "build"}
+		derived := filepath.Join(root, "build", "maestro-derived-data")
+		cmd.Name, cmd.Args = "xcodebuild", []string{flag, filepath.Join(root, p.IOSProject), "-scheme", p.IOSScheme, "-configuration", p.IOSConfig, "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", derived, "CODE_SIGNING_ALLOWED=NO", "build"}
 		glob = p.IOSAppGlob
 		if glob == "" {
-			glob = filepath.Join(derived, "Build", "Products", "*", "*.app")
+			glob = filepath.Join(derived, "Build", "Products", p.IOSConfig+"-iphonesimulator", "*.app")
 		}
 	} else {
 		cmd.Name, cmd.Args = "./gradlew", []string{p.GradleTask, "-q"}
@@ -72,7 +73,7 @@ func Build(ctx context.Context, p *project.Project, platform string, ex execx.Ru
 		return "", "", fmt.Errorf("build failed: %s: %w", cmd.String(), err)
 	}
 	if !filepath.IsAbs(glob) {
-		glob = filepath.Join(p.Root, glob)
+		glob = filepath.Join(root, glob)
 	}
 	matches, err := filepath.Glob(glob)
 	if err != nil {
@@ -182,7 +183,7 @@ func validateBundle(ctx context.Context, path, appID string, ex execx.Runner) er
 		}
 	}
 	if appID != "" && values["CFBundleIdentifier"] != appID {
-		return fmt.Errorf("bundle identifier %q does not match APP_PACKAGE=%s", values["CFBundleIdentifier"], appID)
+		return fmt.Errorf("bundle identifier %q does not match configured appId=%s", values["CFBundleIdentifier"], appID)
 	}
 	simulator := false
 	for _, p := range platforms {

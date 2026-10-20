@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -38,6 +39,7 @@ type mockTarget struct {
 	kind, name, desc string
 	label            string // what the list shows: a flow's name: header, else its file name
 	rel              string // flows: path under flows/
+	path             string // editable source file
 }
 
 // stubRef is one stub a target serves, in priority order (overrides, profile, shared).
@@ -82,17 +84,17 @@ func newMockModel(a *app) *mockModel {
 func (m *mockModel) refresh() {
 	m.all = m.all[:0]
 	for _, s := range m.a.scenarios {
-		m.all = append(m.all, mockTarget{kind: "scenario", name: s.Name, desc: s.Header.Description, label: s.Name})
+		m.all = append(m.all, mockTarget{kind: "scenario", name: s.Name, desc: s.Header.Description, label: s.Name, path: s.Path})
 	}
 	for _, p := range m.a.profiles {
-		m.all = append(m.all, mockTarget{kind: "profile", name: p, desc: "bare customer profile", label: p})
+		m.all = append(m.all, mockTarget{kind: "profile", name: p, desc: "bare customer profile", label: p, path: filepath.Join(m.a.p.ProfilesRoot(), p+".json")})
 	}
 	for _, f := range m.a.flows {
 		label := f.Header.Name
 		if label == "" {
 			label = f.File
 		}
-		m.all = append(m.all, mockTarget{kind: "flow", name: m.a.p.Rel(f.Path), desc: f.Header.Name, label: label, rel: f.Rel})
+		m.all = append(m.all, mockTarget{kind: "flow", name: m.a.p.Rel(f.Path), desc: f.Header.Name, label: label, rel: f.Rel, path: f.Path})
 	}
 	m.apply()
 }
@@ -114,11 +116,18 @@ func (m *mockModel) apply() {
 func (m *mockModel) devices() []string {
 	out := []string{"server-only"}
 	if st := m.a.status; st != nil {
-		out = append(out, st.Available.Eligible...)
-		if m.a.query.Owner == "human" && m.a.query.Opts.Platform != "ios" {
+		for _, serial := range st.Available.Eligible {
+			if !m.a.deviceQuery(serial).P.Lite() {
+				out = append(out, serial)
+			}
+		}
+		if m.a.query.Owner == "human" {
 			for _, d := range st.Devices {
 				if d.Class == "physical" && d.LockedBy == nil && !d.Eligible {
-					out = append(out, d.Serial)
+					e := m.a.deviceQuery(d.Serial)
+					if e.Opts.Platform != "ios" && !e.P.Lite() {
+						out = append(out, d.Serial)
+					}
 				}
 			}
 		}
@@ -129,6 +138,11 @@ func (m *mockModel) devices() []string {
 // Physical mock attachments reuse the installed app instead of replacing it.
 func (m *mockModel) startOptions(device string) engine.Options {
 	o := m.a.opts
+	target := m.a.query.P
+	if device != "" {
+		target = m.a.deviceQuery(device).P
+	}
+	o.Platform, o.Lite = target.Platform, target.Lite()
 	o.FBRC = map[string]string{}
 	o.ServerPort, o.PortPinned = 18080, true
 	o.Attach, o.DeviceArg = device != "", device
@@ -234,7 +248,7 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 		m.filter.SetValue("")
 		m.apply()
 	case "a":
-		if m.session == nil && !m.starting && !m.busy && !m.a.p.Lite() {
+		if m.session == nil && !m.starting && !m.busy {
 			devs := m.devices()
 			i := max(0, slices.Index(devs, m.attachDevice))
 			m.attachDevice = devs[(i+1)%len(devs)]
@@ -253,6 +267,14 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 		}
 	case "f":
 		m.focusLog = !m.focusLog
+	case "e":
+		if m.focusLog {
+			if name := m.paneStub(); name != "" {
+				return m.a.editStub(name)
+			}
+		} else if m.cursor < len(m.visible) && m.visible[m.cursor].target != nil {
+			return m.a.editFile(m.visible[m.cursor].target.path)
+		}
 	case "y":
 		if m.cursor < len(m.visible) {
 			row := m.visible[m.cursor]
@@ -315,12 +337,16 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 		}
 		m.starting, m.startErr = true, nil
 		a := m.a
+		target := a.query.P
+		if device != "" {
+			target = a.deviceQuery(device).P
+		}
 		o := m.startOptions(device)
 		return func() tea.Msg {
 			if err := o.Validate("mock"); err != nil {
 				return mockStartedMsg{err: err}
 			}
-			e := engine.New(a.p, o, execx.Real{}, func(ev engine.Event) {
+			e := engine.New(target, o, execx.Real{}, func(ev engine.Event) {
 				if ev.Kind == engine.EvLog {
 					a.prog.Send(activityMsg{ev.Level, ev.Text})
 				}
@@ -342,6 +368,11 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 }
 
 func (m *mockModel) view(w, h int) (string, string) {
+	attachEnabled := false
+	targets, _ := m.a.p.Selected(m.a.opts.Platform)
+	for _, target := range targets {
+		attachEnabled = attachEnabled || !target.Lite()
+	}
 	listW := 58
 	var lb strings.Builder
 	lb.WriteString(m.filter.View() + "\n")
@@ -383,13 +414,13 @@ func (m *mockModel) view(w, h int) (string, string) {
 		if m.startErr != nil {
 			jb.WriteString(sBad.Width(w-listW-8).Render("failed to start: "+m.startErr.Error()) + "\n\n")
 		}
-		if m.a.p.Lite() {
+		if !attachEnabled {
 			fmt.Fprintf(&jb, "Target device: %s %s\n\n", sSel.Render("server-only"), sMuted.Render("(attach needs full integration)"))
 		} else {
 			fmt.Fprintf(&jb, "Target device: %s %s\n\n", sSel.Render(mode), sMuted.Render("(a to change)"))
 		}
 		hint := "server-only: point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nattach: installs the build and writes the runtime override.\nAndroid phones: use the installed app via adb reverse.\nattach clears any device-wide HTTP proxy.\nenter on a target to start serving it."
-		if m.a.p.Lite() {
+		if !attachEnabled {
 			hint = "point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nenter on a target to start serving it."
 		}
 		jb.WriteString(sMuted.Render(hint) + "\n\n")
@@ -453,14 +484,14 @@ func (m *mockModel) view(w, h int) (string, string) {
 		focusPanel(!m.focusLog, "Scenarios · profiles · flows", lb.String(), listW, h),
 		focusPanel(m.focusLog, title, jb.String(), w-listW, h))
 	attach := " · a attach device"
-	if m.a.p.Lite() {
+	if !attachEnabled {
 		attach = ""
 	}
 	enter := " · enter serve/switch"
 	if m.focusLog {
 		enter = " · enter open in Stubs"
 	}
-	help := navHelp + " · f switch panel" + enter + attach + " · x stop · / filter · esc clear"
+	help := navHelp + " · f switch panel" + enter + attach + " · e edit · x stop · / filter · esc clear"
 	if m.filtering {
 		help = "type to filter · enter/esc done"
 	}

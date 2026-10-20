@@ -14,7 +14,6 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
-	"github.com/feernandooff/mockstro/internal/fixtures"
 )
 
 type runDoneMsg struct{ s *engine.Summary }
@@ -25,6 +24,7 @@ type workerState struct {
 	id               int
 	runID, device    string
 	port             int
+	platform         string
 	stage, flow, dir string
 	flowStart        time.Time
 	flowLine         int // absolute index of the current flow's first output line
@@ -43,6 +43,23 @@ func (w *workerState) add(line string) {
 }
 
 func (w *workerState) next() int { return w.dropped + len(w.lines) }
+
+func (w *workerState) label() string {
+	if w.id == 0 {
+		if w.device == "" {
+			return "Setup logs"
+		}
+		return "run"
+	}
+	if w.platform == "" {
+		return fmt.Sprintf("worker %d", w.id)
+	}
+	// RunSuite reserves the first ID in each platform's block for its parent.
+	if ordinal := (w.id - 1) % 100; ordinal > 0 {
+		return fmt.Sprintf("%s w%d", w.platform, ordinal)
+	}
+	return w.platform
+}
 
 // outputMark is where a result's output starts: worker and absolute line.
 type outputMark struct{ worker, line int }
@@ -86,26 +103,19 @@ func (r *runModel) start(o engine.Options, total int) tea.Cmd {
 	a := r.a
 	*r = runModel{a: a, opts: o, total: total, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[*engine.Result]outputMark{}, picked: map[string]bool{}}
 	r.worker(0)
+	if plans, _, err := engine.Plan(a.p, o); err == nil {
+		r.total = 0
+		for _, plan := range plans {
+			r.total += len(plan.Flows)
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
-	e := engine.New(a.p, o, execx.Real{}, func(ev engine.Event) { a.prog.Send(evMsg(ev)) })
 	done := r.done
 	go func() {
 		defer close(done)
-		send := func(s *engine.Summary) { a.prog.Send(runDoneMsg{s}) }
-		if err := e.CheckEnvironment("run"); err != nil {
-			send(&engine.Summary{Err: err})
-			return
-		}
-		if _, err := e.Store.ValidateAll(true); err != nil {
-			send(&engine.Summary{Err: err})
-			return
-		}
-		if _, err := e.EnsureJar(ctx); err != nil {
-			send(&engine.Summary{Err: err})
-			return
-		}
-		send(e.Run(ctx))
+		s := engine.RunSuite(ctx, a.p, o, execx.Real{}, func(ev engine.Event) { a.prog.Send(evMsg(ev)) })
+		a.prog.Send(runDoneMsg{s})
 	}()
 	a.log("info", "run started: %s", commandLine(o))
 	return nil
@@ -125,7 +135,16 @@ func (r *runModel) update(msg tea.Msg) tea.Cmd {
 		return r.a.refreshStatus()
 	case evMsg:
 		ev := engine.Event(m)
+		// Platform parents emit setup/build output without a run ID. Keep that
+		// output in the session log instead of creating a device-less worker row.
+		if ev.RunID == "" && (ev.Kind == engine.EvLog || ev.Kind == engine.EvOutput) {
+			if ev.Platform != "" {
+				ev.Text = "[" + ev.Platform + "] " + ev.Text
+			}
+			ev.Worker, ev.Platform = 0, ""
+		}
 		w := r.worker(ev.Worker)
+		w.platform = ev.Platform
 		switch ev.Kind {
 		case engine.EvLog:
 			line := ev.Text
@@ -168,6 +187,9 @@ func (r *runModel) update(msg tea.Msg) tea.Cmd {
 			} else {
 				w.failed++
 				w.add(sBad.Render(fmt.Sprintf("✘ %s/%s — %s (%ds)", res.Feature, res.File, res.Stage, int(res.Duration.Seconds()))))
+			}
+			if res.Message != "" {
+				w.add(sBad.Render(res.Message))
 			}
 			w.flow = ""
 		}
@@ -255,6 +277,10 @@ func (r *runModel) key(k tea.KeyMsg) tea.Cmd {
 		}
 	case "y":
 		copyResults(r.a, r.results, r.picked, r.resCursor)
+	case "e":
+		if r.resCursor < len(r.results) {
+			return r.a.editResult(r.results[r.resCursor])
+		}
 	case "s":
 		if r.resCursor < len(r.results) {
 			openShot(r.a, r.results[r.resCursor])
@@ -278,22 +304,7 @@ func (r *runModel) key(k tea.KeyMsg) tea.Cmd {
 		if r.summary == nil || r.running() {
 			return nil
 		}
-		var failed []*fixtures.Flow
-		for _, res := range r.results {
-			if res.Passed() {
-				continue
-			}
-			for _, f := range r.a.flows {
-				if f.Path == res.Path || (f.Feature == res.Feature && f.File == res.File) {
-					failed = append(failed, f)
-					break
-				}
-			}
-		}
-		if len(failed) > 0 {
-			r.a.tab = tabFlows
-			r.a.cfg.open(failed, "", true)
-		}
+		r.a.cfg.openResults(r.results, true)
 	}
 	return nil
 }
@@ -360,25 +371,22 @@ func (r *runModel) view(w, h int) (string, string) {
 	var wb strings.Builder
 	for _, id := range r.workerIDs() {
 		wk := r.workers[id]
-		if id == 0 && len(r.workers) > 1 && wk.device == "" {
-			continue
-		}
-		name := "session"
-		if id > 0 {
-			name = fmt.Sprintf("worker %d", id)
-		} else if wk.device != "" {
-			name = "run"
-		}
+		name := wk.label()
+		setup := id == 0 && wk.device == ""
 		cur := "  "
 		if id == r.selWorker {
 			cur = sSel.Render("› ")
 			name = sSel.Render(name)
 		}
+		if setup {
+			fmt.Fprintf(&wb, "%s%s\n", cur, name)
+			continue
+		}
 		flow := wk.flow
 		if flow != "" && !wk.flowStart.IsZero() {
 			flow += sMuted.Render(fmt.Sprintf(" %ds", int(time.Since(wk.flowStart).Seconds())))
 		}
-		fmt.Fprintf(&wb, "%s%s %s :%d %s %s\n", cur, pad(name, 9), pad(d2(wk.device), 14), wk.port, pad(sWarn.Render(d2(wk.stage)), 9), flow)
+		fmt.Fprintf(&wb, "%s%s %s :%d %s %s\n", cur, pad(name, 12), pad(d2(wk.device), 14), wk.port, pad(sWarn.Render(d2(wk.stage)), 9), flow)
 	}
 	workersH := min(len(r.workers)+3, 8)
 
@@ -389,7 +397,7 @@ func (r *runModel) view(w, h int) (string, string) {
 	focusLine := 0
 	for i, res := range r.results {
 		cur := "  "
-		name := truncate(res.Feature+"/"+res.File, 40)
+		name := truncate(res.Key(), 40)
 		if i == r.resCursor {
 			cur = sSel.Render("› ")
 			focusLine = len(rows)
@@ -430,8 +438,10 @@ func (r *runModel) view(w, h int) (string, string) {
 		start = max(0, end-logH)
 	}
 	logTitle := "Output"
-	if r.selWorker > 0 {
-		logTitle = fmt.Sprintf("Output · worker %d", r.selWorker)
+	if wk != nil && r.selWorker == 0 && wk.device == "" {
+		logTitle = "Setup logs"
+	} else if wk != nil && r.selWorker > 0 {
+		logTitle = "Output · " + wk.label()
 	}
 	switch {
 	case r.anchor >= 0:

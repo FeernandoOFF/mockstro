@@ -2,13 +2,72 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/atotto/clipboard"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/feernandooff/mockstro/internal/engine"
 )
+
+type editorDoneMsg struct {
+	path string
+	err  error
+}
+
+func editorCommand(path, root string) (*exec.Cmd, error) {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", path)
+	}
+	editor := strings.TrimSpace(os.Getenv("EDITOR"))
+	if editor == "" {
+		editor = strings.TrimSpace(os.Getenv("VISUAL"))
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+	// EDITOR is a user-supplied command (possibly with quoted arguments). Pass
+	// the source path separately so spaces or shell characters stay literal.
+	cmd := exec.Command("sh", "-c", "exec "+editor+` "$@"`, "mockstro-editor", path)
+	cmd.Dir = root
+	return cmd, nil
+}
+
+func (a *app) editFile(path string) tea.Cmd {
+	cmd, err := editorCommand(path, a.p.Root)
+	if err != nil {
+		a.log("error", "edit: %v", err)
+		return nil
+	}
+	return tea.ExecProcess(cmd, func(err error) tea.Msg { return editorDoneMsg{path, err} })
+}
+
+func (a *app) editStub(name string) tea.Cmd {
+	_, path, _ := a.store.Source(name)
+	return a.editFile(path)
+}
+
+func (a *app) editResult(r *engine.Result) tea.Cmd {
+	path := r.Path
+	if path == "" {
+		path = filepath.Join(a.p.FlowsRoot(), r.Feature, r.File)
+	}
+	return a.editFile(path)
+}
 
 // openPath hands a file or folder to macOS (Preview for screenshots, Finder for dirs).
 func openPath(p string) error { return exec.Command("open", p).Start() }
@@ -50,7 +109,7 @@ func artifactKeys(r *engine.Result) string {
 	if r == nil {
 		return ""
 	}
-	out := ""
+	out := " · e edit flow"
 	if len(r.Shots) > 0 {
 		out += " · s screenshot"
 	}
@@ -60,7 +119,7 @@ func artifactKeys(r *engine.Result) string {
 	return out
 }
 
-func resultKey(r *engine.Result) string { return r.Feature + "/" + r.File }
+func resultKey(r *engine.Result) string { return r.Key() }
 
 // pickMark prefixes a result row picked for copying.
 func pickMark(picked bool) string {

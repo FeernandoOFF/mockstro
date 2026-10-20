@@ -22,6 +22,10 @@ import (
 )
 
 type Options struct {
+	EnvFiles    []string
+	Variables   project.Variables
+	Only        map[string][]string // exact flow/platform pairs for reruns
+	managed     bool                // coordinator owns pruning, last-run and extra JUnit output
 	Tags        []string
 	FlowArgs    []string
 	Platform    string
@@ -38,6 +42,7 @@ type Options struct {
 	Owner       string
 	SkipBuild   bool
 	FailFast    bool
+	Isolate     bool // one Maestro process per flow instead of one per batch
 	Record      bool
 	RecordDir   string
 	Optimize    bool
@@ -50,7 +55,7 @@ type Options struct {
 	EmuMemoryMB int    // override AVD RAM for emulators mockstro boots (0 = AVD default)
 	EmuGPU      string // emulator -gpu mode for emulators mockstro boots ("" = emulator default)
 	EmuSnapshot string // boot emulators from this named snapshot
-	// Lite: a lite-integration project (no project.env). Runs are always --map-remote on
+	// Lite: a lite-integration project (configured as lite). Runs are always --map-remote on
 	// the installed app, one device at a time; see docs/integration.md.
 	Lite bool
 
@@ -78,13 +83,17 @@ type Engine struct {
 }
 
 func New(p *project.Project, opts Options, ex execx.Runner, sink Sink) *Engine {
+	if len(p.Targets) > 0 {
+		name := opts.Platform
+		if name == "" {
+			name = p.Platform
+		}
+		if target := p.Targets[name]; target != nil {
+			p = target
+		}
+	}
 	if opts.Platform == "" {
 		opts.Platform = p.Platform
-	}
-	if opts.Platform == "ios" && p.IOSAppID != "" {
-		copy := *p
-		copy.AppID = p.IOSAppID
-		p = &copy
 	}
 	opts.Lite = p.Lite()
 	if opts.FBRC == nil {
@@ -111,6 +120,7 @@ func New(p *project.Project, opts Options, ex execx.Runner, sink Sink) *Engine {
 
 func (e *Engine) emit(ev Event) {
 	ev.Time = time.Now()
+	ev.Platform = e.Opts.Platform
 	e.Sink(ev)
 }
 
@@ -185,7 +195,7 @@ func (e *Engine) DiscoverFlows() ([]*fixtures.Flow, error) {
 	}
 	var out []*fixtures.Flow
 	for _, f := range all {
-		if f.MatchesPlatform(e.Opts.Platform) && f.MatchesTags(e.Opts.Tags) {
+		if f.MatchesTags(e.Opts.Tags) {
 			out = append(out, f)
 		}
 	}
@@ -252,7 +262,7 @@ func (o *Options) Validate(command string) error {
 		return fmt.Errorf("--server-port must be a number from 1 to 65535")
 	}
 	if o.Lite {
-		const why = " needs full integration (.maestro/project.env and the app's override seam; see docs/integration.md)"
+		const why = " needs full integration (.maestro/mockstro.yaml and the app's override seam; see docs/integration.md)"
 		switch {
 		case o.Parallel != "":
 			return fmt.Errorf("--parallel" + why)
@@ -358,7 +368,7 @@ func cleanupCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 60*time.Second)
 }
 
-// flowsAppID is the appId most flows declare: a lite project has no APP_PACKAGE.
+// flowsAppID supports programmatic engine users without a configured app ID.
 func (e *Engine) flowsAppID() string {
 	flows, _ := e.Store.Flows()
 	count, best := map[string]int{}, ""

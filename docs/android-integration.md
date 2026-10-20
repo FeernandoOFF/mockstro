@@ -157,11 +157,14 @@ read as `0`. `initialize()` and `fetchAndActivate()` become no-ops.
 
 ## Designated emulators
 
-Agents and CI only drive designated emulators. Declare them in `.maestro/project.env`, e.g.
-`MAESTRO_AGENT_AVDS=Resizable_Android_17,Resizable_Android_16`; machine-specific names go in
-`~/.config/mockstro/designated.txt`. Humans may use any emulator; phones use `--map-remote` (lite).
+Agents and CI only drive designated emulators. Set `platforms.android.devices` in
+`.maestro/mockstro.yaml`, e.g. `[Resizable_Android_17, Resizable_Android_16]`. Use
+`.maestro/mockstro.local.yaml` for machine-specific overrides or `~/.config/mockstro/designated.txt`. Humans may use any emulator; phones use `--map-remote` (lite).
 
 ## Writing flows against the seam
+
+Use `appId: ${APP_ID}` in flow headers. Keep per-platform IDs in `mockstro.yaml`; native
+Maestro `when: { platform: Android }` or `when: { platform: iOS }` conditions select subflows.
 
 - **Wait for data, not chrome.** A "screen loaded" helper must wait for an element that only
   renders after the API responds (a dedicated test tag on the loaded state works well), not for

@@ -12,6 +12,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 type cfgField struct {
@@ -27,7 +28,7 @@ func (f *cfgField) value() string {
 	if f.text || len(f.options) == 0 {
 		return ""
 	}
-	if f.idx < len(f.vals) && f.vals[f.idx] != "" {
+	if f.idx < len(f.vals) && (f.vals[f.idx] != "" || f.label == "Platforms") {
 		return f.vals[f.idx]
 	}
 	return f.options[f.idx]
@@ -35,22 +36,26 @@ func (f *cfgField) value() string {
 
 // configModel is the run setup form; it shows the equivalent CLI command.
 type configModel struct {
-	a        *app
-	active   bool
-	editing  bool
-	flows    []*fixtures.Flow
-	byTag    string
-	explicit bool
-	fields   []*cfgField
-	cursor   int
-	fbrc     textinput.Model
-	err      string
-	note     string
-	real     map[string]bool // device serials that are phones, not emulators
+	a         *app
+	active    bool
+	editing   bool
+	flows     []*fixtures.Flow
+	byTag     string
+	explicit  bool
+	fields    []*cfgField
+	cursor    int
+	fbrc      textinput.Model
+	envFiles  textinput.Model
+	variables textinput.Model
+	only      map[string][]string
+	err       string
+	note      string
+	real      map[string]bool // device serials that are phones, not emulators
 }
 
 const (
-	fDevice = iota
+	fPlatform = iota
+	fDevice
 	fParallel
 	fBuild
 	fProfile
@@ -62,6 +67,8 @@ const (
 	fIntercept
 	fProxy
 	fFBRC
+	fEnvFiles
+	fVariables
 )
 
 func newConfigModel(a *app) *configModel {
@@ -69,11 +76,36 @@ func newConfigModel(a *app) *configModel {
 	ti.Placeholder = "key=value, key=value"
 	ti.Prompt = ""
 	ti.CharLimit = 2000
-	return &configModel{a: a, fbrc: ti}
+	files := textinput.New()
+	files.Prompt = ""
+	files.Placeholder = "vars.yaml, local-vars.yaml"
+	vars := textinput.New()
+	vars.Prompt = ""
+	vars.Placeholder = "KEY=value, OTHER=value"
+	return &configModel{a: a, fbrc: ti, envFiles: files, variables: vars}
 }
 
 func (c *configModel) open(flows []*fixtures.Flow, tag string, explicit bool) {
 	c.active, c.flows, c.byTag, c.explicit, c.err, c.note = true, flows, tag, explicit || c.a.flowTab.filter.Value() != "", "", ""
+	c.only = nil
+	if c.fields == nil {
+		c.envFiles.SetValue(strings.Join(c.a.opts.EnvFiles, ", "))
+		var inputs []string
+		for _, key := range slices.Sorted(maps.Keys(c.a.opts.Variables)) {
+			inputs = append(inputs, key+"="+c.a.opts.Variables[key])
+		}
+		c.variables.SetValue(strings.Join(inputs, ", "))
+	}
+	targets, _ := c.a.p.Selected("")
+	var platforms, platformValues []string
+	if len(targets) > 1 {
+		platforms = append(platforms, "both")
+		platformValues = append(platformValues, "")
+	}
+	for _, target := range targets {
+		platforms = append(platforms, target.Platform)
+		platformValues = append(platformValues, target.Platform)
+	}
 	devices := []string{"auto"}
 	var serials []string
 	c.real = map[string]bool{}
@@ -107,8 +139,9 @@ func (c *configModel) open(flows []*fixtures.Flow, tag string, explicit bool) {
 		}
 	}
 	c.fields = []*cfgField{
+		{group: "Run", label: "Platforms", options: platforms, vals: platformValues},
 		{group: "Run", label: "Device", options: devices, vals: serials},
-		{group: "Run", label: "Parallel", options: []string{"off", "auto", "2", "3", "4"}},
+		{group: "Run", label: "Workers per platform", options: []string{"1", "auto", "2", "3", "4"}},
 		{group: "Run", label: "Build", options: []string{"build & install", "skip build (use installed app)"}},
 		{group: "Run", label: "Profile", options: profiles},
 		{group: "Run", label: "Fail fast", options: []string{"no", "yes"}},
@@ -119,6 +152,8 @@ func (c *configModel) open(flows []*fixtures.Flow, tag string, explicit bool) {
 		{group: "Network", label: "Interception", options: []string{"runtime override"}},
 		{group: "Network", label: "Device proxy", options: []string{"clear if set", "refuse device"}},
 		{group: "Network", label: "FBRC overrides", text: true},
+		{group: "Inputs", label: "Variable files", text: true},
+		{group: "Inputs", label: "Variables", text: true},
 	}
 	if c.a.opts.Platform != "ios" {
 		c.fields[fIntercept].options = append(c.fields[fIntercept].options, "map remote (Proxyman/Charles, port 18080)")
@@ -131,11 +166,57 @@ func (c *configModel) open(flows []*fixtures.Flow, tag string, explicit bool) {
 			}
 		}
 	}
-	c.cursor = 0
+	if c.a.opts.Platform != "" {
+		for i, value := range platformValues {
+			if value == c.a.opts.Platform {
+				c.fields[fPlatform].idx = i
+			}
+		}
+	}
+	c.cursor = fDevice
+	if len(targets) > 1 {
+		c.cursor = fPlatform
+	}
 }
 
 func (c *configModel) options() (engine.Options, error) {
 	o := c.a.opts
+	o.Platform = c.fields[fPlatform].value()
+	o.FlowArgs = nil
+	o.DeviceArg = ""
+	o.Parallel = ""
+	o.ProfileArg = ""
+	o.Keyboard = ""
+	o.Only = c.only
+	o.Lite = false
+	targets, err := c.a.p.Selected(o.Platform)
+	if err != nil {
+		return o, err
+	}
+	for _, target := range targets {
+		o.Lite = o.Lite || target.Lite()
+	}
+	o.EnvFiles = nil
+	for _, file := range strings.Split(c.envFiles.Value(), ",") {
+		if file = strings.TrimSpace(file); file != "" {
+			o.EnvFiles = append(o.EnvFiles, file)
+		}
+	}
+	o.Variables = map[string]string{}
+	for _, input := range strings.Split(c.variables.Value(), ",") {
+		if input = strings.TrimSpace(input); input == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(input, "=")
+		if !ok {
+			return o, fmt.Errorf("variables must be KEY=value")
+		}
+		key = strings.TrimSpace(key)
+		if err := project.ValidateVariable(key); err != nil {
+			return o, err
+		}
+		o.Variables[key] = value
+	}
 	o.FBRC = map[string]string{}
 	o.Tags = []string{"smoke"}
 	if !c.explicit && c.byTag != "" {
@@ -145,16 +226,16 @@ func (c *configModel) options() (engine.Options, error) {
 			o.FlowArgs = append(o.FlowArgs, c.a.p.Rel(f.Path))
 		}
 	}
-	real := c.realDevice()
-	if d := c.fields[fDevice].value(); d != "auto" {
+	real := len(targets) == 1 && c.realDevice()
+	if d := c.fields[fDevice].value(); len(targets) == 1 && d != "auto" {
 		o.DeviceArg = d
 	}
-	o.MapRemote = real || c.fields[fIntercept].idx == 1 || o.Lite
-	if p := c.fields[fParallel].value(); p != "off" && !o.MapRemote {
+	o.MapRemote = real || c.fields[fIntercept].idx == 1 || (o.Lite && len(targets) == 1)
+	if p := c.fields[fParallel].value(); p != "1" && !o.MapRemote {
 		o.Parallel = p
 		o.DeviceArg = ""
 	}
-	o.SkipBuild = c.fields[fBuild].idx == 1 || o.Lite
+	o.SkipBuild = c.fields[fBuild].idx == 1 || (o.Lite && len(targets) == 1)
 	o.BootRequest = c.fields[fBoot].idx == 0 && !real
 	if p := c.fields[fProfile].value(); p != "flow default" {
 		o.ProfileArg = p
@@ -177,12 +258,54 @@ func (c *configModel) options() (engine.Options, error) {
 		}
 		o.FBRC[strings.TrimSpace(k)] = strings.TrimSpace(v)
 	}
-	return o, o.Validate("run")
+	if len(targets) > 1 && o.DeviceArg != "" {
+		return o, fmt.Errorf("choose one platform to select a specific device")
+	}
+	for _, target := range targets {
+		child := o
+		child.Platform = target.Platform
+		child.Lite = target.Lite()
+		if child.Lite {
+			child.Parallel = ""
+		}
+		if err := child.Validate("run"); err != nil {
+			return o, err
+		}
+	}
+	return o, nil
 }
 
 // commandLine renders the equivalent `mockstro run` invocation.
 func commandLine(o engine.Options) string {
-	parts := []string{"mockstro run"}
+	if o.Only != nil {
+		var commands []string
+		for _, name := range []string{"", "android", "ios"} {
+			paths := o.Only[name]
+			if len(paths) == 0 || (o.Platform != "" && name != "" && name != o.Platform) {
+				continue
+			}
+			child := o
+			child.Only = nil
+			child.FlowArgs = paths
+			child.Platform = name
+			if name == "" {
+				child.Platform = o.Platform
+			}
+			commands = append(commands, commandLine(child))
+		}
+		return strings.Join(commands, "\n")
+	}
+	parts := []string{"./mockstrow run"}
+	if o.Platform != "" {
+		parts = append(parts, "--platform "+o.Platform)
+	}
+	for _, file := range o.EnvFiles {
+		parts = append(parts, "--env-file "+shellQuote(file))
+	}
+	for _, key := range slices.Sorted(maps.Keys(o.Variables)) {
+		parts = append(parts, "-e "+shellQuote(key+"="+o.Variables[key]))
+	}
+
 	if len(o.FlowArgs) == 0 {
 		parts = append(parts, "--tags "+strings.Join(o.Tags, ","))
 	}
@@ -222,7 +345,11 @@ func commandLine(o engine.Options) string {
 	for _, k := range slices.Sorted(maps.Keys(o.FBRC)) {
 		parts = append(parts, fmt.Sprintf("--fbrc '%s=%s'", k, o.FBRC[k]))
 	}
-	parts = append(parts, o.FlowArgs...)
+	if o.Only == nil {
+		for _, path := range o.FlowArgs {
+			parts = append(parts, shellQuote(path))
+		}
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -231,11 +358,12 @@ func (c *configModel) key(k tea.KeyMsg) tea.Cmd {
 		switch k.String() {
 		case "enter", "esc", "tab":
 			c.editing = false
-			c.fbrc.Blur()
+			c.input().Blur()
 			return nil
 		}
 		var cmd tea.Cmd
-		c.fbrc, cmd = c.fbrc.Update(k)
+		input := c.input()
+		*input, cmd = input.Update(k)
 		return cmd
 	}
 	c.note = ""
@@ -258,7 +386,7 @@ func (c *configModel) key(k tea.KeyMsg) tea.Cmd {
 	case "right", "l", " ":
 		if f.text {
 			c.editing = true
-			return c.fbrc.Focus()
+			return c.input().Focus()
 		}
 		if len(f.options) > 0 {
 			f.idx = (f.idx + 1) % len(f.options)
@@ -277,7 +405,7 @@ func (c *configModel) key(k tea.KeyMsg) tea.Cmd {
 	case "e":
 		if f.text {
 			c.editing = true
-			return c.fbrc.Focus()
+			return c.input().Focus()
 		}
 	case "enter":
 		o, err := c.options()
@@ -300,12 +428,19 @@ func (c *configModel) realDevice() bool { return c.real[c.fields[fDevice].value(
 
 // disabledReason is why field i does not apply to the current choices ("" = it does).
 func (c *configModel) disabledReason(i int) string {
-	real, lite := c.realDevice(), c.a.p.Lite()
-	mapRemote := real || lite || c.fields[fIntercept].idx == 1
+	real, lite := c.realDevice(), false
+	targets, _ := c.a.p.Selected(c.fields[fPlatform].value())
+	for _, target := range targets {
+		lite = lite || target.Lite()
+	}
+	real = real && len(targets) == 1
+	mapRemote := real || (lite && len(targets) == 1) || c.fields[fIntercept].idx == 1
 	switch {
-	case lite && i == fBuild:
+	case len(targets) > 1 && i == fDevice:
+		return "auto per platform (choose one platform for a device)"
+	case lite && len(targets) == 1 && i == fBuild:
 		return "installed app (lite: mockstro does not build)"
-	case lite && i == fParallel:
+	case lite && len(targets) == 1 && i == fParallel:
 		return "n/a in lite (needs full integration)"
 	case lite && i == fIntercept:
 		return "map remote (lite: your Proxyman/Charles)"
@@ -350,6 +485,7 @@ func (c *configModel) view(w, h int) (string, string) {
 	}
 	b.WriteString(sBold.Render("Run "+what) + "\n\n")
 	group := ""
+	focusLine := 0
 	for i, f := range c.fields {
 		if f.group != group {
 			if group != "" {
@@ -361,28 +497,63 @@ func (c *configModel) view(w, h int) (string, string) {
 		cur := "  "
 		label := pad(f.label, 22)
 		if i == c.cursor {
+			focusLine = strings.Count(b.String(), "\n")
 			cur = sSel.Render("› ")
 			label = sSel.Render(label)
 		}
 		var val string
 		if f.text {
-			val = c.fbrc.View()
-			if c.fbrc.Value() == "" && !c.editing {
+			input := c.fieldInput(i)
+			val = input.View()
+			if input.Value() == "" && !c.editing {
 				val = sMuted.Render("none (e to edit)")
 			}
 		} else if c.disabled(i) {
 			label = sMuted.Render(label)
 			val = sMuted.Render(c.disabledReason(i))
 		} else {
-			val = "‹ " + f.value() + " ›"
+			choice := f.value()
+			if i == fPlatform {
+				choice = f.options[f.idx]
+			}
+			val = "‹ " + choice + " ›"
 			if i != c.cursor {
-				val = f.value()
+				val = choice
 			}
 		}
 		b.WriteString(cur + label + val + "\n")
 	}
 	b.WriteString("\n")
 	if o, err := c.options(); err == nil {
+		targets, _ := c.a.p.Selected(o.Platform)
+		mode := "concurrent"
+		for _, target := range targets {
+			if target.Lite() || o.MapRemote {
+				mode = "sequential (lite/proxy)"
+			}
+		}
+		b.WriteString(fmt.Sprintf("Targets (%s): ", mode))
+		for _, target := range targets {
+			count := 0
+			for _, flow := range c.flows {
+				if len(o.FlowArgs) > 0 || flow.MatchesTags(o.Tags) {
+					count++
+				}
+			}
+			if o.Only != nil {
+				count = len(o.Only[target.Platform])
+				if count == 0 {
+					count = len(o.Only[""])
+				}
+			}
+			if count > 0 {
+				b.WriteString(fmt.Sprintf("%s %d flows  ", target.Platform, count))
+			}
+		}
+		b.WriteString("\n")
+		if o.Parallel == "auto" {
+			b.WriteString(sMuted.Render("Auto uses running free devices (one if none are running); choose 1 to limit each platform.") + "\n")
+		}
 		b.WriteString(sMuted.Render("Equivalent command:") + " " + c.note + "\n  " + truncate(commandLine(o), w-8) + "\n")
 	} else {
 		b.WriteString(sBad.Render(err.Error()) + "\n")
@@ -402,7 +573,7 @@ func (c *configModel) view(w, h int) (string, string) {
 	if c.editing {
 		help = "type key=value pairs separated by commas · enter done"
 	}
-	return panel("Configure run", b.String(), w, h), help
+	return panel("Configure run", strings.Join(visibleLines(strings.Split(b.String(), "\n"), focusLine, h-3), "\n"), w, h), help
 }
 
 // shellQuote single-quotes s when a shell would split or expand it (wireless adb serials).
@@ -411,4 +582,65 @@ func shellQuote(s string) string {
 		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 	}
 	return s
+}
+
+func (c *configModel) fieldInput(i int) *textinput.Model {
+	switch i {
+	case fEnvFiles:
+		return &c.envFiles
+	case fVariables:
+		return &c.variables
+	default:
+		return &c.fbrc
+	}
+}
+func (c *configModel) input() *textinput.Model { return c.fieldInput(c.cursor) }
+
+func (c *configModel) openResults(results []*engine.Result, failedOnly bool) {
+	var flows []*fixtures.Flow
+	seen := map[string]bool{}
+	var selected []*engine.Result
+	for _, r := range results {
+		if failedOnly && (r.Passed() || unfinished(r)) {
+			continue
+		}
+		selected = append(selected, r)
+		for _, f := range c.a.flows {
+			if (r.Path == f.Path || (r.Feature == f.Feature && r.File == f.File)) && !seen[f.Path] {
+				seen[f.Path] = true
+				flows = append(flows, f)
+			}
+		}
+	}
+	if len(flows) == 0 {
+		return
+	}
+	c.a.tab = tabFlows
+	c.open(flows, "", true)
+	pairs := map[string][]string{}
+	for _, r := range selected {
+		path := r.Path
+		if path == "" {
+			for _, f := range flows {
+				if r.Feature == f.Feature && r.File == f.File {
+					path = f.Path
+				}
+			}
+		}
+		if path != "" {
+			pairs[r.Platform] = append(pairs[r.Platform], path)
+		}
+	}
+	c.only = pairs
+	selectedPlatform := ""
+	if len(pairs) == 1 {
+		for name := range pairs {
+			selectedPlatform = name
+		}
+	}
+	for i, value := range c.fields[fPlatform].vals {
+		if value == selectedPlatform {
+			c.fields[fPlatform].idx = i
+		}
+	}
 }

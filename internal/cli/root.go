@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,6 +38,9 @@ type globals struct {
 }
 
 type runFlags struct {
+	envFiles    []string
+	variables   []string
+	rerunFailed bool
 	tags        string
 	device      string
 	serverPort  int
@@ -48,6 +52,7 @@ type runFlags struct {
 	mapRemote   bool
 	skipBuild   bool
 	failFast    bool
+	isolate     bool
 	record      bool
 	recordDir   string
 	optimize    bool
@@ -67,6 +72,7 @@ type runFlags struct {
 	showFallbk  bool
 	target      string
 	output      string
+	recordPaths string
 }
 
 const bootAny = "\x00any"
@@ -90,7 +96,7 @@ func Execute(version string) int {
 		},
 	}
 	root.PersistentFlags().StringVarP(&g.projectDir, "project", "C", "", "repository to operate on (default: nearest parent with .maestro/)")
-	root.PersistentFlags().StringVar(&g.platform, "platform", "", "android or ios (default from .maestro/project.env)")
+	root.PersistentFlags().StringVar(&g.platform, "platform", "", "android or ios (default: all configured platforms)")
 	root.PersistentFlags().StringVar(&g.owner, "owner", "", "human, agent or ci (default: auto-detected)")
 	addRunFlags(root, f)
 
@@ -136,10 +142,11 @@ func Execute(version string) int {
 	lastRun := &cobra.Command{Use: "last-run", Short: "Show the result of the most recent run", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return lastRunCmd(g) }}
 
-	recordAPI := &cobra.Command{Use: "record-api", Short: "Record /api/ traffic with native WireMock recording", Args: cobra.NoArgs,
+	recordAPI := &cobra.Command{Use: "record-api", Short: "Record API traffic with native WireMock recording (default: /api/ paths)", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return recordAPICmd(cmd.Context(), g, f) }}
-	recordAPI.Flags().StringVar(&f.target, "target", "", "upstream (default: the envtest API)")
+	recordAPI.Flags().StringVar(&f.target, "target", "", "upstream (default: the project's proxyBaseUrl)")
 	recordAPI.Flags().StringVar(&f.output, "output", "", "directory name below .maestro/.runtime/wiremock/recordings")
+	recordAPI.Flags().StringVar(&f.recordPaths, "url-path-pattern", "/api/.*", "WireMock URL-path regex to record (use '/.*' for all paths)")
 	recordAPI.Flags().IntVar(&f.serverPort, "server-port", project.ReservedMockPort, "port to listen on")
 
 	playback := &cobra.Command{Use: "playback <directory>", Short: "Serve a native WireMock recording", Args: cobra.ExactArgs(1),
@@ -164,15 +171,10 @@ func Execute(version string) int {
 		RunE: func(cmd *cobra.Command, args []string) error { return pruneCmd(cmd.Context(), g, keep) }}
 	prune.Flags().IntVar(&keep, "keep", engine.KeepRuns(), "finished run dirs to keep")
 
-	var appID string
-	initc := &cobra.Command{Use: "init", Short: "Scaffold a minimal .maestro (flow, profile, stub) in the current or -C directory", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error { return initCmd(g, appID) }}
-	initc.Flags().StringVar(&appID, "app-id", "com.example.app", "appId for the example flow")
-
 	tui := &cobra.Command{Use: "tui", Short: "Open the interactive terminal UI", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return runTUI(g, f) }}
 
-	root.AddCommand(bootstrapCommand(g), skillCommand(g), run, mock, setup, list, resolve, status, sweep, lastRun, recordAPI, playback, boot, prune, proxy, initc, tui)
+	root.AddCommand(initCommand(g), bootstrapCommand(g), skillCommand(g), run, mock, setup, list, resolve, status, sweep, lastRun, recordAPI, playback, boot, prune, proxy, tui)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
@@ -199,24 +201,28 @@ func Execute(version string) int {
 
 func addRunFlags(c *cobra.Command, f *runFlags) {
 	fl := c.Flags()
+	fl.StringArrayVar(&f.envFiles, "env-file", nil, "YAML test-variable file (repeatable; later files win)")
+	fl.StringArrayVarP(&f.variables, "env", "e", nil, "Maestro KEY=VALUE input (repeatable; overrides files)")
+	fl.BoolVar(&f.rerunFailed, "rerun-failed", false, "rerun only failed flow/platform pairs from the last run")
 	fl.StringVar(&f.tags, "tags", "smoke", "comma-separated tags")
 	fl.StringVar(&f.device, "device", "", "emulator serial / simulator UDID")
 	fl.IntVar(&f.serverPort, "server-port", project.ReservedMockPort, "pin the WireMock port")
 	fl.StringVar(&f.profile, "profile", "", "override the profile each flow declares")
 	fl.StringArrayVar(&f.fbrc, "fbrc", nil, "Remote Config override key=value (repeatable; wins over the flow's)")
-	fl.StringVar(&f.parallel, "parallel", "", "run across n devices, or 'auto' (one per free device)")
+	fl.StringVar(&f.parallel, "parallel", "", "workers per full platform: n (boots devices if needed), or 'auto' (already free devices)")
 	fl.StringVar(&f.boot, "boot-emulator", "", "boot a designated AVD/simulator when none is free (optionally named)")
 	fl.Lookup("boot-emulator").NoOptDefVal = bootAny
 	fl.StringVar(&f.devices, "devices", "", "restrict device class: emulator, physical or any")
 	fl.BoolVar(&f.mapRemote, "map-remote", false, "Android: any device via your Proxyman/Charles Map Remote rules (port 18080, no override)")
 	fl.BoolVar(&f.skipBuild, "skip-build", false, "do not build or install; test the build already on the device")
 	fl.BoolVar(&f.failFast, "fail-fast", false, "stop after the first failed flow")
+	fl.BoolVar(&f.isolate, "isolate", false, "run each flow in its own Maestro process (slower; for debugging)")
 	fl.BoolVar(&f.record, "record", false, "record videos instead of running tests")
 	fl.StringVar(&f.recordDir, "record-output-dir", "", "video directory (default: <run dir>/recordings)")
 	fl.BoolVar(&f.optimize, "optimize-recordings", false, "re-encode videos with HandBrakeCLI afterwards")
 	fl.StringVar(&f.junit, "junit", "", "also write a JUnit XML report to this path")
 	fl.BoolVar(&f.quiet, "quiet-output", false, "hide raw Maestro/Gradle output")
-	fl.BoolVar(&f.headless, "headless", false, "boot emulators without a window (less host CPU/GPU per device)")
+	fl.BoolVar(&f.headless, "headless", false, "run emulators and simulators without a window (less host CPU/GPU per device)")
 	fl.IntVar(&f.emuCores, "emulator-cores", 0, "vCPUs for emulators mockstro boots (default: the AVD's)")
 	fl.IntVar(&f.emuMemory, "emulator-memory", 0, "RAM in MB for emulators mockstro boots (default: the AVD's)")
 	fl.StringVar(&f.emuSnapshot, "emulator-snapshot", "", "boot emulators from this named snapshot (e.g. saved with `adb emu avd snapshot save <name>`)")
@@ -232,18 +238,53 @@ func loadProject(g *globals) (*project.Project, error) {
 	}
 	root, err := project.Find(dir)
 	if err != nil {
+		if errors.Is(err, project.ErrNotFound) {
+			return nil, projectInitHint(g.projectDir, err)
+		}
 		return nil, err
 	}
-	return project.Load(root)
+	p, err := project.Load(root)
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && errors.Is(err, os.ErrNotExist) && pathErr.Path == filepath.Join(root, ".maestro", "mockstro.yaml") {
+		return nil, projectInitHint(root, err)
+	}
+	return p, err
+}
+
+func projectInitHint(projectDir string, err error) error {
+	command := shellQuote(filepath.Base(os.Args[0]))
+	if projectDir != "" {
+		command += " --project " + shellQuote(projectDir)
+	}
+	return fmt.Errorf("%w\n\nTo set up a new suite, see: %s init --help\nProvide --android-app-id and/or --ios-app-id from your app's repository root.", err, command)
 }
 
 func buildOptions(cmd string, g *globals, f *runFlags, p *project.Project, args []string) (engine.Options, error) {
 	o := engine.DefaultOptions()
-	o.Platform = p.Platform
-	if g.platform != "" {
-		o.Platform = g.platform
+	o.Platform = g.platform
+	selected, err := p.Selected(g.platform)
+	if err != nil {
+		return o, err
 	}
-	o.Lite = p.Lite()
+	o.Lite = selected[0].Lite()
+	if cmd != "run" && o.Platform == "" {
+		o.Platform = selected[0].Platform
+	}
+	if cmd == "mock" && f.attach && len(selected) > 1 {
+		return o, fmt.Errorf("mock --attach requires --platform when multiple platforms are configured")
+	}
+	o.EnvFiles = append([]string(nil), f.envFiles...)
+	o.Variables = project.Variables{}
+	for _, entry := range f.variables {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			return o, fmt.Errorf("--env requires KEY=VALUE")
+		}
+		if err := project.ValidateVariable(key); err != nil {
+			return o, err
+		}
+		o.Variables[key] = value
+	}
 	o.Owner = g.owner
 	o.Tags = splitTags(f.tags)
 	o.FlowArgs = args
@@ -270,6 +311,7 @@ func buildOptions(cmd string, g *globals, f *runFlags, p *project.Project, args 
 	o.MapRemote = f.mapRemote
 	o.SkipBuild = f.skipBuild
 	o.FailFast = f.failFast
+	o.Isolate = f.isolate
 	o.Record = f.record
 	o.RecordDir = f.recordDir
 	o.Optimize = f.optimize
@@ -289,6 +331,9 @@ func buildOptions(cmd string, g *globals, f *runFlags, p *project.Project, args 
 	case "", "human", "agent", "ci":
 	default:
 		return o, fmt.Errorf("--owner requires human, agent or ci")
+	}
+	if cmd == "run" {
+		return o, nil
 	}
 	return o, o.Validate(cmd)
 }
@@ -323,23 +368,17 @@ func runCmd(ctx context.Context, g *globals, f *runFlags, args []string) error {
 	pr := NewPrinter()
 	pr.Parallel = o.Parallel != ""
 	pr.Quiet = f.quiet
-	e := newEngine(p, o, pr)
-	if err := e.CheckEnvironment("run"); err != nil {
-		return err
+	if f.rerunFailed {
+		if len(args) > 0 {
+			return fmt.Errorf("--rerun-failed cannot be combined with flow paths")
+		}
+		_, _, results, err := engine.LoadResults(p.LastRunPath())
+		if err != nil {
+			return err
+		}
+		o = engine.FailedPairs(o, results, p.Root)
 	}
-	counts, err := e.Store.ValidateAll(true)
-	if err != nil {
-		return err
-	}
-	fmt.Println(counts)
-	if o.ProfileArg != "" && !e.Store.ProfileExists(o.ProfileArg) {
-		profiles, _ := e.Store.ProfileNames()
-		return fmt.Errorf("unknown profile: %s (available: %s)", o.ProfileArg, strings.Join(profiles, ", "))
-	}
-	if _, err := e.EnsureJar(ctx); err != nil {
-		return err
-	}
-	s := e.Run(ctx)
+	s := engine.RunSuite(ctx, p, o, execx.Real{}, pr.Handle)
 	if len(s.Results) > 0 {
 		if o.Parallel != "" {
 			fmt.Println("\n===== Parallel session summary =====")
@@ -391,11 +430,11 @@ func statusCmd(ctx context.Context, g *globals, f *runFlags) error {
 	}
 	o := engine.DefaultOptions()
 	o.Owner = g.owner
-	if g.platform != "" {
-		o.Platform = g.platform
+	o.Platform = g.platform
+	st, err := engine.SuiteStatus(ctx, p, o, execx.Real{})
+	if err != nil {
+		return err
 	}
-	e := newEngine(p, o, NewPrinter())
-	st := e.Status(ctx)
 	switch {
 	case f.jsonOut:
 		b, _ := json.MarshalIndent(st, "", "  ")
@@ -536,7 +575,7 @@ func recordAPICmd(ctx context.Context, g *globals, f *runFlags) error {
 	if target == "" {
 		target = p.ProxyBaseURL
 	}
-	return e.RecordAPI(ctx, target, f.output)
+	return e.RecordAPI(ctx, target, f.output, f.recordPaths)
 }
 
 func playbackCmd(ctx context.Context, g *globals, f *runFlags, dir string) error {
@@ -592,16 +631,14 @@ func runTUI(g *globals, f *runFlags) error {
 	if err != nil {
 		return err
 	}
-	o := engine.DefaultOptions()
+	o, err := buildOptions("run", g, f, p, nil)
+	if err != nil {
+		return err
+	}
 	o.Owner = "human"
 	if g.owner != "" {
 		o.Owner = g.owner
 	}
-	o.Platform = p.Platform
-	if g.platform != "" {
-		o.Platform = g.platform
-	}
-	o.Lite = p.Lite()
 	return TUIFunc(p, o)
 }
 

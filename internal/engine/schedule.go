@@ -17,12 +17,19 @@ const historySamples = 5
 // feature/file. Passed runs are preferred: failures often stop early or hit a timeout.
 func (e *Engine) FlowEstimates(ctx context.Context) map[string]time.Duration {
 	passed, any := map[string][]time.Duration{}, map[string][]time.Duration{}
-	for _, rd := range e.RunDirs(ctx, false) {
+	copy := *e.P
+	copy.RunRoot = ""
+	query := *e
+	query.P = &copy
+	for _, rd := range query.RunDirs(ctx, false) {
 		_, _, results, err := LoadResults(filepath.Join(rd.Path, "result.tsv"))
 		if err != nil {
 			continue
 		}
 		for _, r := range results {
+			if r.Platform != "" && r.Platform != e.Opts.Platform {
+				continue
+			}
 			if r.Duration <= 0 || r.Stage == "UNSTARTED" || r.Stage == "INTERRUPTED" || r.Stage == "CANCELLED" {
 				continue
 			}

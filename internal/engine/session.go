@@ -20,8 +20,10 @@ import (
 // (possibly with Err set) once every owned resource has been cleaned up.
 func (e *Engine) Run(ctx context.Context) *Summary {
 	start := time.Now()
-	if removed, freed := e.Prune(ctx, KeepRuns()); removed > 0 || freed > 0 {
-		e.Logf("Pruned %d old run dir(s), freed %s (keeping %d; MOCKSTRO_KEEP_RUNS to change).", removed, HumanSize(freed), KeepRuns())
+	if !e.Opts.managed {
+		if removed, freed := e.Prune(ctx, KeepRuns()); removed > 0 || freed > 0 {
+			e.Logf("Pruned %d old run dir(s), freed %s (keeping %d; MOCKSTRO_KEEP_RUNS to change).", removed, HumanSize(freed), KeepRuns())
+		}
 	}
 	flows, err := e.DiscoverFlows()
 	if err != nil {
@@ -32,6 +34,9 @@ func (e *Engine) Run(ctx context.Context) *Summary {
 	}
 	return e.done(e.runSingle(ctx, flows, start))
 }
+
+// batched runs several flows per Maestro process; recording needs one process per flow.
+func (e *Engine) batched() bool { return !e.Opts.Isolate && !e.Opts.Record }
 
 func (e *Engine) done(s *Summary) *Summary {
 	e.emit(Event{Kind: EvSessionDone, Summary: s})
@@ -50,17 +55,29 @@ func (e *Engine) runSingle(ctx context.Context, flows []*fixtures.Flow, start ti
 	var results []*Result
 	done := make([]*Result, len(flows))
 	writeProgress(run.Dir, flows, done)
-	for i, f := range flows {
-		res := run.RunFlow(ctx, f)
-		results = append(results, res)
-		done[i] = res
-		writeProgress(run.Dir, flows, done)
-		if res.Stage == "CANCELLED" {
-			break
+	if e.batched() {
+		run.RunBatch(ctx, flows, nil, func(i int, res *Result) {
+			done[i] = res
+			writeProgress(run.Dir, flows, done)
+		})
+		for _, res := range done {
+			if res != nil {
+				results = append(results, res)
+			}
 		}
-		if !res.Passed() && e.Opts.FailFast {
-			e.Logf("Stopping after %s/%s failed.", f.Feature, f.File)
-			break
+	} else {
+		for i, f := range flows {
+			res := run.RunFlow(ctx, f)
+			results = append(results, res)
+			done[i] = res
+			writeProgress(run.Dir, flows, done)
+			if res.Stage == "CANCELLED" {
+				break
+			}
+			if !res.Passed() && e.Opts.FailFast {
+				e.Logf("Stopping after %s/%s failed.", f.Feature, f.File)
+				break
+			}
 		}
 	}
 	if ctx.Err() == nil && e.Opts.Record && e.Opts.Optimize {
@@ -82,6 +99,7 @@ type queue struct {
 	results []*Result
 	stop    bool
 	dir     string // session dir that progress.tsv is written to
+	workers int
 }
 
 func (q *queue) claim() (int, *fixtures.Flow, bool) {
@@ -97,6 +115,24 @@ func (q *queue) claim() (int, *fixtures.Flow, bool) {
 	q.next++
 	q.claimed[i] = true
 	return i, q.flows[i], true
+}
+
+// claimBatch claims up to half a worker's fair share of what is left, so each Maestro
+// startup is shared by several flows while workers still finish close together.
+func (q *queue) claimBatch(workers int) []int {
+	q.mu.Lock()
+	left := len(q.flows) - q.next
+	q.mu.Unlock()
+	n := max(1, (left+2*workers-1)/(2*workers))
+	var out []int
+	for range n {
+		i, _, ok := q.claim()
+		if !ok {
+			break
+		}
+		out = append(out, i)
+	}
+	return out
 }
 
 func (q *queue) put(i int, r *Result) {
@@ -123,6 +159,19 @@ func (q *queue) collect() []*Result {
 		results = append(results, r)
 	}
 	return results
+}
+
+func (q *queue) halted() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.stop
+}
+
+// unclaim marks a claimed flow as never started, so it is reported UNSTARTED.
+func (q *queue) unclaim(i int) {
+	q.mu.Lock()
+	q.claimed[i] = false
+	q.mu.Unlock()
 }
 
 func (q *queue) halt() {
@@ -167,7 +216,7 @@ func (e *Engine) runParallel(ctx context.Context, flows []*fixtures.Flow, start 
 		e.Opts.SessionAPK, e.Opts.SessionAPKSHA = path, sha
 	}
 
-	q := &queue{flows: flows, claimed: make([]bool, len(flows)), results: make([]*Result, len(flows)), dir: sessionDir}
+	q := &queue{flows: flows, claimed: make([]bool, len(flows)), results: make([]*Result, len(flows)), dir: sessionDir, workers: workers}
 	if workers > 1 {
 		order, known := longestFirst(flows, e.FlowEstimates(ctx))
 		if known > 0 {
@@ -219,7 +268,31 @@ func (e *Engine) worker(ctx context.Context, w int, q *queue, sessionDir string)
 		return err
 	}
 	_ = os.Symlink(run.Dir, filepath.Join(sessionDir, fmt.Sprintf("worker-%d", w)))
-	for ctx.Err() == nil {
+	for ctx.Err() == nil && e.batched() {
+		idx := q.claimBatch(q.workers)
+		if len(idx) == 0 {
+			return nil
+		}
+		chunk := make([]*fixtures.Flow, len(idx))
+		for j, i := range idx {
+			chunk[j] = q.flows[i]
+		}
+		got := make([]bool, len(idx))
+		halted := run.RunBatch(ctx, chunk, q.halted, func(j int, res *Result) {
+			got[j] = true
+			q.put(idx[j], res)
+		})
+		for j, i := range idx {
+			if !got[j] {
+				q.unclaim(i)
+			}
+		}
+		if halted {
+			q.halt()
+			return nil
+		}
+	}
+	for ctx.Err() == nil && !e.batched() {
 		i, f, ok := q.claim()
 		if !ok {
 			return nil
@@ -243,6 +316,11 @@ func (e *Engine) persist(s *Summary, dir string) {
 	if dir == "" {
 		return
 	}
+	for _, r := range s.Results {
+		if r.Platform == "" {
+			r.Platform = e.Opts.Platform
+		}
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "meta|%s|%d\n", time.Now().UTC().Format(time.RFC3339), int(s.Total.Seconds()))
 	for _, r := range s.Results {
@@ -250,12 +328,14 @@ func (e *Engine) persist(s *Summary, dir string) {
 	}
 	_ = fsx.WriteAtomic(filepath.Join(dir, "result.tsv"), []byte(b.String()))
 	last := e.P.LastRunPath()
-	_ = fsx.WriteAtomic(last, []byte(b.String()))
-	_ = fsx.WriteAtomic(filepath.Join(filepath.Dir(last), "last-run.link"), []byte(filepath.Base(dir)+"\n"))
+	if !e.Opts.managed {
+		_ = fsx.WriteAtomic(last, []byte(b.String()))
+		_ = fsx.WriteAtomic(filepath.Join(filepath.Dir(last), "last-run.link"), []byte(filepath.Base(dir)+"\n"))
+	}
 	writeArtifacts(dir, s.Results)
 	junit := JUnit(s, e.P.Root)
 	_ = fsx.WriteAtomic(filepath.Join(dir, "junit.xml"), junit)
-	if e.Opts.JUnitPath != "" {
+	if !e.Opts.managed && e.Opts.JUnitPath != "" {
 		if err := fsx.WriteAtomic(e.Opts.JUnitPath, junit); err != nil {
 			e.Warnf("could not write JUnit report: %v", err)
 		}
@@ -290,7 +370,7 @@ func JUnit(s *Summary, root string) []byte {
 	}
 	st := suite{Name: "maestro", Tests: len(s.Results), Time: fmt.Sprintf("%.1f", s.Total.Seconds()), Stamp: time.Now().UTC().Format(time.RFC3339)}
 	for _, r := range s.Results {
-		tc := testcase{Name: strings.TrimSuffix(r.File, ".yaml"), Classname: r.Feature, Time: fmt.Sprintf("%.1f", r.Duration.Seconds())}
+		tc := testcase{Name: strings.TrimSuffix(r.File, ".yaml"), Classname: strings.TrimPrefix(r.Platform+"."+r.Feature, "."), Time: fmt.Sprintf("%.1f", r.Duration.Seconds())}
 		if r.Path != "" {
 			if rel, err := filepath.Rel(root, r.Path); err == nil {
 				tc.File = rel
@@ -357,6 +437,18 @@ func LoadResults(path string) (time.Time, time.Duration, []*Result, error) {
 			results = append(results, ParseResultTSV(rest))
 		}
 	}
+	dir := filepath.Dir(path)
+	if filepath.Base(path) == "last-run.tsv" {
+		if link := readLine(filepath.Join(dir, "last-run.link")); link != "" && filepath.Base(link) == link {
+			dir = filepath.Join(filepath.Dir(dir), "runs", link)
+		}
+	}
+	var report struct {
+		Results []*Result `json:"results"`
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "run.json")); err == nil && json.Unmarshal(data, &report) == nil && report.Results != nil {
+		results = report.Results
+	}
 	return at, total, results, nil
 }
 
@@ -394,22 +486,31 @@ func LiveProgress(dir string) (results []*Result, stages []string) {
 		}
 		if stage == "FLOW" {
 			inFlight[flow] = true
+			inFlight[readLine(filepath.Join(r, "platform"))+"/"+flow] = true
 		}
-		stages = append(stages, strings.TrimSpace(stage+" "+flow))
+		stages = append(stages, strings.TrimSpace(readLine(filepath.Join(r, "platform"))+" "+stage+" "+flow))
 	}
 	for _, line := range strings.Split(string(b), "\n") {
 		if rest, ok := strings.CutPrefix(line, "result|"); ok {
 			results = append(results, ParseResultTSV(rest))
 		} else if rest, ok := strings.CutPrefix(line, "plan|"); ok {
-			f := strings.SplitN(rest, "|", 3)
+			f := strings.Split(rest, "|")
 			if len(f) < 3 {
 				continue
 			}
 			stage := "PENDING"
-			if inFlight[f[2]] {
+			platform := ""
+			if len(f) > 3 {
+				platform = f[3]
+			}
+			key := f[2]
+			if platform != "" {
+				key = platform + "/" + key
+			}
+			if inFlight[key] {
 				stage = "RUNNING"
 			}
-			results = append(results, &Result{Feature: f[0], File: f[1], Stage: stage})
+			results = append(results, &Result{Platform: platform, Feature: f[0], File: f[1], Stage: stage})
 		}
 	}
 	return results, stages
@@ -435,6 +536,7 @@ func RunError(dir string) string {
 
 // FlowArtifacts is what a run recorded about one flow beyond result.tsv.
 type FlowArtifacts struct {
+	Platform  string   `json:"platform,omitempty"`
 	Feature   string   `json:"feature"`
 	File      string   `json:"file"`
 	Log       string   `json:"log,omitempty"`
@@ -448,7 +550,7 @@ func writeArtifacts(dir string, results []*Result) {
 		if r.Artifacts == "" && r.LogPath == "" {
 			continue
 		}
-		list = append(list, FlowArtifacts{Feature: r.Feature, File: r.File, Log: r.LogPath, Artifacts: r.Artifacts, Shots: r.Shots})
+		list = append(list, FlowArtifacts{Platform: r.Platform, Feature: r.Feature, File: r.File, Log: r.LogPath, Artifacts: r.Artifacts, Shots: r.Shots})
 	}
 	if len(list) == 0 {
 		return
@@ -467,7 +569,7 @@ func LoadArtifacts(dir string) map[string]FlowArtifacts {
 	var list []FlowArtifacts
 	if json.Unmarshal(b, &list) == nil {
 		for _, a := range list {
-			out[a.Feature+"/"+a.File] = a
+			out[(&Result{Platform: a.Platform, Feature: a.Feature, File: a.File}).Key()] = a
 		}
 	}
 	return out

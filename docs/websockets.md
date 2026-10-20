@@ -1,14 +1,19 @@
 # WebSocket fixtures
 
-Native WebSocket mocking is opt-in while WireMock 4 is in beta. In `.maestro/project.env`:
+Native WebSocket mocking is opt-in while WireMock 4 is in beta. Configure the target in
+`.maestro/mockstro.yaml`:
 
-```dotenv
-WIREMOCK_VERSION=4.0.0-beta.40
-E2E_WEBSOCKET_PATH=/ws
+```yaml
+platforms:
+  android:
+    appId: dev.example.android
+    integration: full
+    wiremockVersion: 4.0.0-beta.40
+    websocketPath: /ws
 ```
 
 Both supported WireMock releases are checksum-pinned. HTTP-only projects continue to use
-3.13.2. Java 17 or newer is required for the beta. `E2E_WEBSOCKET_PATH` is optional for
+3.13.2. Java 17 or newer is required for the beta. `websocketPath` is optional for
 server-only mocking; it controls the endpoint passed to apps in full integration.
 
 ## Fixtures and profiles

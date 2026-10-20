@@ -34,6 +34,8 @@ type Android struct {
 	// Snapshot boots from a named emulator snapshot (seconds instead of a cold boot); with
 	// -no-snapshot-save it is never overwritten, so every boot starts from the same state.
 	Snapshot string
+	// settleTick is how often settle samples CPU use (tests shorten it).
+	settleTick time.Duration
 
 	mu    sync.Mutex
 	names map[string]string
@@ -99,7 +101,7 @@ func (a *Android) DeviceName(ctx context.Context, serial string) string {
 	return name
 }
 
-// Designated: MAESTRO_AGENT_AVDS (project.env or environment) and the global designated list.
+// Designated: configured platform devices and the global machine designation list.
 func (a *Android) Designated() []string {
 	var names []string
 	names = append(names, splitNames(a.P.Env["MAESTRO_AGENT_AVDS"])...)
@@ -213,6 +215,10 @@ func (a *Android) Boot(ctx context.Context, avd string, headless bool, progress 
 			}
 			if done, _ := a.adb(ctx, d.Serial, "shell", "getprop", "sys.boot_completed"); done == "1" {
 				progress(fmt.Sprintf("Booted %s as %s", avd, d.Serial))
+				a.settle(ctx, d.Serial, progress)
+				if err := ctx.Err(); err != nil {
+					return "", err
+				}
 				return d.Serial, nil
 			}
 		}
@@ -225,7 +231,81 @@ func (a *Android) Boot(ctx context.Context, avd string, headless bool, progress 
 	return "", fmt.Errorf("timed out after 300s waiting for %s to finish booting", avd)
 }
 
-func (a *Android) EnsureBooted(context.Context, string, func(string)) error { return nil }
+// settle waits until a freshly booted emulator is mostly idle. Right after boot, app
+// compilation and Play services starve the CPU; flows started then hit "isn't responding"
+// dialogs from System UI, the launcher or Chrome.
+func (a *Android) settle(ctx context.Context, serial string, progress func(string)) {
+	const (
+		idleNeeded = 0.6
+		calmNeeded = 3
+		limit      = 3 * time.Minute
+	)
+	tick := a.settleTick
+	if tick == 0 {
+		tick = 2 * time.Second
+	}
+	start := time.Now()
+	// Bound adb itself too: a stalled shell must not bypass the settling time limit.
+	waitCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	prevBusy, prevTotal, ok := a.cpuTimes(waitCtx, serial)
+	if !ok {
+		return
+	}
+	progress(fmt.Sprintf("Waiting for %s to settle after boot...", serial))
+	calm := 0
+	for time.Since(start) < limit {
+		select {
+		case <-waitCtx.Done():
+			if ctx.Err() == nil {
+				progress(fmt.Sprintf("%s still busy after %ds; continuing.", serial, int(limit.Seconds())))
+			}
+			return
+		case <-time.After(tick):
+		}
+		busy, total, ok := a.cpuTimes(waitCtx, serial)
+		if !ok || total <= prevTotal {
+			continue
+		}
+		idle := 1 - float64(busy-prevBusy)/float64(total-prevTotal)
+		prevBusy, prevTotal = busy, total
+		if idle < idleNeeded {
+			calm = 0
+			continue
+		}
+		if calm++; calm >= calmNeeded {
+			progress(fmt.Sprintf("%s settled after %ds.", serial, int(time.Since(start).Seconds())))
+			return
+		}
+	}
+	progress(fmt.Sprintf("%s still busy after %ds; continuing.", serial, int(limit.Seconds())))
+}
+
+// cpuTimes reads the aggregate cpu line of /proc/stat; I/O wait counts as busy.
+func (a *Android) cpuTimes(ctx context.Context, serial string) (busy, total uint64, ok bool) {
+	out, err := a.adb(ctx, serial, "shell", "head", "-1", "/proc/stat")
+	fields := strings.Fields(out)
+	if err != nil || len(fields) < 5 || fields[0] != "cpu" {
+		return 0, 0, false
+	}
+	for i, f := range fields[1:] {
+		// guest and guest_nice are already included in user and nice.
+		if i >= 8 {
+			break
+		}
+		v, err := strconv.ParseUint(f, 10, 64)
+		if err != nil {
+			return 0, 0, false
+		}
+		total += v
+		if i != 3 { // idle
+			busy += v
+		}
+	}
+	return busy, total, true
+}
+
+func (a *Android) EnsureBooted(context.Context, string, bool, func(string)) error { return nil }
 
 // Build runs the incremental gradle task and snapshots the single matching APK into the run.
 func (a *Android) Build(ctx context.Context, artifactDir string, out io.Writer) (string, string, error) {

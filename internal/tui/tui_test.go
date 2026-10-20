@@ -74,6 +74,8 @@ func key(a *app, k string) {
 		msg = tea.KeyMsg{Type: tea.KeyDown}
 	case "right":
 		msg = tea.KeyMsg{Type: tea.KeyRight}
+	case "left":
+		msg = tea.KeyMsg{Type: tea.KeyLeft}
 	case " ":
 		msg = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}
 	default:
@@ -131,7 +133,7 @@ func TestFlowPickerToConfigCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := commandLine(o); got != "mockstro run --tags smoke --boot-emulator --clear-proxy" {
+	if got := commandLine(o); got != "./mockstrow run --platform android --tags smoke --boot-emulator --clear-proxy" {
 		t.Fatalf("command: %s", got)
 	}
 	key(a, "down") // parallel
@@ -169,7 +171,7 @@ func TestRunViewFollowsEvents(t *testing.T) {
 	for _, ev := range []engine.Event{
 		{Kind: engine.EvWorker, Worker: 1, Device: "emulator-5554", Port: 18081},
 		{Kind: engine.EvFlowStart, Worker: 1, Flow: "account/account-smart.yaml", Text: "smart"},
-		{Kind: engine.EvOutput, Worker: 1, Text: "Assert that \"Top Up\" is visible... COMPLETED"},
+		{Kind: engine.EvOutput, Worker: 1, RunID: "run-1", Text: "Assert that \"Top Up\" is visible... COMPLETED"},
 		{Kind: engine.EvFlowResult, Worker: 1, Result: res},
 	} {
 		a.Update(evMsg(ev))
@@ -185,6 +187,43 @@ func TestRunViewFollowsEvents(t *testing.T) {
 	a.Update(runDoneMsg{engine.NewSummary([]*engine.Result{res}, 0, "")})
 	if a.runv.running() {
 		t.Fatal("still running after done")
+	}
+}
+
+func TestRunViewGroupsPlatformSetupOutputWithoutPhantomWorkers(t *testing.T) {
+	a := testApp(t)
+	a.runv.start2ForTest()
+	for _, ev := range []engine.Event{
+		{Kind: engine.EvLog, Platform: "android", Worker: 1, Text: "Preparing devices"},
+		{Kind: engine.EvOutput, Platform: "ios", Worker: 101, Text: "Building app"},
+		{Kind: engine.EvWorker, Platform: "android", Worker: 2, RunID: "a1", Device: "emulator-5554", Port: 18083},
+		{Kind: engine.EvWorker, Platform: "ios", Worker: 102, RunID: "i1", Device: "sim-a", Port: 18081},
+		{Kind: engine.EvWorker, Platform: "ios", Worker: 103, RunID: "i2", Device: "sim-b", Port: 18082},
+		{Kind: engine.EvOutput, Platform: "ios", Worker: 102, RunID: "i1", Text: "FLOW OUTPUT"},
+	} {
+		a.Update(evMsg(ev))
+	}
+	if ids := fmt.Sprint(a.runv.workerIDs()); ids != "[0 2 102 103]" {
+		t.Fatalf("setup output created phantom workers: %s", ids)
+	}
+	key(a, "3")
+	view := a.View()
+	for _, want := range []string{"Setup logs", "[android] Preparing devices", "[ios] Building app", "android w1", "ios w1", "ios w2"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, ":0") || strings.Contains(view, "w101") || strings.Contains(view, "w102") {
+		t.Fatalf("setup still looks like a device worker:\n%s", view)
+	}
+	key(a, "]")
+	if a.runv.selWorker != 2 {
+		t.Fatal("worker navigation did not skip parent streams")
+	}
+	key(a, "]")
+	view = a.View()
+	if !strings.Contains(view, "FLOW OUTPUT") || !strings.Contains(view, "Output · ios w1") {
+		t.Fatalf("worker output lost:\n%s", view)
 	}
 }
 
@@ -235,9 +274,9 @@ func TestStubsOwnMergedAndBodyFile(t *testing.T) {
 	if !strings.Contains(v, "Own JSON · b") || !strings.Contains(v, `"extends": "shared/a"`) {
 		t.Fatalf("default should be the stub's own JSON:\n%s", v)
 	}
-	key(a, "e")
+	key(a, "]")
 	if v := a.View(); !strings.Contains(v, "Own JSON · shared/a") {
-		t.Fatalf("e should show the ancestor:\n%s", v)
+		t.Fatalf("] should show the ancestor:\n%s", v)
 	}
 	key(a, "m")
 	if v := a.View(); !strings.Contains(v, "Merged") || !strings.Contains(v, `"status": 200`) {
@@ -636,5 +675,135 @@ func TestMockAttachmentSurvivesDeviceReordering(t *testing.T) {
 	key(a, "a")
 	if a.mock.attachDevice != "" {
 		t.Fatal("cycling did not follow the selected device's new position")
+	}
+}
+
+func TestMockAttachmentUsesDevicePlatform(t *testing.T) {
+	const sim = "00000000-0000-0000-0000-000000000001"
+	for _, fullPlatform := range []string{"android", "ios"} {
+		t.Run(fullPlatform, func(t *testing.T) {
+			a := testApp(t)
+			android, ios := *a.p, *a.p
+			android.Platform, ios.Platform = "android", "ios"
+			android.Integration, ios.Integration = "lite", "lite"
+			targets := map[string]*project.Project{"android": &android, "ios": &ios}
+			targets[fullPlatform].Integration = "full"
+			a.p.Targets = targets
+			a.p.Integration = android.Integration
+			a.opts.Platform = ""
+			a.query = engine.New(a.p, a.opts, a.query.Exec, nil)
+			a.Update(statusMsg{&engine.Status{
+				Devices: []engine.StatusDevice{
+					{Platform: "android", Device: platform.Device{Serial: "emulator-5554", Class: "emulator"}, Eligible: true},
+					{Platform: "ios", Device: platform.Device{Serial: sim, Class: "emulator"}, Eligible: true},
+					{Platform: "android", Device: platform.Device{Serial: "phone", Class: "physical"}},
+				},
+				Available: engine.Available{Eligible: []string{"emulator-5554", sim}},
+			}})
+			key(a, "5")
+			key(a, "a")
+			want := "emulator-5554"
+			if fullPlatform == "ios" {
+				want = sim
+			}
+			if a.mock.attachDevice != want {
+				t.Fatalf("selected %q, want %q", a.mock.attachDevice, want)
+			}
+			o := a.mock.startOptions(want)
+			if o.Platform != fullPlatform || o.Lite || !o.Attach {
+				t.Fatalf("attachment options: %+v", o)
+			}
+			if err := o.Validate("mock"); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(strings.Join(a.mock.devices(), ","), "phone") != (fullPlatform == "android") {
+				t.Fatal("phone offered for a lite Android target")
+			}
+			if v := a.View(); strings.Contains(v, "attach needs full integration") {
+				t.Fatalf("attachment disabled despite a full target:\n%s", v)
+			}
+		})
+	}
+}
+
+func TestCrossPlatformFormAndFailedRerun(t *testing.T) {
+	a := testApp(t)
+	android, ios := *a.p, *a.p
+	ios.Platform = "ios"
+	a.p.Targets = map[string]*project.Project{"android": &android, "ios": &ios}
+	a.opts.Platform = ""
+	a.cfg.open(a.flows, "smoke", false)
+	o, err := a.cfg.options()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Platform != "" || o.DeviceArg != "" {
+		t.Fatal("default did not select both targets", o)
+	}
+	plans, seq, err := engine.Plan(a.p, o)
+	if err != nil || seq || len(plans) != 2 {
+		t.Fatal(plans, seq, err)
+	}
+	view, _ := a.cfg.view(160, 50)
+	if !strings.Contains(view, "android 1 flows") || !strings.Contains(view, "ios 1 flows") || !strings.Contains(view, "both") {
+		t.Fatal(view)
+	}
+	a.cfg.variables.SetValue("USER=local")
+	flow := a.flows[0]
+	results := []*engine.Result{{Feature: flow.Feature, File: flow.File, Path: flow.Path, Platform: "android", Stage: "PASS"}, {Feature: flow.Feature, File: flow.File, Path: flow.Path, Platform: "ios", Stage: "TEST", Exit: 1}}
+	a.cfg.openResults(results, true)
+	o, err = a.cfg.options()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans, _, err = engine.Plan(a.p, o)
+	if err != nil || len(plans) != 1 || plans[0].Project.Platform != "ios" || o.Variables["USER"] != "local" {
+		t.Fatal(plans, o, err)
+	}
+	cmd := commandLine(o)
+	if !strings.Contains(cmd, "--platform ios") || strings.Contains(cmd, "--rerun-failed") || strings.Contains(cmd, "--platform android") {
+		t.Fatal("rerun command expanded the platform selection", cmd)
+	}
+	if resultKey(results[0]) == resultKey(results[1]) {
+		t.Fatal("platform result selections collided")
+	}
+}
+
+func TestCrossPlatformOneWorkerOverridesPreviousParallelOptions(t *testing.T) {
+	a := testApp(t)
+	android, ios := *a.p, *a.p
+	ios.Platform = "ios"
+	a.p.Targets = map[string]*project.Project{"android": &android, "ios": &ios}
+	a.opts.Platform, a.opts.Parallel = "", "auto"
+	a.cfg.open(a.flows, "smoke", false)
+	if got := a.cfg.fields[fParallel].value(); got != "1" {
+		t.Fatalf("default workers per platform = %q", got)
+	}
+	// Cycle through auto and 2, then explicitly return to 1.
+	a.cfg.cursor = fParallel
+	key(a, "right")
+	key(a, "right")
+	key(a, "left")
+	key(a, "left")
+	o, err := a.cfg.options()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans, _, err := engine.Plan(a.p, o)
+	if err != nil || len(plans) != 2 {
+		t.Fatal(plans, err)
+	}
+	for _, plan := range plans {
+		if plan.Options.Parallel != "" {
+			t.Fatalf("%s retained parallel options: %q", plan.Project.Platform, plan.Options.Parallel)
+		}
+	}
+	if cmd := commandLine(o); strings.Contains(cmd, "--parallel") {
+		t.Fatal(cmd)
+	}
+	// Reopening the form must preserve the explicit single-worker choice.
+	a.cfg.open(a.flows, "smoke", false)
+	if got := a.cfg.fields[fParallel].value(); got != "1" {
+		t.Fatalf("reopened workers per platform = %q", got)
 	}
 }

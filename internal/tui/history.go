@@ -97,7 +97,7 @@ func readResults(hr *histRun) {
 	arts := engine.LoadArtifacts(hr.dir)
 	for _, r := range hr.results {
 		r.LogPath = filepath.Join(hr.dir, "logs", engine.FlowSlug(r.Feature, r.File)+".log")
-		if fa, ok := arts[r.Feature+"/"+r.File]; ok {
+		if fa, ok := arts[r.Key()]; ok {
 			r.Artifacts, r.Shots = fa.Artifacts, fa.Shots
 			if fa.Log != "" {
 				r.LogPath = fa.Log
@@ -293,6 +293,10 @@ func (hm *historyModel) key(k tea.KeyMsg) tea.Cmd {
 		if run != nil && hm.focus >= 1 {
 			copyResults(hm.a, run.results, hm.picked, hm.resCur)
 		}
+	case "e":
+		if run != nil && hm.focus >= 1 && hm.resCur < len(run.results) {
+			return hm.a.editResult(run.results[hm.resCur])
+		}
 	case "s", "A":
 		if run != nil && hm.focus >= 1 && hm.resCur < len(run.results) {
 			if k.String() == "s" {
@@ -309,21 +313,7 @@ func (hm *historyModel) key(k tea.KeyMsg) tea.Cmd {
 		if run == nil {
 			return nil
 		}
-		var picked []*fixtures.Flow
-		for _, res := range run.results {
-			if k.String() == "F" && (res.Passed() || unfinished(res)) {
-				continue
-			}
-			for _, f := range hm.a.flows {
-				if f.Feature == res.Feature && f.File == res.File {
-					picked = append(picked, f)
-				}
-			}
-		}
-		if len(picked) > 0 {
-			hm.a.tab = tabFlows
-			hm.a.cfg.open(picked, "", true)
-		}
+		hm.a.cfg.openResults(run.results, k.String() == "F")
 	}
 	return nil
 }
@@ -395,12 +385,12 @@ func (hm *historyModel) view(w, h int) (string, string) {
 				focusLine = len(rows)
 			}
 			if unfinished(r) {
-				rows = append(rows, fmt.Sprintf("%s%s%s %s", cur, pickMark(hm.picked[resultKey(r)]), statusStyle(false, r.Stage), truncate(r.Feature+"/"+r.File, 34)))
+				rows = append(rows, fmt.Sprintf("%s%s%s %s", cur, pickMark(hm.picked[resultKey(r)]), statusStyle(false, r.Stage), truncate(r.Key(), 34)))
 				continue
 			}
-			rows = append(rows, fmt.Sprintf("%s%s%s %s %s%s", cur, pickMark(hm.picked[resultKey(r)]), statusStyle(r.Passed(), r.Stage), truncate(r.Feature+"/"+r.File, 34), sMuted.Render(fmt.Sprintf("%ds", int(r.Duration.Seconds()))), shotBadge(r)))
+			rows = append(rows, fmt.Sprintf("%s%s%s %s %s%s", cur, pickMark(hm.picked[resultKey(r)]), statusStyle(r.Passed(), r.Stage), truncate(r.Key(), 34), sMuted.Render(fmt.Sprintf("%ds", int(r.Duration.Seconds()))), shotBadge(r)))
 			if !r.Passed() {
-				rows = append(rows, "     "+sMuted.Render(r.Stage))
+				rows = append(rows, "     "+sMuted.Render(strings.TrimSpace(r.Stage+" "+r.Message)))
 			}
 		}
 		used := strings.Count(rb.String(), "\n")

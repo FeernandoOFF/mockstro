@@ -133,6 +133,7 @@ func (r *Run) initDir() error {
 	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
 		return err
 	}
+	_ = os.WriteFile(filepath.Join(r.Dir, "platform"), []byte(e.Opts.Platform), 0644)
 	r.flowsRoot = filepath.Join(r.Dir, "maestro-flows")
 	r.configPath = e.P.ConfigPath()
 	// Maestro writes artefacts to testOutputDir; give each run a private copy. Paths are
@@ -192,7 +193,7 @@ func (r *Run) checkProxy(ctx context.Context) error {
 func (r *Run) ensureApp(ctx context.Context) error {
 	e := r.e
 	if e.Opts.SkipBuild {
-		if err := e.Plat.EnsureBooted(ctx, r.Device, r.progress); err != nil {
+		if err := e.Plat.EnsureBooted(ctx, r.Device, e.Opts.Headless, r.progress); err != nil {
 			return err
 		}
 		apk, err := e.Plat.InstalledProvenance(ctx, r.Device)
@@ -225,7 +226,7 @@ func (r *Run) ensureApp(ctx context.Context) error {
 	_ = os.WriteFile(filepath.Join(r.Dir, "apk.sha256"), []byte(r.apkSHA+"  "+r.apkPath+"\n"), 0o644)
 	r.info.APK = &registry.APK{Path: r.apkPath, SHA256: r.apkSHA}
 	_ = r.reg.Save(r.info)
-	if err := e.Plat.EnsureBooted(ctx, r.Device, r.progress); err != nil {
+	if err := e.Plat.EnsureBooted(ctx, r.Device, e.Opts.Headless, r.progress); err != nil {
 		return err
 	}
 	if sum, _ := e.Plat.ArtifactSHA(r.apkPath); sum != r.apkSHA {

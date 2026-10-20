@@ -15,7 +15,8 @@ API fixtures it needs, and mockstro serves them, points the app at them, runs th
 reports the result. It has a CLI for scripts, agents and CI, and a TUI for humans.
 
 - **Deterministic E2E**: each flow gets its own mocked backend, so nothing depends on a live API.
-- **Parallel devices**: each device gets its own WireMock port. `--parallel auto` shares the suite across every free device.
+- **Both platforms**: shared `${APP_ID}` flows run on each configured target. Full targets run concurrently; lite targets cause sequential execution.
+- **Parallel devices**: each worker gets its own WireMock port. `--parallel auto` distributes flows across free devices within each full target.
 - **Machine-wide coordination**: device and port locks are shared across every project and worktree, so concurrent runs by people, agents and CI never collide.
 - **Fixture tooling**: stub inheritance (`extends`), profiles, scenarios, API call verifications, reports of unmatched requests, and recording or playback of real traffic.
 
@@ -78,7 +79,8 @@ mockstro works on the nearest parent directory that contains `.maestro/`. Use `-
 .maestro/
 ├── .mockstro-version         # CLI release pin read by the root mockstrow launcher
 ├── config.yaml
-├── project.env               # optional: enables full integration (see below)
+├── mockstro.yaml             # platforms, app IDs, builds, devices and test defaults
+├── mockstro.local.yaml       # ignored machine overrides (optional)
 ├── flows/<feature>/*.yaml    # Maestro flows, grouped by feature
 ├── shared/                   # sub-flows reused through runFlow
 ├── scenarios/*.yaml          # named mock setups for `mockstro mock`
@@ -92,7 +94,7 @@ mockstro works on the nearest parent directory that contains `.maestro/`. Use `-
 A flow's header declares its app, tags and mock:
 
 ```yaml
-appId: com.example.app
+appId: ${APP_ID}
 tags: [smoke, account]
 properties:
   apiProfile: signed-in          # profiles/signed-in.json, on top of shared.json
@@ -115,7 +117,7 @@ null.
 
 | | Lite · proxy | Full · runtime override |
 | --- | --- | --- |
-| Enabled by | `.maestro/` only | `.maestro/project.env` |
+| Configured per platform | `integration: lite` (default) | `integration: full` |
 | App changes | none | a debug-only E2E seam |
 | Traffic to the mock | your Proxyman/Charles Map Remote → `127.0.0.1:18080` | the app reads a per-run override |
 | Build | uses the installed app | mockstro builds and installs it |
@@ -124,12 +126,13 @@ null.
 Start with lite to try it on an existing app. Move to full for parallel runs, CI, and proof that
 the app actually used the mock. Setup for each: [docs/integration.md](docs/integration.md).
 Recommended Android seam: [docs/android-integration.md](docs/android-integration.md).
+iOS setup and Swift seam: [docs/ios-integration.md](docs/ios-integration.md).
 
 ## Usage
 
 ```bash
 mockstro                                   # TUI in a terminal; runs the smoke suite otherwise
-mockstro init [--app-id com.example.app]   # scaffold .maestro with an example flow, profile and stub
+mockstro init --android-app-id com.example.app --ios-app-id com.example.ios
 mockstro run                               # flows tagged smoke
 mockstro run --tags smoke,regression --parallel auto
 mockstro run .maestro/flows/account/overview.yaml --skip-build
@@ -147,6 +150,20 @@ mockstro record-api · mockstro playback <dir>
 ```
 
 `mockstro <command> --help` lists every flag.
+
+`record-api` starts a recording proxy; route the app through its printed local address
+and press Ctrl-C to save mappings below `.maestro/.runtime/wiremock/recordings/`.
+Set `--target https://your-api.example.com` (or the platform's `proxyBaseUrl`). The
+default capture filter is `/api/.*`; use `--url-path-pattern '/.*'` when the app also
+uses paths such as `/graphql`, `/v1/`, or discovery endpoints outside `/api/`.
+The recorder connects directly to the upstream, bypassing JVM/system HTTP proxy
+settings so a Map Remote rule cannot send its own requests back into the recorder.
+
+Flows run in batches: one Maestro process per device runs several flows, so its driver startup
+(~15s on iOS, ~5s on Android) is paid once per batch. Each flow still gets its own mock
+scenario, override, checks and log; mockstro injects `onFlowStart`/`onFlowComplete` hooks into
+its working copy of each flow. Use `--isolate` to run one Maestro process per flow when
+debugging; `--record` always does.
 
 ### Result stages
 
@@ -179,10 +196,18 @@ Tabs (`1`–`6`, `tab`, `h`/`l`):
 Shared keys: `↑↓`/`jk` move, `u`/`d` page, `g`/`G` top/bottom, `enter`/`f` focus right, `/`
 filter, `space` select, `x` stop/delete, `y` copy, `r` refresh, `q` quit.
 
+Press `e` on a flow (including Run/History results), mock scenario/profile/flow, or
+stub to open its source in `$EDITOR` (`$VISUAL`, then `vi` if unset). Editor arguments
+and quoted paths are supported, for example `EDITOR="code --wait"`. The TUI resumes
+and reloads fixtures when the editor exits. In Stubs, `[`/`]` walk the inheritance
+chain; `e` in the Own JSON pane edits the ancestor currently shown. In Mock, `e` in
+the right pane edits the highlighted stub. Press enter on a mock target to apply
+saved fixture changes to a running mock server.
+
 ## Integrating with CI and agents
 
 - **Reports**: every run writes `result.tsv`, `junit.xml`, `run.json` and per-flow Maestro logs
-  to `.maestro/.runtime/runs/<runId>/`. `--junit <path>` writes an extra copy of the report
+  to `.maestro/.runtime/runs/<sessionId>/`, with native run metadata below each platform. `--junit <path>` writes an extra copy of the report
   where CI expects it.
 - **Progress**: `progress.tsv` in the run dir is rewritten as each flow finishes (done flows as
   `result|…`, the rest as `plan|…`); the TUI's History tab uses it to follow headless runs live.
@@ -191,24 +216,113 @@ filter, `space` select, `x` stop/delete, `y` copy, `r` refresh, `q` quit.
   device is free, and 11 when runs are active and nothing is free. `status --json` gives the
   full picture.
 - **Owners**: `--owner human|agent|ci` (auto-detected by default). People may use any emulator.
-  Agents and CI use only designated devices: `MAESTRO_AGENT_AVDS` / `IOS_SIMULATOR_NAMES` in
-  `project.env`, or `~/.config/mockstro/designated.txt` for machine-specific names.
+  Agents and CI use only designated devices: `platforms.android.devices` / `platforms.ios.devices` in
+  `mockstro.yaml` or `mockstro.local.yaml`, or `~/.config/mockstro/designated.txt` for machine-specific names.
   `--boot-emulator` boots one when none is free, and `--headless` runs it without a window.
+  Fresh Android boots wait for three CPU samples at least 60% idle (two seconds apart),
+  capped at three minutes, to reduce contention from startup work. The wait is best-effort.
+  For iOS, headless does not open Simulator.app; the simulator and app still render and run.
+  It leaves an already-open Simulator window alone.
 - **Physical devices** always run through `--map-remote` (lite behaviour, one device).
 
 ## Configuration
 
-`.maestro/project.env` (full integration):
+`.maestro/mockstro.yaml` is required. Settings are explicit; `project.env` is no longer read.
+Start a new suite with:
 
-| Key | Purpose |
-| --- | --- |
-| `MAESTRO_PLATFORM` | `android` or `ios` |
-| `APP_PACKAGE` | application id / bundle id |
-| `MAESTRO_AGENT_AVDS`, `IOS_SIMULATOR_NAMES` | designated devices |
-| `E2E_PROXY_BASE_URL`, `E2E_FALLBACK_PROXY_URL`, `E2E_FBRC_URL` | real API and Remote Config URLs |
-| `E2E_OVERRIDE_SETTING_KEY`, `E2E_ACCEPT_SETTING_KEY` | Android override and acceptance keys |
-| `MAESTRO_APP_VARIANT`, `ANDROID_GRADLE_TASK`, `ANDROID_APK_GLOB` | Android build |
-| `IOS_PROJECT`, `IOS_SCHEME`, `IOS_CONFIGURATION` | iOS build |
+```bash
+mockstro init --android-app-id com.example.android --ios-app-id com.example.ios \
+  --android-project ../android-app --ios-project ../ios-app
+```
+
+The template uses lite integration, a shared `appId: ${APP_ID}` smoke flow, and ignores
+`mockstro.local.yaml` and `.runtime/`. Add assertions to the starter flow. Each platform
+can independently opt into full integration once its debug app supports the override seam.
+
+```yaml
+# .maestro/mockstro.yaml
+platforms:
+  android:
+    project: ../android-app
+    appId: com.example.android
+    integration: full
+    devices: [Agent_Pixel]
+    build:
+      task: assembleDebug
+      artifact: app/build/outputs/apk/debug/*.apk
+  ios:
+    project: ../ios-app
+    appId: com.example.ios
+    integration: full
+    devices: [Agent_iPhone]
+    build:
+      project: App.xcworkspace
+      scheme: App
+      configuration: Debug
+env:
+  TEST_USER: demo
+```
+
+Source project paths are relative to the owning suite repository, including in local
+overrides. They can point at the same checkout for a monorepo or separate checkouts.
+All flows, shared subflows and mocks belong to this suite's `.maestro/`.
+Use `mockstro.local.yaml` to override only `env` or each platform's `project`, `devices`,
+`build`, and `env`. Local files cannot redefine test cases, app IDs or integration modes.
+
+```yaml
+# .maestro/mockstro.local.yaml — ignored
+platforms:
+  android:
+    project: /Users/me/projects/android-app
+    devices: [My_Pixel]
+```
+
+Each selected flow runs on every configured platform by default. On a Mac, full targets
+run concurrently with separate device/port locks and WireMock servers. If any selected
+target is lite (or `--map-remote` is used), platforms run sequentially; lite always uses
+one installed app/device at a time. `--parallel 2` gives each full target up to two device
+workers, booting designated devices if needed. With both full targets, `--parallel 2`
+uses two Android devices and two iOS simulators (four workers total). `--parallel auto`
+uses running, free devices and can produce different counts per platform; when none
+are running, it boots one. The TUI defaults to `Workers per platform: 1`; select `2`
+for two devices per platform, or `auto` to use the available running devices. Lite targets
+remain single-device. One platform failing does not stop the
+other. Cancellation stops the suite and cleans up both targets.
+
+```bash
+./mockstrow run .maestro/flows/smoke/launch.yaml
+./mockstrow run --platform ios --tags smoke --skip-build
+./mockstrow run --env-file .maestro/test-users.yaml -e TEST_USER=other
+./mockstrow run --rerun-failed
+```
+
+Variable files are flat YAML maps with non-null scalar values, converted to strings.
+Precedence, lowest to highest: suite `env`, platform `env`, flow header `env`, local `env`
+(and local platform `env`), `--env-file` files in order, then repeatable `-e KEY=VALUE`.
+`APP_ID` and `WIREMOCK_PORT` are runner-controlled and cannot be set in those maps.
+Build processes inherit the real process environment; test variables are passed only to
+Maestro. YAML is a configuration format, not secret storage.
+
+Use `appId: ${APP_ID}` in every flow, including subflows. Maestro's native conditions
+remain unchanged:
+
+```yaml
+- runFlow:
+    when:
+      platform: iOS
+    file: ../../shared/ios/permissions.yaml
+```
+
+Tags such as `ios` are ordinary selection labels; mockstro does not infer platforms from
+tags, names or conditional steps. Reports identify each flow/platform pair. The TUI shows
+one flow row with configured platform badges, a target selector and variable inputs; Run
+and History distinguish platform results and rerun only failed pairs. History reruns use
+current configuration/input files; secrets and resolved test values are not saved in reports.
+
+Other per-platform options: `proxyBaseUrl`, `fallbackUrl`, `fbrcUrl`, `overrideKey`,
+`acceptKey`. Android build defaults to `assembleDebug` and `app/build/outputs/apk/debug/*.apk`;
+iOS requires `build.project` and `build.scheme` when building. App IDs are always explicit.
+Kotlin toolchain builds are future work; execution targets already keep source roots separate.
 
 Environment: `MOCKSTRO_KEEP_RUNS` (finished run dirs kept per project, default 20),
 `MOCKSTRO_STATE_DIR`, `MOCKSTRO_CACHE_DIR`.
@@ -223,10 +337,24 @@ Environment: `MOCKSTRO_KEEP_RUNS` (finished run dirs kept per project, default 2
 | `~/.config/mockstro/designated.txt` | optional AVD or simulator names any project may drive |
 
 Run data stays in the repository under `.maestro/.runtime/`. After each run, the APK snapshot
-is deleted (its SHA-256 is kept in `run.json`), and the project is pruned to the newest
+is deleted (its SHA-256 is kept in the child run metadata), and the project is pruned to the newest
 `MOCKSTRO_KEEP_RUNS` finished runs.
 
 ## Develop
+
+Install the current checkout as a separate command on your PATH:
+
+```bash
+make install-dev                     # installs ~/.local/bin/mockstro-dev
+cd /path/to/your/app
+mockstro-dev tui
+mockstro-dev --version                # dev-prefixed Git version, including dirty state
+```
+
+Run `make install-dev` again after changing the source. The released `mockstro` and
+the project's pinned `./mockstrow` remain independent. `make build-dev` only builds
+`bin/mockstro-dev`; `make uninstall-dev` removes the development command.
+Override `BIN_DIR` if needed, for example `make install-dev BIN_DIR="$HOME/bin"`.
 
 ```bash
 make test             # hermetic engine checks + TUI render tests
@@ -245,8 +373,8 @@ independent signatures or protection against a compromised release publisher.
 
 ## WebSockets and Kotlin Toolchain
 
-Full integration supports Kotlin Toolchain builds with `BUILD_SYSTEM=kotlin-toolchain`.
+Full integration supports Kotlin Toolchain builds with per-platform `build.system: kotlin-toolchain`.
 Native WebSocket fixtures are available with the checksum-pinned
-`WIREMOCK_VERSION=4.0.0-beta.40`; HTTP-only projects keep WireMock 3.13.2 by default.
+`wiremockVersion: 4.0.0-beta.40`; HTTP-only projects keep WireMock 3.13.2 by default.
 See [Kotlin Toolchain setup](docs/kotlin-toolchain.md) and
 [WebSocket fixtures, verification and pushes](docs/websockets.md).

@@ -3,6 +3,7 @@ package fixtures
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/feernandooff/mockstro/internal/ojson"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 // Verification asserts how often a named stub was matched during one flow.
@@ -52,6 +54,7 @@ func (v Verification) Expectation() string {
 
 // Header is the first YAML document of a flow or scenario.
 type Header struct {
+	Variables     project.Variables
 	Path          string
 	AppID         string
 	Name          string
@@ -104,6 +107,15 @@ func ParseHeader(path string) (*Header, error) {
 			return nil, fmt.Errorf("invalid YAML steps: %w", err)
 		}
 		h.HasSteps = steps != nil
+	}
+	if env, ok := raw["env"]; ok {
+		data, err := yaml.Marshal(env)
+		if err != nil {
+			return nil, err
+		}
+		if err = yaml.Unmarshal(data, &h.Variables); err != nil {
+			return nil, fmt.Errorf("flow env: %w", err)
+		}
 	}
 	h.AppID, _ = raw["appId"].(string)
 	h.Name, _ = raw["name"].(string)
@@ -260,14 +272,101 @@ func (h *Header) validateVerifications(rel string) error {
 // SanitizedFlow strips runner-only properties so Maestro sees a plain flow. The steps are kept
 // byte-for-byte; only the header is re-emitted.
 func SanitizedFlow(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
+	node, body, err := sanitizedHeader(path)
 	if err != nil {
 		return nil, err
+	}
+	return encodeFlow(node, body)
+}
+
+// BatchHooks wires one flow of a batched Maestro run back to mockstro.
+type BatchHooks struct {
+	Script string // hook script path
+	URL    string // control server base URL
+	Flow   string // flow id the server knows it by
+}
+
+// BatchFlow is SanitizedFlow plus mockstro's start/complete hooks, a final "passed" step and
+// the flow's resolved variables. A flow's own env wins over -e, so per-flow values go in
+// env; reserved keys always take mockstro's value.
+func BatchFlow(path string, env map[string]string, reserved []string, h BatchHooks) ([]byte, error) {
+	node, body, err := sanitizedHeader(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(node.Content) == 0 {
+		node.Kind = yaml.DocumentNode
+		node.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
+	}
+	m := node.Content[0]
+	if m.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("%s: header is not a mapping", path)
+	}
+	envNode := mappingValue(m, "env", yaml.MappingNode)
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		if v := mappingValue(envNode, k, 0); v.Kind != 0 && !slices.Contains(reserved, k) {
+			continue
+		}
+		setMapping(envNode, k, env[k])
+	}
+	hook := func(action string) (*yaml.Node, error) {
+		var n yaml.Node
+		err := n.Encode(map[string]any{"runScript": map[string]any{
+			"file": h.Script,
+			"env":  map[string]string{"MOCKSTRO_URL": h.URL, "MOCKSTRO_ACTION": action, "MOCKSTRO_FLOW": h.Flow},
+		}})
+		return &n, err
+	}
+	start, err := hook("start")
+	if err != nil {
+		return nil, err
+	}
+	complete, _ := hook("complete")
+	passed, _ := hook("passed")
+	// Setup runs before the flow's own hooks; checks run after them, so their requests count.
+	onStart := mappingValue(m, "onFlowStart", yaml.SequenceNode)
+	onStart.Content = append([]*yaml.Node{start}, onStart.Content...)
+	onComplete := mappingValue(m, "onFlowComplete", yaml.SequenceNode)
+	onComplete.Content = append(onComplete.Content, complete)
+
+	// Maestro names a flow after its file when it has no name; keep that for the renamed copy.
+	if mappingValue(m, "name", 0).Kind == 0 {
+		setMapping(m, "name", strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	}
+
+	// Reaching the last step means every earlier step passed.
+	var steps yaml.Node
+	if err := yaml.Unmarshal(body, &steps); err != nil {
+		return nil, err
+	}
+	if len(steps.Content) == 0 {
+		steps = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.SequenceNode}}}
+	}
+	seq := steps.Content[0]
+	if seq.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("%s: steps are not a list", path)
+	}
+	seq.Style = 0
+	seq.Content = append(seq.Content, passed)
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&steps); err != nil {
+		return nil, err
+	}
+	_ = enc.Close()
+	return encodeFlow(node, out.Bytes())
+}
+
+func sanitizedHeader(path string) (*yaml.Node, []byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
 	}
 	headerText, body, _ := splitDocuments(data)
 	var node yaml.Node
 	if err := yaml.Unmarshal(headerText, &node); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(node.Content) > 0 && node.Content[0].Kind == yaml.MappingNode {
 		m := node.Content[0]
@@ -281,11 +380,15 @@ func SanitizedFlow(path string) ([]byte, error) {
 		}
 		m.Content = kept
 	}
+	return &node, body, nil
+}
+
+func encodeFlow(node *yaml.Node, body []byte) ([]byte, error) {
 	var out bytes.Buffer
 	if len(node.Content) > 0 {
 		enc := yaml.NewEncoder(&out)
 		enc.SetIndent(2)
-		if err := enc.Encode(&node); err != nil {
+		if err := enc.Encode(node); err != nil {
 			return nil, err
 		}
 		_ = enc.Close()
@@ -293,6 +396,36 @@ func SanitizedFlow(path string) ([]byte, error) {
 	out.WriteString("---\n")
 	out.Write(body)
 	return out.Bytes(), nil
+}
+
+// mappingValue returns m[key], creating it with kind when missing (kind 0 = look up only).
+func mappingValue(m *yaml.Node, key string, kind yaml.Kind) *yaml.Node {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			if v := m.Content[i+1]; kind == 0 || v.Kind == kind {
+				return v
+			}
+			m.Content[i+1] = &yaml.Node{Kind: kind}
+			return m.Content[i+1]
+		}
+	}
+	if kind == 0 {
+		return &yaml.Node{}
+	}
+	v := &yaml.Node{Kind: kind}
+	m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: key}, v)
+	return v
+}
+
+func setMapping(m *yaml.Node, key, value string) {
+	v := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content[i+1] = v
+			return
+		}
+	}
+	m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: key}, v)
 }
 
 // Flow is an executable Maestro flow under flows/.
@@ -353,14 +486,6 @@ func (f *Flow) MatchesTags(tags []string) bool {
 		}
 	}
 	return false
-}
-
-// Tag both android and ios to share a flow across platforms.
-func (f *Flow) MatchesPlatform(platform string) bool {
-	if platform == "ios" {
-		return f.HasTag("ios")
-	}
-	return !f.HasTag("ios") || f.HasTag("android")
 }
 
 // Profiles.
