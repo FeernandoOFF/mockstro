@@ -129,6 +129,7 @@ Recommended Android seam: [docs/android-integration.md](docs/android-integration
 
 ```bash
 mockstro                                   # TUI in a terminal; runs the smoke suite otherwise
+mockstro init [--app-id com.example.app]   # scaffold .maestro with an example flow, profile and stub
 mockstro run                               # flows tagged smoke
 mockstro run --tags smoke,regression --parallel auto
 mockstro run .maestro/flows/account/overview.yaml --skip-build

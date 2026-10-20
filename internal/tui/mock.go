@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,30 +46,30 @@ type stubRef struct{ layer, name, route string }
 // mockModel serves scenarios/profiles/flows on 18080 and shows the request journal live,
 // highlighting requests no stub matched.
 type mockModel struct {
-	a         *app
-	filter    textinput.Model
-	filtering bool
-	all       []mockTarget
-	visible   []mockRow
-	open      map[string]bool // folder key → expanded
-	cursor    int
-	attachIdx int // 0 = server-only, else index into eligible devices+1
-	session   *engine.MockSession
-	eng       *engine.Engine
-	starting  bool
-	busy      bool // stopping or switching
-	startErr  error
-	journal   []wiremock.LoggedRequest
-	jErr      error
-	polling   bool
-	onlyMiss  bool
-	focusLog  bool // arrows move in the right pane instead of picking targets
-	jCur      int
-	showStubs bool // while serving, the right pane lists stubs instead of the journal
-	stubsFor  string
-	stubList  []stubRef
-	stubErr   error
-	sCur      int
+	a            *app
+	filter       textinput.Model
+	filtering    bool
+	all          []mockTarget
+	visible      []mockRow
+	open         map[string]bool // folder key → expanded
+	cursor       int
+	attachDevice string // empty = server-only; retain the serial across status refreshes
+	session      *engine.MockSession
+	eng          *engine.Engine
+	starting     bool
+	busy         bool // stopping or switching
+	startErr     error
+	journal      []wiremock.LoggedRequest
+	jErr         error
+	polling      bool
+	onlyMiss     bool
+	focusLog     bool // arrows move in the right pane instead of picking targets
+	jCur         int
+	showStubs    bool // while serving, the right pane lists stubs instead of the journal
+	stubsFor     string
+	stubList     []stubRef
+	stubErr      error
+	sCur         int
 }
 
 func newMockModel(a *app) *mockModel {
@@ -114,8 +115,34 @@ func (m *mockModel) devices() []string {
 	out := []string{"server-only"}
 	if st := m.a.status; st != nil {
 		out = append(out, st.Available.Eligible...)
+		if m.a.query.Owner == "human" && m.a.query.Opts.Platform != "ios" {
+			for _, d := range st.Devices {
+				if d.Class == "physical" && d.LockedBy == nil && !d.Eligible {
+					out = append(out, d.Serial)
+				}
+			}
+		}
 	}
 	return out
+}
+
+// Physical mock attachments reuse the installed app instead of replacing it.
+func (m *mockModel) startOptions(device string) engine.Options {
+	o := m.a.opts
+	o.FBRC = map[string]string{}
+	o.ServerPort, o.PortPinned = 18080, true
+	o.Attach, o.DeviceArg = device != "", device
+	if device != "" {
+		o.ClearProxy = true
+		if st := m.a.status; st != nil {
+			for _, d := range st.Devices {
+				if d.Serial == device && d.Class == "physical" {
+					o.SkipBuild = true
+				}
+			}
+		}
+	}
+	return o
 }
 
 func (m *mockModel) stopSync() {
@@ -207,8 +234,13 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 		m.filter.SetValue("")
 		m.apply()
 	case "a":
-		if m.session == nil && !m.a.p.Lite() {
-			m.attachIdx = (m.attachIdx + 1) % len(m.devices())
+		if m.session == nil && !m.starting && !m.busy && !m.a.p.Lite() {
+			devs := m.devices()
+			i := max(0, slices.Index(devs, m.attachDevice))
+			m.attachDevice = devs[(i+1)%len(devs)]
+			if m.attachDevice == "server-only" {
+				m.attachDevice = ""
+			}
 		}
 	case "m":
 		if !m.stubsPane() {
@@ -276,20 +308,15 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 				return mockSwitchedMsg{target, err}
 			}
 		}
-		m.starting, m.startErr = true, nil
-		devs := m.devices()
-		device := ""
-		if m.attachIdx > 0 && m.attachIdx < len(devs) {
-			device = devs[m.attachIdx]
+		device := m.attachDevice
+		if device != "" && !slices.Contains(m.devices(), device) {
+			m.startErr = fmt.Errorf("device %q is unavailable; press a to select a target", device)
+			return nil
 		}
+		m.starting, m.startErr = true, nil
 		a := m.a
+		o := m.startOptions(device)
 		return func() tea.Msg {
-			o := a.opts
-			o.FBRC = map[string]string{}
-			o.ServerPort, o.PortPinned = 18080, true
-			if device != "" {
-				o.Attach, o.DeviceArg, o.ClearProxy = true, device, true
-			}
 			if err := o.Validate("mock"); err != nil {
 				return mockStartedMsg{err: err}
 			}
@@ -343,8 +370,12 @@ func (m *mockModel) view(w, h int) (string, string) {
 	}
 
 	var jb strings.Builder
-	devs := m.devices()
-	mode := devs[min(m.attachIdx, len(devs)-1)]
+	mode := m.attachDevice
+	if mode == "" {
+		mode = "server-only"
+	} else if !slices.Contains(m.devices(), mode) {
+		mode += " (unavailable)"
+	}
 	switch {
 	case m.starting:
 		jb.WriteString(sWarn.Render("starting WireMock on :18080…") + "\n")
@@ -357,7 +388,7 @@ func (m *mockModel) view(w, h int) (string, string) {
 		} else {
 			fmt.Fprintf(&jb, "Target device: %s %s\n\n", sSel.Render(mode), sMuted.Render("(a to change)"))
 		}
-		hint := "server-only: point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nattach: installs the build on the device and writes the runtime override.\nenter on a target to start serving it."
+		hint := "server-only: point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nattach: installs the build and writes the runtime override.\nAndroid phones: use the installed app via adb reverse.\nattach clears any device-wide HTTP proxy.\nenter on a target to start serving it."
 		if m.a.p.Lite() {
 			hint = "point Proxyman/Charles Map Remote at 127.0.0.1:18080.\nenter on a target to start serving it."
 		}

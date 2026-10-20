@@ -751,3 +751,37 @@ func TestLiveProgress(t *testing.T) {
 		t.Fatalf("stages %v runners %v", st, stages)
 	}
 }
+
+func TestManualMockPhysicalDevice(t *testing.T) {
+	h := func(c execx.Cmd) (string, error) {
+		if out, ok := adbDevices(c, map[string]string{"phone": ""}); ok {
+			return out, nil
+		}
+		return "", errors.New("unexpected " + c.String())
+	}
+	for _, owner := range []string{"human", "agent", "ci"} {
+		t.Run(owner, func(t *testing.T) {
+			e, _ := testEngine(t, owner, h)
+			e.Opts.Attach, e.Opts.DeviceArg = true, "phone"
+			if err := e.Opts.Validate("mock"); err != nil {
+				t.Fatal(err)
+			}
+			locks := e.newLocks("manual-mock")
+			defer locks.ReleaseAll()
+			serial, err := e.SelectDevice(context.Background(), locks)
+			if owner == "human" {
+				if err != nil || serial != "phone" {
+					t.Fatalf("explicit phone attachment: %q %v", serial, err)
+				}
+				if e.Allowed(context.Background(), "another-phone") {
+					t.Fatal("manual mock allowed an unselected phone")
+				}
+			} else if err == nil {
+				t.Fatal("non-human attached a phone directly")
+			}
+			if err := e.Opts.Validate("run"); err == nil {
+				t.Fatal("physical run accepted without map remote")
+			}
+		})
+	}
+}

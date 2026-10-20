@@ -537,3 +537,104 @@ func TestHistoryShowsFlowStubs(t *testing.T) {
 		t.Fatalf("tab %d", a.tab)
 	}
 }
+
+func TestMockPhoneAttachment(t *testing.T) {
+	a := testApp(t)
+	locked := "other-run"
+	a.status.Devices = append(a.status.Devices,
+		engine.StatusDevice{Device: platform.Device{Serial: "phone", Class: "physical"}},
+		engine.StatusDevice{Device: platform.Device{Serial: "busy-phone", Class: "physical"}, LockedBy: &locked},
+	)
+	key(a, "5")
+	key(a, "a")
+	key(a, "a")
+	if got := a.mock.attachDevice; got != "phone" {
+		t.Fatalf("selected %q instead of phone", got)
+	}
+	if v := a.View(); !strings.Contains(v, "phone") || !strings.Contains(v, "installed app via adb reverse") {
+		t.Fatalf("phone attachment instructions missing:\n%s", v)
+	}
+	o := a.mock.startOptions("phone")
+	if !o.Attach || !o.SkipBuild || !o.ClearProxy || o.DeviceArg != "phone" {
+		t.Fatalf("phone options: %+v", o)
+	}
+	if err := o.Validate("mock"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(a.mock.devices(), ","); strings.Contains(got, "busy-phone") {
+		t.Fatal("locked phone offered for attachment")
+	}
+	if a.mock.startOptions("emulator-5554").SkipBuild {
+		t.Fatal("emulator no longer builds by default")
+	}
+	if a.mock.startOptions("").Attach {
+		t.Fatal("server-only attaches a device")
+	}
+	key(a, "a")
+	if a.mock.attachDevice != "" {
+		t.Fatal("device selector did not wrap to server-only")
+	}
+	a.query.Owner = "agent"
+	if got := strings.Join(a.mock.devices(), ","); strings.Contains(got, "phone") {
+		t.Fatal("agent offered a physical device")
+	}
+}
+
+func TestMockAttachmentUnavailableAfterRefresh(t *testing.T) {
+	for _, selected := range []string{"emulator-5554", "phone"} {
+		t.Run(selected, func(t *testing.T) {
+			a := testApp(t)
+			phone := engine.StatusDevice{Device: platform.Device{Serial: "phone", Class: "physical"}}
+			a.status.Devices = append(a.status.Devices, phone)
+			key(a, "5")
+			key(a, "a")
+			if selected == "phone" {
+				key(a, "a")
+			}
+			st := &engine.Status{Devices: []engine.StatusDevice{phone}}
+			if selected == "phone" {
+				// A locked phone becomes unavailable even while it remains connected.
+				locked := "other-run"
+				st.Devices[0].LockedBy = &locked
+				st.Available.Eligible = []string{"emulator-5554"}
+			}
+			a.Update(statusMsg{st})
+			if a.mock.attachDevice != selected {
+				t.Fatalf("refresh changed selection to %q", a.mock.attachDevice)
+			}
+			if v := a.View(); !strings.Contains(v, selected+" (unavailable)") {
+				t.Fatalf("missing unavailable device indicator:\n%s", v)
+			}
+			for i, row := range a.mock.visible {
+				if row.target != nil {
+					a.mock.cursor = i
+					break
+				}
+			}
+			if cmd := a.mock.key(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil || a.mock.starting || a.mock.startErr == nil {
+				t.Fatal("unavailable attachment did not prevent starting a mock")
+			}
+			key(a, "a")
+			if a.mock.attachDevice == selected {
+				t.Fatal("could not reselect an available device")
+			}
+		})
+	}
+}
+
+func TestMockAttachmentSurvivesDeviceReordering(t *testing.T) {
+	a := testApp(t)
+	a.status.Available.Eligible = append(a.status.Available.Eligible, "emulator-5556")
+	key(a, "5")
+	key(a, "a")
+	st := *a.status
+	st.Available.Eligible = []string{"emulator-5556", "emulator-5554"}
+	a.Update(statusMsg{&st})
+	if a.mock.attachDevice != "emulator-5554" {
+		t.Fatalf("refresh changed selected device to %q", a.mock.attachDevice)
+	}
+	key(a, "a")
+	if a.mock.attachDevice != "" {
+		t.Fatal("cycling did not follow the selected device's new position")
+	}
+}

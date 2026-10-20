@@ -164,10 +164,15 @@ func Execute(version string) int {
 		RunE: func(cmd *cobra.Command, args []string) error { return pruneCmd(cmd.Context(), g, keep) }}
 	prune.Flags().IntVar(&keep, "keep", engine.KeepRuns(), "finished run dirs to keep")
 
+	var appID string
+	initc := &cobra.Command{Use: "init", Short: "Scaffold a minimal .maestro (flow, profile, stub) in the current or -C directory", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error { return initCmd(g, appID) }}
+	initc.Flags().StringVar(&appID, "app-id", "com.example.app", "appId for the example flow")
+
 	tui := &cobra.Command{Use: "tui", Short: "Open the interactive terminal UI", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return runTUI(g, f) }}
 
-	root.AddCommand(bootstrapCommand(g), skillCommand(g), run, mock, setup, list, resolve, status, sweep, lastRun, recordAPI, playback, boot, prune, proxy, tui)
+	root.AddCommand(bootstrapCommand(g), skillCommand(g), run, mock, setup, list, resolve, status, sweep, lastRun, recordAPI, playback, boot, prune, proxy, initc, tui)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()

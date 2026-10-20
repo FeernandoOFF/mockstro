@@ -19,7 +19,12 @@ import (
 //   - agents and CI may only take an emulator/simulator that is explicitly designated
 //     (MAESTRO_AGENT_AVDS, IOS_SIMULATOR_NAMES or ~/.config/mockstro/designated.txt);
 //   - a human may take any emulator, designated ones first;
-//   - a physical device is only driven with --map-remote.
+//   - a physical device is only driven with --map-remote, or explicitly attached
+//     to a manual Android mock by a human.
+
+func (e *Engine) manualMockDevice(serial string) bool {
+	return e.Owner == "human" && e.Opts.Platform != "ios" && e.Opts.Attach && e.Opts.DeviceArg == serial
+}
 
 func (e *Engine) isDesignated(ctx context.Context, serial string) bool {
 	name := e.Plat.DeviceName(ctx, serial)
@@ -32,6 +37,9 @@ func (e *Engine) isDesignated(ctx context.Context, serial string) bool {
 // Allowed reports whether this owner may drive serial at all.
 func (e *Engine) Allowed(ctx context.Context, serial string) bool {
 	if e.Opts.MapRemote || e.Opts.Lite {
+		return true
+	}
+	if e.manualMockDevice(serial) {
 		return true
 	}
 	if e.Plat.Class(serial) != "emulator" {

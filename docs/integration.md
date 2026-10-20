@@ -83,6 +83,16 @@ Recommended structure: [android-integration.md](android-integration.md).
 - mockstro runs `adb reverse tcp:<port>`, so `127.0.0.1` on the device reaches the Mac.
 - `network_security_config`: permit cleartext to `127.0.0.1`.
 
+For manual mocking on a connected Android phone, open the TUI's **Mock** tab,
+press `a` to select an unlocked phone, then press Enter on a scenario, profile or
+flow. Phone attachments reuse the installed app, clear any device-wide HTTP
+proxy, and configure the runtime override and `adb reverse` on port 18080.
+The installed build must support the override seam above. Press `x` to stop
+and clean up the attachment; restart the app after starting or switching mocks
+so it reads the new override. Only human-owned sessions can attach phones directly.
+The CLI equivalent is
+`mockstro mock <scenario> --attach --device <phone-serial> --skip-build --clear-proxy`.
+
 **iOS** (simulators only)
 
 - Build: `IOS_PROJECT` (`.xcodeproj`/`.xcworkspace`), `IOS_SCHEME`, `IOS_CONFIGURATION`.

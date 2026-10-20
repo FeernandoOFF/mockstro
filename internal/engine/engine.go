@@ -281,7 +281,8 @@ func (o *Options) Validate(command string) error {
 		}
 		o.ServerPort, o.PortPinned = project.ReservedMockPort, true
 	}
-	if o.DeviceClass == "physical" && !o.MapRemote {
+	manualAndroidMock := command == "mock" && o.Attach && o.Platform != "ios"
+	if o.DeviceClass == "physical" && !o.MapRemote && !manualAndroidMock {
 		return fmt.Errorf("only designated emulators are supported; use --map-remote for a physical device")
 	}
 	if o.Parallel != "" {
@@ -306,7 +307,7 @@ func (o *Options) Validate(command string) error {
 			if !isUDID(o.DeviceArg) {
 				return fmt.Errorf("--device must be a simulator UDID")
 			}
-		} else if !strings.HasPrefix(o.DeviceArg, "emulator-") {
+		} else if !manualAndroidMock && !strings.HasPrefix(o.DeviceArg, "emulator-") {
 			return fmt.Errorf("--device must name a designated emulator")
 		}
 	}
@@ -328,7 +329,7 @@ func (o *Options) Validate(command string) error {
 		}
 		o.ServerPort, o.PortPinned = project.ReservedMockPort, true
 		if o.Attach && o.DeviceArg == "" {
-			return fmt.Errorf("mock --attach requires --device <emulator-serial>")
+			return fmt.Errorf("mock --attach requires --device <serial-or-simulator-UDID>")
 		}
 		if !o.Attach && o.DeviceArg != "" {
 			return fmt.Errorf("mock --device requires explicit --attach")
