@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ type mockTarget struct {
 	kind, name, desc string
 	label            string // what the list shows: a flow's name: header, else its file name
 	rel              string // flows: path under flows/
+	path             string // editable source file
 }
 
 // stubRef is one stub a target serves, in priority order (overrides, profile, shared).
@@ -81,17 +83,17 @@ func newMockModel(a *app) *mockModel {
 func (m *mockModel) refresh() {
 	m.all = m.all[:0]
 	for _, s := range m.a.scenarios {
-		m.all = append(m.all, mockTarget{kind: "scenario", name: s.Name, desc: s.Header.Description, label: s.Name})
+		m.all = append(m.all, mockTarget{kind: "scenario", name: s.Name, desc: s.Header.Description, label: s.Name, path: s.Path})
 	}
 	for _, p := range m.a.profiles {
-		m.all = append(m.all, mockTarget{kind: "profile", name: p, desc: "bare customer profile", label: p})
+		m.all = append(m.all, mockTarget{kind: "profile", name: p, desc: "bare customer profile", label: p, path: filepath.Join(m.a.p.ProfilesRoot(), p+".json")})
 	}
 	for _, f := range m.a.flows {
 		label := f.Header.Name
 		if label == "" {
 			label = f.File
 		}
-		m.all = append(m.all, mockTarget{kind: "flow", name: m.a.p.Rel(f.Path), desc: f.Header.Name, label: label, rel: f.Rel})
+		m.all = append(m.all, mockTarget{kind: "flow", name: m.a.p.Rel(f.Path), desc: f.Header.Name, label: label, rel: f.Rel, path: f.Path})
 	}
 	m.apply()
 }
@@ -221,6 +223,14 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 		}
 	case "f":
 		m.focusLog = !m.focusLog
+	case "e":
+		if m.focusLog {
+			if name := m.paneStub(); name != "" {
+				return m.a.editStub(name)
+			}
+		} else if m.cursor < len(m.visible) && m.visible[m.cursor].target != nil {
+			return m.a.editFile(m.visible[m.cursor].target.path)
+		}
 	case "y":
 		if m.cursor < len(m.visible) {
 			row := m.visible[m.cursor]
@@ -283,8 +293,14 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 			device = devs[m.attachIdx]
 		}
 		a := m.a
+		target := a.query.P
+		if device != "" {
+			target = a.deviceQuery(device).P
+		}
 		return func() tea.Msg {
 			o := a.opts
+			o.Platform = target.Platform
+			o.Lite = target.Lite()
 			o.FBRC = map[string]string{}
 			o.ServerPort, o.PortPinned = 18080, true
 			if device != "" {
@@ -293,7 +309,7 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 			if err := o.Validate("mock"); err != nil {
 				return mockStartedMsg{err: err}
 			}
-			e := engine.New(a.p, o, execx.Real{}, func(ev engine.Event) {
+			e := engine.New(target, o, execx.Real{}, func(ev engine.Event) {
 				if ev.Kind == engine.EvLog {
 					a.prog.Send(activityMsg{ev.Level, ev.Text})
 				}
@@ -426,7 +442,7 @@ func (m *mockModel) view(w, h int) (string, string) {
 	if m.focusLog {
 		enter = " · enter open in Stubs"
 	}
-	help := navHelp + " · f switch panel" + enter + attach + " · x stop · / filter · esc clear"
+	help := navHelp + " · f switch panel" + enter + attach + " · e edit · x stop · / filter · esc clear"
 	if m.filtering {
 		help = "type to filter · enter/esc done"
 	}

@@ -140,7 +140,7 @@ func (i *IOS) Boot(ctx context.Context, name string, headless bool, progress fun
 	return udid, nil
 }
 
-func (i *IOS) EnsureBooted(ctx context.Context, serial string, progress func(string)) error {
+func (i *IOS) EnsureBooted(ctx context.Context, serial string, headless bool, progress func(string)) error {
 	state := ""
 	for _, s := range i.sims(ctx, true) {
 		if s.UDID == serial {
@@ -153,7 +153,9 @@ func (i *IOS) EnsureBooted(ctx context.Context, serial string, progress func(str
 			return fmt.Errorf("simulator %s did not finish booting", serial)
 		}
 	}
-	i.showSimulator(ctx, progress)
+	if !headless {
+		i.showSimulator(ctx, progress)
+	}
 	return nil
 }
 
@@ -166,12 +168,12 @@ func (i *IOS) showSimulator(ctx context.Context, progress func(string)) {
 
 func (i *IOS) Build(ctx context.Context, artifactDir string, out io.Writer) (string, string, error) {
 	if i.P.IOSProject == "" || i.P.IOSScheme == "" {
-		return "", "", fmt.Errorf("set IOS_PROJECT and IOS_SCHEME in .maestro/project.env")
+		return "", "", fmt.Errorf("set platforms.ios.build.project and platforms.ios.build.scheme in .maestro/mockstro.yaml")
 	}
 	if out == nil {
 		out = io.Discard
 	}
-	derived := filepath.Join(i.P.Root, "build", "maestro-derived-data")
+	derived := filepath.Join(i.P.SourceRoot(), "build", "maestro-derived-data")
 	fmt.Fprintf(out, "Building %s (%s, incremental)...\n", i.P.IOSScheme, i.P.IOSConfig)
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		return "", "", err
@@ -186,7 +188,7 @@ func (i *IOS) Build(ctx context.Context, artifactDir string, out io.Writer) (str
 		projFlag = "-workspace"
 	}
 	err = i.Exec.Run(ctx, execx.Cmd{Name: "xcodebuild", Args: []string{
-		projFlag, filepath.Join(i.P.Root, i.P.IOSProject),
+		projFlag, filepath.Join(i.P.SourceRoot(), i.P.IOSProject),
 		"-scheme", i.P.IOSScheme,
 		"-configuration", i.P.IOSConfig,
 		"-sdk", "iphonesimulator",
@@ -194,7 +196,7 @@ func (i *IOS) Build(ctx context.Context, artifactDir string, out io.Writer) (str
 		"-derivedDataPath", derived,
 		"CODE_SIGNING_ALLOWED=NO",
 		"build",
-	}, Stdout: logf, Stderr: logf})
+	}, Dir: i.P.SourceRoot(), Stdout: logf, Stderr: logf})
 	logf.Close()
 	if err != nil {
 		return "", "", fmt.Errorf("xcodebuild failed; see %s", i.P.Rel(logPath))

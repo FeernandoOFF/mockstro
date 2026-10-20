@@ -96,6 +96,10 @@ func (s *stubsModel) load(force bool) {
 	s.shown = name
 	st := fixtures.New(s.a.p)
 	s.chain, _ = st.ExtendsChain(name)
+	if len(s.chain) == 0 {
+		// Keep a malformed source selectable so it can be fixed in the editor.
+		s.chain = []string{name}
+	}
 	if s.chainIdx >= len(s.chain) {
 		s.chainIdx = 0
 	}
@@ -245,13 +249,22 @@ func (s *stubsModel) key(k tea.KeyMsg) tea.Cmd {
 		s.stubScrl = 0
 		s.load(true)
 	case "e":
+		s.load(false)
+		if s.cursor < len(s.visible) {
+			name := s.visible[s.cursor]
+			if s.focus == 1 && !s.merged && s.chainIdx < len(s.chain) {
+				name = s.chain[s.chainIdx]
+			}
+			return s.a.editStub(name)
+		}
+	case "]":
 		if len(s.chain) > 1 {
 			s.merged = false
 			s.chainIdx = (s.chainIdx + 1) % len(s.chain)
 			s.stubScrl = 0
 			s.load(true)
 		}
-	case "E":
+	case "[":
 		if len(s.chain) > 1 {
 			s.merged = false
 			s.chainIdx = (s.chainIdx + len(s.chain) - 1) % len(s.chain)
@@ -318,9 +331,9 @@ func (s *stubsModel) view(w, h int) (string, string) {
 
 	chain := ""
 	if len(s.chain) > 1 {
-		chain = " · e/E walk extends chain"
+		chain = " · [/] walk extends chain"
 	}
-	help := navHelp + " · f switch panel · enter focus right · m own/merged" + chain + " · / filter · esc clear"
+	help := navHelp + " · f switch panel · enter focus right · e edit · m own/merged" + chain + " · / filter · esc clear"
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		focusPanel(s.focus == 0, "Stubs", lb.String(), listW, h),
 		focusPanel(s.focus == 1, s.stubTitle, stubBody, stubW, h),

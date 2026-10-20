@@ -2,8 +2,9 @@
 
 Inspect existing files before choosing names or adding a new abstraction.
 
-- Flows in `.maestro/flows/` declare `appId`, `tags` and mock properties in their YAML
-  header, followed by `---` and Maestro steps.
+- Flows in `.maestro/flows/` declare `appId: ${APP_ID}`, `tags` and mock properties in their YAML
+  header, followed by `---` and Maestro steps. Put platform subflows under `shared/`
+  and select them with native `runFlow.when.platform` conditions.
 - `properties.apiProfile` selects `wiremock/profiles/<name>.json`. `shared.json` is always
   loaded. Profiles list stub names in a `mappings` array.
 - `properties.apiOverrides` lists extra stubs, replacing same-route mappings from the

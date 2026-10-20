@@ -139,7 +139,8 @@ func (a *app) refreshStatus() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		return statusMsg{a.query.Status(ctx)}
+		st, _ := engine.SuiteStatus(ctx, a.p, a.opts, a.query.Exec)
+		return statusMsg{st}
 	}
 }
 
@@ -200,6 +201,14 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.mock.refresh()
 		a.stubTab.refresh()
 		return a, nil
+	case editorDoneMsg:
+		if m.err != nil {
+			a.log("error", "editor: %v", m.err)
+		} else {
+			a.log("info", "editor closed: %s", a.p.Rel(m.path))
+		}
+		a.mock.stubsFor = ""
+		return a, a.loadFixtures()
 	case histScanMsg:
 		a.hist.scanning = false
 		a.hist.apply(m)
@@ -379,7 +388,7 @@ func (a *app) View() string {
 		}
 	}
 	head := lipgloss.JoinHorizontal(lipgloss.Top, sTitle.Render(" mockstro "), strings.Join(tabs, ""))
-	proj := sMuted.Render(fmt.Sprintf(" %s · %s · owner %s · ", a.p.Root, a.opts.Platform, a.query.Owner)) + sSel.Render(a.p.IntegrationLabel())
+	proj := sMuted.Render(fmt.Sprintf(" %s · %s · owner %s · ", a.p.Root, a.platformLabel(), a.query.Owner)) + sSel.Render(a.integrationLabel())
 	bodyH := a.h - 4
 	var body, help string
 	switch a.tab {
@@ -421,4 +430,38 @@ func (a *app) refreshTab() tea.Cmd {
 		return a.loadFixtures()
 	}
 	return nil
+}
+
+func (a *app) platformLabel() string {
+	targets, _ := a.p.Selected(a.opts.Platform)
+	var names []string
+	for _, t := range targets {
+		names = append(names, t.Platform)
+	}
+	return strings.Join(names, "+")
+}
+
+func (a *app) deviceQuery(serial string) *engine.Engine {
+	if a.status != nil {
+		for _, device := range a.status.Devices {
+			if device.Serial == serial && device.Platform != "" {
+				o := a.opts
+				o.Platform = device.Platform
+				return engine.New(a.p, o, a.query.Exec, nil)
+			}
+		}
+	}
+	return a.query
+}
+
+func (a *app) integrationLabel() string {
+	targets, _ := a.p.Selected(a.opts.Platform)
+	if len(targets) == 1 {
+		return targets[0].IntegrationLabel()
+	}
+	var labels []string
+	for _, target := range targets {
+		labels = append(labels, target.Platform+" "+target.Integration)
+	}
+	return strings.Join(labels, " · ")
 }

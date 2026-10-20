@@ -126,7 +126,7 @@ type Server struct {
 func (s *Server) base() string { return "http://127.0.0.1:" + strconv.Itoa(s.Port) }
 
 // Start launches the JVM against root and proves ownership with a nonce before returning.
-func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, runID, logPath string) (*Server, error) {
+func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, runID, logPath string, javaArgs ...string) (*Server, error) {
 	if st, err := os.Stat(root); err != nil || !st.IsDir() {
 		return nil, fmt.Errorf("WireMock root does not exist: %s", root)
 	}
@@ -139,7 +139,7 @@ func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, run
 	}
 	cmd, err := execx.Start(execx.Cmd{
 		Name:   "java",
-		Args:   []string{"-jar", jar, "--port", strconv.Itoa(port), "--bind-address", "127.0.0.1", "--root-dir", root},
+		Args:   append(javaArgs, "-jar", jar, "--port", strconv.Itoa(port), "--bind-address", "127.0.0.1", "--root-dir", root),
 		Stdout: logf, Stderr: logf,
 	}, false)
 	if err != nil {
@@ -177,6 +177,11 @@ func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, run
 	}
 	s.Stop()
 	return nil, fmt.Errorf("WireMock did not become ready on 127.0.0.1:%d; see %s", port, logPath)
+}
+
+// Connect returns a client for a server mockstro did not start (tests use a fake one).
+func Connect(port int, runID string) *Server {
+	return &Server{Port: port, RunID: runID, exit: make(chan struct{}), http: &http.Client{Timeout: 10 * time.Second}}
 }
 
 // Done is closed when the JVM exits.
@@ -323,10 +328,10 @@ func (s *Server) Journal(own bool) ([]LoggedRequest, error) {
 	return j.Requests, nil
 }
 
-func (s *Server) StartRecording(target string) error {
+func (s *Server) StartRecording(target, pathPattern string) error {
 	return s.post("/__admin/recordings/start", map[string]any{
 		"targetBaseUrl": target,
-		"filters":       map[string]any{"urlPathPattern": "/api/.*"},
+		"filters":       map[string]any{"urlPathPattern": pathPattern},
 		"persist":       true,
 	})
 }

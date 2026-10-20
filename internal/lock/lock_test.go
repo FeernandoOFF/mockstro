@@ -108,3 +108,24 @@ func TestLockRaceHasOneWinner(t *testing.T) {
 		t.Fatalf("expected one winner, got %d", winners)
 	}
 }
+
+func TestAcquireReclaimsLockOfDeadOwner(t *testing.T) {
+	root := t.TempDir()
+	ex := fakePS()
+	dir := DirFor(root, "device", "emulator-fake")
+	os.MkdirAll(dir, 0o755)
+	write := func(s string) { os.WriteFile(filepath.Join(dir, "owner"), []byte(s), 0o644) }
+	m := &Manager{Root: root, Exec: ex, RunID: "new", Who: "agent"}
+
+	write(`{"runId":"live","pid":` + strconv.Itoa(os.Getpid()) + `,"pidStartedAt":"Mon Sep 22 10:00:00 2026"}`)
+	if err := m.Acquire("device", "emulator-fake"); err == nil {
+		t.Fatal("took a live run's lock")
+	}
+	write(`{"runId":"killed","pid":999999,"pidStartedAt":"x"}`)
+	if err := m.Acquire("device", "emulator-fake"); err != nil {
+		t.Fatalf("dead run's lock not reclaimed: %v", err)
+	}
+	if !m.Owns("device", "emulator-fake") {
+		t.Fatal("reclaimed lock not owned by the new run")
+	}
+}

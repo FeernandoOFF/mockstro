@@ -2,7 +2,11 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"time"
+
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/project"
 
 	"github.com/feernandooff/mockstro/internal/lock"
 	"github.com/feernandooff/mockstro/internal/paths"
@@ -11,6 +15,7 @@ import (
 )
 
 type StatusDevice struct {
+	Platform string `json:"platform"`
 	platform.Device
 	LockedBy   *string `json:"lockedBy"`
 	Designated bool    `json:"designated"`
@@ -66,7 +71,7 @@ func (e *Engine) Status(ctx context.Context) *Status {
 				continue
 			}
 			d.Name = e.Plat.DeviceName(ctx, d.Serial)
-			sd := StatusDevice{Device: d, Designated: e.isDesignated(ctx, d.Serial), Proxy: e.Plat.DeviceProxy(ctx, d.Serial), Keyboard: e.Plat.Keyboard(ctx, d.Serial)}
+			sd := StatusDevice{Platform: e.Opts.Platform, Device: d, Designated: e.isDesignated(ctx, d.Serial), Proxy: e.Plat.DeviceProxy(ctx, d.Serial), Keyboard: e.Plat.Keyboard(ctx, d.Serial)}
 			if id, ok := busy[d.Serial]; ok {
 				sd.LockedBy = &id
 			} else if e.DeviceLocked(d.Serial) {
@@ -96,4 +101,39 @@ func (e *Engine) Status(ctx context.Context) *Status {
 
 func (e *Engine) Sweep(ctx context.Context, dryRun bool) []lock.SweepAction {
 	return lock.Sweep(ctx, e.Exec, paths.LocksRoot(), dryRun)
+}
+
+// SuiteStatus shows devices for every selected target, without duplicating the global runs.
+func SuiteStatus(ctx context.Context, p *project.Project, o Options, ex execx.Runner) (*Status, error) {
+	targets, err := p.Selected(o.Platform)
+	if err != nil {
+		return nil, err
+	}
+	var out *Status
+	var names []string
+	for _, target := range targets {
+		child := o
+		child.Platform = target.Platform
+		st := New(target, child, ex, nil).Status(ctx)
+		names = append(names, target.Platform)
+		if out == nil {
+			copy := *st
+			copy.Devices = nil
+			copy.Bootable = nil
+			copy.Available = Available{Emulator: []string{}, Physical: []string{}, Eligible: []string{}}
+			out = &copy
+		}
+		out.Devices = append(out.Devices, st.Devices...)
+		out.Available.Emulator = append(out.Available.Emulator, st.Available.Emulator...)
+		out.Available.Physical = append(out.Available.Physical, st.Available.Physical...)
+		out.Available.Eligible = append(out.Available.Eligible, st.Available.Eligible...)
+		for _, name := range st.Bootable {
+			if len(targets) > 1 {
+				name = target.Platform + "/" + name
+			}
+			out.Bootable = append(out.Bootable, name)
+		}
+	}
+	out.Platform = strings.Join(names, ",")
+	return out, nil
 }

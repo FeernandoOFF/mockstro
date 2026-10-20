@@ -165,8 +165,8 @@ func (m *MockSession) Serve(ctx context.Context) error {
 
 var recordingName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-// RecordAPI proxies /api/ to target and persists what it sees. Recordings may contain PII.
-func (e *Engine) RecordAPI(ctx context.Context, target, name string) error {
+// RecordAPI proxies to target and persists matching paths. Recordings may contain PII.
+func (e *Engine) RecordAPI(ctx context.Context, target, name, pathPattern string) error {
 	if !regexp.MustCompile(`^https?://\S+$`).MatchString(target) {
 		return fmt.Errorf("--target must be an http(s) URL")
 	}
@@ -189,12 +189,12 @@ func (e *Engine) RecordAPI(ctx context.Context, target, name string) error {
 		return err
 	}
 	defer run.Cleanup()
-	if err := run.WM.StartRecording(target); err != nil {
+	if err := run.WM.StartRecording(target, pathPattern); err != nil {
 		return fmt.Errorf("failed to start native WireMock recording; see %s: %w", e.P.Rel(run.WM.Log), err)
 	}
 	run.recordingAPI = true
 	e.Warnf("WARNING: API recordings may contain credentials, tokens, account data, and other PII.")
-	e.Logf("Recording /api/.* from http://127.0.0.1:%d to %s", run.Port, e.P.Rel(dir))
+	e.Logf("Recording %s from http://127.0.0.1:%d to %s", pathPattern, run.Port, e.P.Rel(dir))
 	e.Logf("Upstream: %s\nPress Ctrl-C to stop and persist the recording.", target)
 	select {
 	case <-ctx.Done():
@@ -246,7 +246,13 @@ func (e *Engine) serveRoot(ctx context.Context, command, root string) (*Run, err
 		run.Cleanup()
 		return nil, err
 	}
-	wm, err := wiremock.Start(ctx, e.Exec, jar, root, port, run.ID, filepath.Join(run.Dir, "wiremock.log"))
+	var javaArgs []string
+	if command == "record-api" {
+		// The app can reach us through a system proxy's Map Remote rule. Sending
+		// our upstream requests through that same proxy would loop back here.
+		javaArgs = []string{"-Djava.net.useSystemProxies=false", "-Dhttp.proxyHost=", "-Dhttp.proxyPort=", "-Dhttps.proxyHost=", "-Dhttps.proxyPort="}
+	}
+	wm, err := wiremock.Start(ctx, e.Exec, jar, root, port, run.ID, filepath.Join(run.Dir, "wiremock.log"), javaArgs...)
 	if err != nil {
 		run.Cleanup()
 		return nil, err

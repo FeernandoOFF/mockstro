@@ -63,8 +63,8 @@ func (m *Manager) selfStartTime() string {
 	return selfStart
 }
 
-// Held reports whether root has a lock dir for the resource. An existing directory is
-// always busy, even half-written: only an explicit sweep reclaims it.
+// Held reports whether root has a lock dir for the resource. Acquire or Sweep may
+// reclaim a provably dead owner's directory; live and half-written locks stay busy.
 func Held(root, kind, key string) bool {
 	st, err := os.Stat(DirFor(root, kind, key))
 	return err == nil && st.IsDir()
@@ -112,8 +112,12 @@ func (m *Manager) acquireOne(root, kind, key string) (string, error) {
 		return "", err
 	}
 	if err := os.Mkdir(dir, 0o755); err != nil {
-		os.Remove(tmp)
-		return "", ErrBusy
+		// A killed run never released its locks; reclaim them once their owner is provably gone
+		// (the same check sweep uses), rather than treating the device as busy forever.
+		if m.Exec == nil || !isDead(context.Background(), m.Exec, dir) || os.RemoveAll(dir) != nil || os.Mkdir(dir, 0o755) != nil {
+			os.Remove(tmp)
+			return "", ErrBusy
+		}
 	}
 	if err := os.Rename(tmp, filepath.Join(dir, "owner")); err != nil {
 		os.Remove(tmp)

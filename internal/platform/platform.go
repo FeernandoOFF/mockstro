@@ -51,7 +51,7 @@ type Platform interface {
 	Bootable(ctx context.Context) []string
 	// Boot starts name; headless skips the emulator window (Android) / Simulator.app (iOS).
 	Boot(ctx context.Context, name string, headless bool, progress func(string)) (string, error)
-	EnsureBooted(ctx context.Context, serial string, progress func(string)) error
+	EnsureBooted(ctx context.Context, serial string, headless bool, progress func(string)) error
 
 	Build(ctx context.Context, artifactDir string, out io.Writer) (path, sha string, err error)
 	ArtifactSHA(path string) (string, error)

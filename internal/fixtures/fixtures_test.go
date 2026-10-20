@@ -1,10 +1,13 @@
 package fixtures
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/feernandooff/mockstro/internal/ojson"
 	"github.com/feernandooff/mockstro/internal/project"
@@ -117,5 +120,78 @@ func TestLayerDuplicatesAndMergeByRoute(t *testing.T) {
 	merged, _ := s.MergeOverridesByRoute([]string{"a", "c", "b"})
 	if strings.Join(merged, ",") != "c,b" {
 		t.Fatalf("merged %v", merged)
+	}
+}
+
+func TestBatchFlowHooksAndEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.yaml")
+	write(t, path, `appId: ${APP_ID}
+properties:
+  apiProfile: default
+env:
+  MINE: flow
+  APP_ID: wrong
+onFlowStart:
+  - runFlow: own-start.yaml
+onFlowComplete:
+  - runFlow: own-complete.yaml
+---
+- launchApp
+`)
+	out, err := BatchFlow(path, map[string]string{"MINE": "cli", "APP_ID": "com.app", "NEW": "1"}, []string{"APP_ID"},
+		BatchHooks{Script: "/h.js", URL: "http://x", Flow: "f/f.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, body, _ := splitDocuments(out)
+	var h struct {
+		Properties     any               `yaml:"properties"`
+		Env            map[string]string `yaml:"env"`
+		OnFlowStart    []map[string]any  `yaml:"onFlowStart"`
+		OnFlowComplete []map[string]any  `yaml:"onFlowComplete"`
+	}
+	if err := yaml.Unmarshal(header, &h); err != nil {
+		t.Fatal(err)
+	}
+	if h.Properties != nil {
+		t.Fatal("mockstro properties must be stripped")
+	}
+	if h.Env["MINE"] != "flow" || h.Env["APP_ID"] != "com.app" || h.Env["NEW"] != "1" {
+		t.Fatalf("env %v", h.Env)
+	}
+	if _, ok := h.OnFlowStart[0]["runScript"]; !ok || h.OnFlowStart[1]["runFlow"] != "own-start.yaml" {
+		t.Fatalf("mockstro setup must run before the flow's hooks: %v", h.OnFlowStart)
+	}
+	if h.OnFlowComplete[0]["runFlow"] != "own-complete.yaml" || len(h.OnFlowComplete) != 2 {
+		t.Fatalf("mockstro checks must run after the flow's hooks: %v", h.OnFlowComplete)
+	}
+	var steps []any
+	if err := yaml.Unmarshal(body, &steps); err != nil || len(steps) != 2 {
+		t.Fatalf("steps %v %v", steps, err)
+	}
+	if !strings.Contains(fmt.Sprint(steps[1]), "MOCKSTRO_ACTION:passed") {
+		t.Fatalf("last step must report passed: %v", steps[1])
+	}
+}
+
+func TestBatchFlowAppendsToAnyStepListStyle(t *testing.T) {
+	for _, body := range []string{"  - launchApp\n  - back\n", "[launchApp, back]\n", ""} {
+		path := filepath.Join(t.TempDir(), "f.yaml")
+		write(t, path, "appId: x\n---\n"+body)
+		out, err := BatchFlow(path, nil, nil, BatchHooks{Script: "/h.js", URL: "http://x", Flow: "f"})
+		if err != nil {
+			t.Fatalf("%q: %v", body, err)
+		}
+		header, steps, _ := splitDocuments(out)
+		var list []any
+		if err := yaml.Unmarshal(steps, &list); err != nil {
+			t.Fatalf("%q: steps no longer valid YAML: %v\n%s", body, err, steps)
+		}
+		if want := strings.Count(body, "launchApp") * 2; len(list) != want+1 {
+			t.Fatalf("%q: got %d steps", body, len(list))
+		}
+		if !strings.Contains(string(header), "name: f") {
+			t.Fatalf("%q: renamed copy must keep Maestro's default name:\n%s", body, header)
+		}
 	}
 }
