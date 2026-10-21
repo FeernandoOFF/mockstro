@@ -26,13 +26,13 @@ Nothing in the app or its network config changes. You bring the proxy.
 1. Add `.maestro/`: `config.yaml`, `flows/`, `wiremock/stubs`, `wiremock/__files`,
    `wiremock/profiles` (with `shared.json`), optional `scenarios/`. Each flow declares
    `appId: ${APP_ID}` and `properties.apiProfile:`. Add a platform with its literal `appId`
-   and `integration: lite` in `mockstro.yaml` (see the README config example).
+   and `integration: lite` in `mockstro.yaml` (see [configuration](configuration.md)).
 2. Install the app on the device yourself (any build that trusts your proxy's certificate).
 3. In Proxyman/Charles add Map Remote rules to `http://127.0.0.1:18080`:
    - your API base URL (`https://api.example.com/*`);
    - `https://firebaseremoteconfig.googleapis.com/*` if flows use Remote Config overrides.
    Leave path/query empty and disable "Preserve Host Header".
-4. `mockstro run` or the TUI. Each run serves its mock on port 18080, so only one runs at a time.
+4. `./mockstrow run` or the TUI. Each run serves its mock on port 18080, so only one runs at a time.
 
 **Android** (emulator or phone)
 
@@ -102,7 +102,7 @@ The installed build must support the override seam above. Press `x` to stop
 and clean up the attachment; restart the app after starting or switching mocks
 so it reads the new override. Only human-owned sessions can attach phones directly.
 The CLI equivalent is
-`mockstro mock <scenario> --platform android --attach --device <phone-serial> --skip-build --clear-proxy`.
+`./mockstrow mock <scenario> --platform android --attach --device <phone-serial> --skip-build --clear-proxy`.
 
 **iOS** (simulators only)
 

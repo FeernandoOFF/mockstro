@@ -157,9 +157,8 @@ read as `0`. `initialize()` and `fetchAndActivate()` become no-ops.
 
 ## Designated emulators
 
-Agents and CI only drive designated emulators. Set `platforms.android.devices` in
-`.maestro/mockstro.yaml`, e.g. `[Resizable_Android_17, Resizable_Android_16]`. Use
-`.maestro/mockstro.local.yaml` for machine-specific overrides or `~/.config/mockstro/designated.txt`. Humans may use any emulator; phones use `--map-remote` (lite).
+Agents and CI only drive designated emulators, e.g.
+`platforms.android.devices: [Resizable_Android_17]`. See [devices](devices.md).
 
 ## Writing flows against the seam
 
@@ -175,7 +174,7 @@ Maestro `when: { platform: Android }` or `when: { platform: iOS }` conditions se
 
 ## Verifying the integration
 
-- `mockstro run` one flow: logcat shows the override accepted with this run's id, and the result is
+- `./mockstrow run` one flow: logcat shows the override accepted with this run's id, and the result is
   `PASS` rather than `OVERRIDE`.
 - Break it on purpose: an expired or foreign payload is rejected with a logged reason and the flow
   fails with `OVERRIDE`.

@@ -5,10 +5,7 @@ Start with **lite** to run an installed app through Proxyman or Charles. Use
 WireMock server, without a proxy. Both modes run the same Maestro flows.
 
 The current iOS runner supports **simulators on a Mac**, not physical iPhones.
-This guide describes the cross-platform YAML configuration; use a CLI build that
-supports `.maestro/mockstro.yaml`. The `v0.1.0-rc.1` release predates that format.
-Commands below use your project wrapper, `./mockstrow`; while testing an unpublished
-CLI, substitute your explicit local preview launcher.
+Commands below use your project wrapper, `./mockstrow`.
 
 ## Configure the suite
 
