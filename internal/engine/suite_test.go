@@ -21,7 +21,7 @@ func suiteProject(t *testing.T) *project.Project {
 	t.Helper()
 	t.Setenv("MOCKSTRO_STATE_DIR", t.TempDir())
 	root := t.TempDir()
-	err := project.Init(root, project.Config{Env: project.Variables{"USER": "suite"}, Platforms: map[string]project.TargetConfig{
+	_, err := project.Init(root, project.Config{Env: project.Variables{"USER": "suite"}, Platforms: map[string]project.TargetConfig{
 		"android": {AppID: "example.android", Integration: "full", Env: project.Variables{"USER": "android"}},
 		"ios":     {AppID: "example.ios", Integration: "full"},
 	}})

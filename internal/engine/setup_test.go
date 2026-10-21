@@ -25,7 +25,7 @@ func TestMaestroSetupRequiresWorkingJava17(t *testing.T) {
 				return output, nil
 			})
 			fake.Paths["brew"] = "/bin/brew"
-			err := e.EnsureMaestro(context.Background())
+			err := e.EnsureMaestro(context.Background(), yes)
 			if err == nil || !strings.Contains(err.Error(), "brew install --cask temurin@17") || len(fake.Calls) != 1 {
 				t.Fatalf("Java guidance: %v, calls=%v", err, fake.Calls)
 			}
@@ -52,7 +52,7 @@ func TestMaestroSetupReusesExistingInstall(t *testing.T) {
 				fake.Paths["maestro"] = "/bin/maestro"
 				want = "maestro"
 			}
-			if err := e.EnsureMaestro(context.Background()); err != nil {
+			if err := e.EnsureMaestro(context.Background(), yes); err != nil {
 				t.Fatal(err)
 			}
 			if got, err := e.maestroCommand(); err != nil || got != want {
@@ -86,7 +86,7 @@ func TestMaestroSetupCancellationDoesNotInstall(t *testing.T) {
 	e, fake := testEngine(t, "human", func(c execx.Cmd) (string, error) { return "", context.Canceled })
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := e.EnsureMaestro(ctx); !errors.Is(err, context.Canceled) || len(fake.Calls) != 1 {
+	if err := e.EnsureMaestro(ctx, yes); !errors.Is(err, context.Canceled) || len(fake.Calls) != 1 {
 		t.Fatalf("cancellation: %v, calls=%v", err, fake.Calls)
 	}
 }
@@ -112,7 +112,7 @@ func TestMaestroSetupInstallsWithHomebrewOnce(t *testing.T) {
 	fake = runner
 	fake.Paths["brew"] = "/bin/brew"
 	for range 2 {
-		if err := e.EnsureMaestro(context.Background()); err != nil {
+		if err := e.EnsureMaestro(context.Background(), yes); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -157,7 +157,7 @@ func TestMaestroSetupUsesOfficialInstallerWithoutHomebrew(t *testing.T) {
 	for _, tool := range []string{"bash", "curl", "unzip"} {
 		fake.Paths[tool] = "/bin/" + tool
 	}
-	if err := e.EnsureMaestro(context.Background()); err != nil {
+	if err := e.EnsureMaestro(context.Background(), yes); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := e.maestroCommand(); err != nil || got != maestro {
@@ -200,7 +200,7 @@ func TestMaestroSetupReportsInstallFailures(t *testing.T) {
 			if failure == "brew" {
 				fake.Paths["brew"] = "/bin/brew"
 			}
-			err := e.EnsureMaestro(context.Background())
+			err := e.EnsureMaestro(context.Background(), yes)
 			if err == nil || failure != "missing-executable" && !errors.Is(err, problem) {
 				t.Fatalf("failure %s: %v", failure, err)
 			}
@@ -208,18 +208,29 @@ func TestMaestroSetupReportsInstallFailures(t *testing.T) {
 	}
 }
 
+func TestDeclinedMaestroInstallDoesNothing(t *testing.T) {
+	e, fake := testEngine(t, "human", func(c execx.Cmd) (string, error) { return "openjdk version \"17.0.1\"", nil })
+	fake.Paths["brew"] = "/bin/brew"
+	err := e.EnsureMaestro(context.Background(), func() bool { return false })
+	if err == nil || !strings.Contains(err.Error(), "check --install") || len(fake.Calls) != 1 {
+		t.Fatalf("declined install: %v, calls=%v", err, fake.Calls)
+	}
+}
+
 func TestMissingJavaAndMaestroGiveSetupGuidance(t *testing.T) {
 	e, fake := testEngine(t, "human", nil)
-	err := e.CheckEnvironment("setup")
+	err := e.CheckEnvironment("check")
 	if err == nil || !strings.Contains(err.Error(), "brew install --cask temurin@17") {
 		t.Fatalf("missing Java: %v", err)
 	}
 	fake.Paths["java"], fake.Paths["adb"] = "/bin/java", "/bin/adb"
 	err = e.CheckEnvironment("run")
-	if err == nil || !strings.Contains(err.Error(), "mockstro setup") {
+	if err == nil || !strings.Contains(err.Error(), "mockstrow check") {
 		t.Fatalf("missing Maestro: %v", err)
 	}
 	if len(fake.Calls) != 0 {
 		t.Fatal("environment check attempted installation")
 	}
 }
+
+func yes() bool { return true }

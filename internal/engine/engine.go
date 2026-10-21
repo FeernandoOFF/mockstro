@@ -219,7 +219,7 @@ func (e *Engine) FBRCFor(h *fixtures.Header) map[string]string {
 func (e *Engine) CheckEnvironment(command string) error {
 	var need []string
 	switch command {
-	case "setup", "run", "mock", "record-api", "playback":
+	case "check", "run", "mock", "record-api", "playback":
 		need = append(need, "java", "lsof")
 	}
 	if command == "run" || (command == "mock" && e.Opts.Attach) {
@@ -246,7 +246,7 @@ func (e *Engine) CheckEnvironment(command string) error {
 		}
 	}
 	if len(missing) > 0 {
-		hints := map[string]string{"maestro": "run `mockstro setup` to install", "HandBrakeCLI": "brew install handbrake", "java": javaInstallHint, "adb": "Android platform-tools", "xcrun": "Xcode command line tools"}
+		hints := map[string]string{"maestro": "run `./mockstrow check` to install", "HandBrakeCLI": "brew install handbrake", "java": javaInstallHint, "adb": "Android platform-tools", "xcrun": "Xcode command line tools"}
 		var parts []string
 		for _, m := range missing {
 			if h, ok := hints[m]; ok {

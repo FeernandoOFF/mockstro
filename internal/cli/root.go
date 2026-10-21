@@ -1,5 +1,5 @@
-// Package cli is mockstro's command-line front end. Every command is non-interactive and
-// scriptable; the TUI (`mockstro` in a terminal, or `mockstro tui`) drives the same engine.
+// Package cli is mockstro's command-line front end. Every command is scriptable and
+// only prompts in a terminal; the TUI (`mockstro` in a terminal, or `mockstro tui`) drives the same engine.
 package cli
 
 import (
@@ -120,8 +120,10 @@ func Execute(version string) int {
 	mock.Flags().BoolVar(&f.skipBuild, "skip-build", false, "with --attach: use the build already on the device")
 	mock.Flags().BoolVar(&f.clearProxy, "clear-proxy", false, "with --attach: remove a device-wide HTTP proxy first")
 
-	setup := &cobra.Command{Use: "setup", Short: "Validate fixtures, install Maestro if missing and fetch pinned WireMock jars",
-		RunE: func(cmd *cobra.Command, args []string) error { return setupCmd(cmd.Context(), g) }}
+	var installMaestro bool
+	check := &cobra.Command{Use: "check", Short: "Validate fixtures and check this machine: Java, Maestro and WireMock",
+		RunE: func(cmd *cobra.Command, args []string) error { return checkCmd(cmd.Context(), g, installMaestro) }}
+	check.Flags().BoolVar(&installMaestro, "install", false, "install Maestro if missing without asking")
 
 	list := &cobra.Command{Use: "list [profiles|scenarios]", Short: "List flows, profiles or scenarios", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error { return listCmd(g, f, args) }}
@@ -174,7 +176,7 @@ func Execute(version string) int {
 	tui := &cobra.Command{Use: "tui", Short: "Open the interactive terminal UI", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return runTUI(g, f) }}
 
-	root.AddCommand(initCommand(g), bootstrapCommand(g), skillCommand(g), run, mock, setup, list, resolve, status, sweep, lastRun, recordAPI, playback, boot, prune, proxy, tui)
+	root.AddCommand(initCommand(g, version), skillCommand(g), run, mock, check, list, resolve, status, sweep, lastRun, recordAPI, playback, boot, prune, proxy, tui)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
@@ -406,7 +408,7 @@ func runCmd(ctx context.Context, g *globals, f *runFlags, args []string) error {
 	return nil
 }
 
-func setupCmd(ctx context.Context, g *globals) error {
+func checkCmd(ctx context.Context, g *globals, install bool) error {
 	p, err := loadProject(g)
 	if err != nil {
 		return err
@@ -417,7 +419,7 @@ func setupCmd(ctx context.Context, g *globals) error {
 	}
 	printer := NewPrinter()
 	e := newEngine(targets[0], engine.DefaultOptions(), printer)
-	if err := e.CheckEnvironment("setup"); err != nil {
+	if err := e.CheckEnvironment("check"); err != nil {
 		return err
 	}
 	counts, err := e.Store.ValidateAll(true)
@@ -425,7 +427,17 @@ func setupCmd(ctx context.Context, g *globals) error {
 		return err
 	}
 	fmt.Println(counts)
-	if err := e.EnsureMaestro(ctx); err != nil {
+	confirm := func() bool {
+		if install {
+			return true
+		}
+		if !isTerminal(os.Stdin) {
+			return false
+		}
+		answer := prompt(os.Stdout, bufio.NewReader(os.Stdin), "Maestro is not installed. Install it now? [Y/n] ")
+		return answer == "" || strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes")
+	}
+	if err := e.EnsureMaestro(ctx, confirm); err != nil {
 		return err
 	}
 	seen := map[string]bool{}

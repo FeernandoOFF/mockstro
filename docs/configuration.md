@@ -1,19 +1,23 @@
 # Configuration
 
 Everything lives in `.maestro/mockstro.yaml` (committed) and the optional
-`.maestro/mockstro.local.yaml` (ignored, per machine). Start a new suite with:
+`.maestro/mockstro.local.yaml` (ignored, per machine).
+
+The [installer](../README.md#quickstart) creates `mockstro.yaml` when it's missing, by
+running `init` with any flags you pass:
 
 ```bash
-mockstro init --android-app-id com.example.android --ios-app-id com.example.ios \
-  --android-project ../android-app --ios-project ../ios-app
+sh install.sh v0.1.0-rc.3 --android-app-id com.example.android --ios-app-id com.example.ios \
+  --android-project ../android-app --ios-project ../ios-app --integration full
 ```
 
-This creates a lite config, a starter smoke flow, and ignores `mockstro.local.yaml` and `.runtime/`.
+This creates a config, a starter smoke flow, and ignores `mockstro.local.yaml` and
+`.runtime/`. Existing `.maestro` files are kept.
 
 ## mockstro.yaml
 
 ```yaml
-cliVersion: v0.1.0-rc.2          # release used by ./mockstrow
+cliVersion: v0.1.0-rc.3          # release used by ./mockstrow
 env:
   TEST_USER: demo
 platforms:

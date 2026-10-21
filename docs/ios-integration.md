@@ -65,7 +65,7 @@ original request path must survive: `/api/splash/iOS/...` must still reach
 uses one. The Firebase rule is needed for flow `fbrcOverrides` in lite mode.
 
 ```sh
-./mockstrow setup
+./mockstrow check
 ./mockstrow run --platform ios --boot-emulator .maestro/flows/smoke/launch.yaml
 ```
 
@@ -317,7 +317,7 @@ Run warm with `./mockstrow run -e LAUNCH_MODE=warm`.
 After implementing the seam and changing `integration` to `full`:
 
 ```sh
-./mockstrow setup
+./mockstrow check
 # Build/install and run one known flow first.
 ./mockstrow run --platform ios --boot-emulator .maestro/flows/smoke/launch.yaml
 # Reuse that build only while app source/build settings are unchanged.

@@ -17,21 +17,23 @@ the result. There's a CLI for scripts, agents and CI, and a TUI for people.
 
 ## Quickstart
 
-New suite? Run `mockstro init` first, see [configuration](docs/configuration.md).
-
-In an app repo with `.maestro/mockstro.yaml`:
+From your app repo:
 
 ```bash
-version=v0.1.0-rc.2
+version=v0.1.0-rc.3
 curl -fsSLo install.sh "https://github.com/FeernandoOFF/mockstro/releases/download/$version/install.sh"
 sh install.sh "$version" && rm install.sh
 ```
 
-This adds `./mockstrow` and pins the version in `mockstro.yaml`. Commit both. Then
-anyone who clones the repo runs:
+This adds `./mockstrow` and pins the version in `.maestro/mockstro.yaml`. If that file
+doesn't exist yet, it asks for your app IDs and creates a starter suite; existing
+`.maestro` files are kept. You can pass them instead:
+`sh install.sh "$version" --android-app-id com.example.app --ios-app-id com.example.ios`.
+
+Commit `mockstrow` and `.maestro/`. Then anyone who clones the repo runs:
 
 ```bash
-./mockstrow setup   # checks Java 17+, installs Maestro and WireMock if missing
+./mockstrow check   # validates fixtures; checks Java 17+, Maestro and WireMock (offers to install Maestro)
 ./mockstrow run     # runs flows tagged smoke
 ./mockstrow         # opens the TUI
 ```

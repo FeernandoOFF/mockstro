@@ -14,7 +14,7 @@ import (
 	"github.com/feernandooff/mockstro/internal/execx"
 )
 
-const javaInstallHint = "install Java 17+ with `brew install --cask temurin@17` on macOS (Linux/Homebrew: `brew install openjdk@17`), then check JAVA_HOME and rerun setup"
+const javaInstallHint = "install Java 17+ with `brew install --cask temurin@17` on macOS (Linux/Homebrew: `brew install openjdk@17`), then check JAVA_HOME and rerun check"
 
 var javaVersion = regexp.MustCompile(`(?:openjdk|java)\s+(?:version\s+)?"?(\d+)(?:\.(\d+))?`)
 
@@ -38,8 +38,8 @@ func (e *Engine) maestroCommand() (string, error) {
 	return path, nil
 }
 
-// EnsureMaestro installs only during explicit setup; existing installs are left alone.
-func (e *Engine) EnsureMaestro(ctx context.Context) error {
+// EnsureMaestro installs Maestro only when confirm agrees; existing installs are left alone.
+func (e *Engine) EnsureMaestro(ctx context.Context, confirm func() bool) error {
 	// macOS supplies a java launcher even when no JDK is installed.
 	var version bytes.Buffer
 	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -63,6 +63,9 @@ func (e *Engine) EnsureMaestro(ctx context.Context) error {
 		e.Logf("Maestro is ready at %s (existing installation).", command)
 		return nil
 	}
+	if !confirm() {
+		return fmt.Errorf("Maestro is not installed; run `./mockstrow check --install` to install it")
+	}
 	out := e.outputWriter(0, "")
 	if _, err := e.Exec.LookPath("brew"); err == nil {
 		e.Logf("Installing Maestro with Homebrew...")
@@ -72,7 +75,7 @@ func (e *Engine) EnsureMaestro(ctx context.Context) error {
 	} else {
 		for _, tool := range []string{"bash", "curl", "unzip"} {
 			if _, err := e.Exec.LookPath(tool); err != nil {
-				return fmt.Errorf("installing Maestro requires %s; install it and rerun setup", tool)
+				return fmt.Errorf("installing Maestro requires %s; install it and rerun check", tool)
 			}
 		}
 		e.Logf("Installing Maestro with the official installer (https://get.maestro.mobile.dev)...")
@@ -92,7 +95,7 @@ func (e *Engine) EnsureMaestro(ctx context.Context) error {
 	}
 	command, err := e.maestroCommand()
 	if err != nil {
-		return fmt.Errorf("Maestro installer finished but the executable was not found; check PATH or MAESTRO_DIR and rerun setup")
+		return fmt.Errorf("Maestro installer finished but the executable was not found; check PATH or MAESTRO_DIR and rerun check")
 	}
 	if _, err := e.Exec.Output(ctx, execx.Cmd{Name: command, Args: []string{"--version"}, Stderr: out}); err != nil {
 		return fmt.Errorf("Maestro was installed but could not start: %w", err)

@@ -236,7 +236,7 @@ func TestVariableFiles(t *testing.T) {
 func TestInitSharedAppIDTemplateAndPreservation(t *testing.T) {
 	root := t.TempDir()
 	cfg := Config{Platforms: map[string]TargetConfig{"android": {AppID: "com.example.android"}, "ios": {AppID: "com.example.ios"}}}
-	if err := Init(root, cfg); err != nil {
+	if _, err := Init(root, cfg); err != nil {
 		t.Fatal(err)
 	}
 	p, err := Load(root)
@@ -254,14 +254,24 @@ func TestInitSharedAppIDTemplateAndPreservation(t *testing.T) {
 	if !strings.Contains(string(ignore), "/mockstro.local.yaml") || !strings.Contains(string(ignore), "/.runtime/") {
 		t.Fatal(string(ignore))
 	}
-	configPath := filepath.Join(p.MaestroRoot, "config.yaml")
+	if _, err := Init(root, cfg); err == nil {
+		t.Fatal("re-initialized an existing suite")
+	}
+	// An existing Maestro project keeps its files; only missing ones are added.
+	root = t.TempDir()
+	configPath := filepath.Join(root, ".maestro", "config.yaml")
+	os.MkdirAll(filepath.Dir(configPath), 0755)
 	os.WriteFile(configPath, []byte("user edits"), 0644)
-	if err := Init(root, cfg); err == nil {
-		t.Fatal("overwrote existing suite")
+	skipped, err := Init(root, cfg)
+	if err != nil || len(skipped) != 1 || skipped[0] != "config.yaml" {
+		t.Fatal(skipped, err)
 	}
 	got, _ := os.ReadFile(configPath)
 	if string(got) != "user edits" {
 		t.Fatal("lost edits")
+	}
+	if _, err := Load(root); err != nil {
+		t.Fatal(err)
 	}
 }
 

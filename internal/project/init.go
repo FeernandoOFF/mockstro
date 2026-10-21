@@ -2,41 +2,44 @@ package project
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Init writes a complete small suite. Existing template files are never replaced.
-func Init(root string, cfg Config) error {
+// Init writes a small suite around any existing .maestro files, which are kept.
+// It returns the template files it skipped.
+func Init(root string, cfg Config) ([]string, error) {
 	if cfg.CLIVersion != "" {
 		if err := ValidateCLIVersion(cfg.CLIVersion); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if len(cfg.Platforms) == 0 {
-		return fmt.Errorf("provide --android-app-id and/or --ios-app-id")
+		return nil, fmt.Errorf("provide --android-app-id and/or --ios-app-id")
 	}
 	for name, t := range cfg.Platforms {
 		if name != "android" && name != "ios" {
-			return fmt.Errorf("unknown platform %q", name)
+			return nil, fmt.Errorf("unknown platform %q", name)
 		}
 		if t.AppID == "" || strings.Contains(t.AppID, "${") {
-			return fmt.Errorf("%s needs a literal appId", name)
+			return nil, fmt.Errorf("%s needs a literal appId", name)
 		}
 		if t.Integration == "" {
 			t.Integration = "lite"
 		}
 		if t.Integration != "lite" && t.Integration != "full" {
-			return fmt.Errorf("integration must be lite or full")
+			return nil, fmt.Errorf("integration must be lite or full")
 		}
 		cfg.Platforms[name] = t
 	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	files := map[string][]byte{
 		"mockstro.yaml":                  data,
@@ -49,35 +52,38 @@ func Init(root string, cfg Config) error {
 		"wiremock/profiles/default.json": []byte("{\"mappings\":[\"health\"]}\n"),
 	}
 	maestro := filepath.Join(root, ".maestro")
-	for rel := range files {
+	config := filepath.Join(maestro, "mockstro.yaml")
+	if _, err := os.Lstat(config); !os.IsNotExist(err) {
+		return nil, fmt.Errorf("%s already exists", config)
+	}
+	var skipped []string
+	for _, rel := range slices.Sorted(maps.Keys(files)) {
 		path := filepath.Join(maestro, filepath.FromSlash(rel))
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			return fmt.Errorf("refusing to overwrite %s", path)
+			skipped = append(skipped, rel)
+			continue
 		}
-	}
-	for rel, data := range files {
-		path := filepath.Join(maestro, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return err
+			return nil, err
 		}
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		_, writeErr := f.Write(data)
+		_, writeErr := f.Write(files[rel])
 		closeErr := f.Close()
 		if writeErr != nil {
-			return writeErr
+			return nil, writeErr
 		}
 		if closeErr != nil {
-			return closeErr
+			return nil, closeErr
 		}
 	}
 	// Keep machine paths and generated reports out of the owning suite's history.
 	ignore := filepath.Join(maestro, ".gitignore")
 	b, err := os.ReadFile(ignore)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return nil, err
 	}
 	text := string(b)
 	for _, rule := range []string{"/mockstro.local.yaml", "/.runtime/"} {
@@ -92,5 +98,5 @@ func Init(root string, cfg Config) error {
 			text += rule + "\n"
 		}
 	}
-	return os.WriteFile(ignore, []byte(text), 0644)
+	return skipped, os.WriteFile(ignore, []byte(text), 0644)
 }

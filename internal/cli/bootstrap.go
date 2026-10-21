@@ -8,27 +8,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func bootstrapCommand(g *globals) *cobra.Command {
-	var version string
-	cmd := &cobra.Command{
-		Use: "bootstrap", Short: "Add a wrapper and pin cliVersion in mockstro.yaml (preserves settings)", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			root, err := installRoot(g)
-			if err != nil {
-				return err
-			}
-			if err := bootstrap.Project(root, version); err != nil {
-				return err
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Added mockstrow and pinned cliVersion in .maestro/mockstro.yaml. Commit both; run ./mockstrow --help to download the pinned CLI.")
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&version, "cli-version", "", "release tag to pin, e.g. v1.2.3 (required)")
-	_ = cmd.MarkFlagRequired("cli-version")
-	return cmd
-}
-
 func skillCommand(g *globals) *cobra.Command {
 	var claude bool
 	cmd := &cobra.Command{Use: "skill", Short: "Manage the agent skill bundled with this CLI", Args: cobra.NoArgs}

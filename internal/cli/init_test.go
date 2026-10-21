@@ -12,7 +12,7 @@ import (
 func TestInitScaffoldValidates(t *testing.T) {
 	dir := t.TempDir()
 	g := &globals{projectDir: dir}
-	cmd := initCommand(g)
+	cmd := initCommand(g, "dev")
 	cmd.SetArgs([]string{"--app-id", "com.acme.app"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
@@ -21,10 +21,26 @@ func TestInitScaffoldValidates(t *testing.T) {
 	if err != nil || !strings.Contains(string(b), "appId: ${APP_ID}") {
 		t.Fatalf("flow: %v %s", err, b)
 	}
-	cmd = initCommand(g)
+	cmd = initCommand(g, "dev")
 	cmd.SetArgs([]string{"--app-id", "x"})
 	if err := cmd.Execute(); err == nil {
-		t.Fatal("second init should refuse an existing .maestro")
+		t.Fatal("second init should refuse app IDs for an existing suite")
+	}
+	if _, err := os.Stat(dir + "/mockstrow"); !os.IsNotExist(err) {
+		t.Fatal("dev build added a wrapper")
+	}
+	// A release build pins itself and adds the wrapper to an existing suite.
+	for range 2 {
+		cmd = initCommand(g, "v1.2.3")
+		cmd.SetArgs(nil)
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := project.Load(dir)
+	pin, _ := os.ReadFile(dir + "/.maestro/mockstro.yaml")
+	if _, statErr := os.Stat(dir + "/mockstrow"); err != nil || statErr != nil || !strings.Contains(string(pin), "cliVersion: v1.2.3") || p.AppID != "com.acme.app" {
+		t.Fatalf("pin/wrapper: %v %v %s", err, statErr, pin)
 	}
 }
 
@@ -32,7 +48,7 @@ func TestInitScaffoldRunsOnBothPlatforms(t *testing.T) {
 	for _, platform := range []string{"android", "ios"} {
 		t.Run(platform, func(t *testing.T) {
 			dir := t.TempDir()
-			cmd := initCommand(&globals{projectDir: dir, platform: platform})
+			cmd := initCommand(&globals{projectDir: dir, platform: platform}, "dev")
 			cmd.SetArgs([]string{"--app-id", "com.acme.app"})
 			if err := cmd.Execute(); err != nil {
 				t.Fatal(err)

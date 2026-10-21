@@ -46,17 +46,17 @@ cp "$ASSETS/${3##*/}" "$2"
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := func(version string, exit string) (string, error) {
-		cmd := exec.Command("sh", installer, version, project)
+	run := func(version string, exit string, args ...string) (string, error) {
+		cmd := exec.Command("sh", append([]string{installer, version, "-C", project}, args...)...)
 		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "ASSETS="+assets,
 			"MOCKSTRO_CACHE_DIR="+filepath.Join(root, "cache"), "CLI_EXIT="+exit)
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
 	out, err := run("v0.1.0-rc.1", "0")
-	want := "<-C>\n<" + project + ">\n<bootstrap>\n<--cli-version>\n<v0.1.0-rc.1>\n"
+	want := "<-C>\n<" + project + ">\n<init>\n<--cli-version>\n<v0.1.0-rc.1>\n"
 	if err != nil || !strings.Contains(out, want) || strings.Contains(out, "wrong-global") {
-		t.Fatalf("bootstrap delegation failed: %q, %v", out, err)
+		t.Fatalf("init delegation failed: %q, %v", out, err)
 	}
 	out, err = run("v0.1.0-rc.1", "17")
 	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 17 {
@@ -88,8 +88,9 @@ cp "$ASSETS/${3##*/}" "$2"
 	if got, _ := os.ReadFile(config); string(got) != "existing config" {
 		t.Fatal("changed existing config")
 	}
-	os.RemoveAll(filepath.Join(project, ".maestro"))
-	if out, err := run("v0.1.0-rc.1", "0"); err == nil || !strings.Contains(out, "existing .maestro") {
-		t.Fatalf("accepted project without .maestro: %q, %v", out, err)
+	os.WriteFile(filepath.Join(assets, "mockstrow"), Wrapper, 0644)
+	out, err = run("v0.1.0-rc.1", "0", "--android-app-id", "com.example.app")
+	if err != nil || !strings.Contains(out, want+"<--android-app-id>\n<com.example.app>\n") {
+		t.Fatalf("lost init flags: %q, %v", out, err)
 	}
 }
