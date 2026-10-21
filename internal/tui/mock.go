@@ -172,9 +172,9 @@ func (m *mockModel) onTick() tea.Cmd {
 		return nil
 	}
 	m.polling = true
-	wm := m.session.Run.WM
+	sess := m.session
 	return func() tea.Msg {
-		reqs, err := wm.Traffic(false)
+		reqs, err := sess.Traffic()
 		return journalMsg{reqs, err}
 	}
 }
@@ -193,9 +193,6 @@ func (m *mockModel) update(msg tea.Msg) tea.Cmd {
 		if x.err != nil {
 			m.a.log("error", "mock: %v", x.err)
 		} else {
-			if m.session != nil {
-				m.session.Target = x.target
-			}
 			m.a.log("info", "mock now serving %s %s", x.target.Kind, x.target.Name)
 		}
 	case mockStartedMsg:
@@ -206,7 +203,7 @@ func (m *mockModel) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.session, m.eng = x.m, x.e
-		m.a.log("info", "mock serving %s %s on :%d", x.m.Target.Kind, x.m.Target.Name, x.m.Run.Port)
+		m.a.log("info", "mock serving %s %s on :%d", x.m.Target().Kind, x.m.Target().Name, x.m.Run.Port)
 		return m.a.refreshStatus()
 	}
 	return nil
@@ -325,7 +322,7 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 			return func() tea.Msg {
 				target, err := eng.ResolveMockTarget([]string{arg})
 				if err == nil {
-					err = sess.Run.Activate(context.Background(), target.Profile, target.FBRC, target.Overrides)
+					err = sess.Switch(context.Background(), target)
 				}
 				return mockSwitchedMsg{target, err}
 			}
@@ -394,7 +391,7 @@ func (m *mockModel) view(w, h int) (string, string) {
 		} else if row.target == nil {
 			name = sMuted.Render(name)
 		}
-		if row.target != nil && m.session != nil && m.session.Target.Name == row.target.name {
+		if row.target != nil && m.session != nil && m.session.Target().Name == row.target.name {
 			name += sOK.Render(" ●")
 		}
 		lb.WriteString(cur + strings.Repeat("  ", row.depth) + name + "\n")
@@ -431,11 +428,11 @@ func (m *mockModel) view(w, h int) (string, string) {
 			}
 		}
 	case m.showStubs:
-		t := m.session.Target
+		t := m.session.Target()
 		fmt.Fprintf(&jb, "%s %s · %s\n\n", sOK.Render("● serving"), sBold.Render(t.Name), sMuted.Render("s show journal"))
 		m.writeStubs(&jb, w-listW-6, h)
 	default:
-		t := m.session.Target
+		t := m.session.Target()
 		unmatched := 0
 		for _, r := range m.journal {
 			if r.Unmatched() {
@@ -537,7 +534,7 @@ func (m *mockModel) stubsPane() bool { return m.session == nil || m.showStubs }
 // paneTarget is the target whose stubs the right pane lists: the served one, else the highlighted one.
 func (m *mockModel) paneTarget() string {
 	if m.session != nil {
-		return m.session.Target.Name
+		return m.session.Target().Name
 	}
 	if m.cursor < len(m.visible) && m.visible[m.cursor].target != nil {
 		return m.visible[m.cursor].target.name

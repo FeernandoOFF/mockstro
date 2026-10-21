@@ -327,16 +327,27 @@ func (s *Server) Replace(mappings []any, messageSets ...[]any) error {
 }
 
 type LoggedRequest struct {
-	MessageUnmatched bool `json:"-"`
+	ID               string `json:"id,omitempty"`
+	MessageUnmatched bool   `json:"-"`
 	Request          struct {
-		Body       string `json:"body,omitempty"`
-		URL        string `json:"url"`
-		Method     string `json:"method"`
-		LoggedDate int64  `json:"loggedDate"`
+		Body       string         `json:"body,omitempty"`
+		URL        string         `json:"url"`
+		Method     string         `json:"method"`
+		LoggedDate int64          `json:"loggedDate"`
+		Headers    map[string]any `json:"headers,omitempty"`
 	} `json:"request"`
+	Response    *LoggedResponse `json:"response,omitempty"`
 	StubMapping *struct {
 		Name string `json:"name"`
 	} `json:"stubMapping"`
+}
+
+// LoggedResponse is what WireMock actually sent back for a journal entry.
+type LoggedResponse struct {
+	Status       int            `json:"status"`
+	Headers      map[string]any `json:"headers,omitempty"`
+	Body         string         `json:"body,omitempty"`
+	BodyAsBase64 string         `json:"bodyAsBase64,omitempty"`
 }
 
 func (r LoggedRequest) StubName() string {
@@ -417,17 +428,16 @@ func FallbackMapping(proxyURL string) map[string]any {
 	}
 }
 
-// FBRCMappings serve Remote Config over HTTP for Map Remote setups (no device override).
-func FBRCMappings(entries map[string]string) []any {
+// FBRCFetchID is the fixed id of the Remote Config fetch mapping, so a running server can replace
+// just that mapping when a tester edits values without reloading anything else.
+const FBRCFetchID = "f1b6c0de-0000-4000-8000-0000000000a1"
+
+// FBRCFetchMapping answers the app's Remote Config fetch with entries.
+func FBRCFetchMapping(entries map[string]string) map[string]any {
 	eb, _ := ojson.Marshal(entries) // map keys sort, so the ETag is stable
 	version := strconv.FormatUint(uint64(crc32.ChecksumIEEE(eb)), 10)
-	perf := map[string]any{
-		"name":     "firebase-performance/fetch",
-		"priority": 1,
-		"request":  map[string]any{"method": "POST", "urlPathPattern": "^/v1/projects/[^/]+/namespaces/fireperf:fetch$"},
-		"response": map[string]any{"status": 200},
-	}
-	rc := map[string]any{
+	return map[string]any{
+		"id":       FBRCFetchID,
 		"name":     "firebase-remote-config/fetch",
 		"priority": 1,
 		"request":  map[string]any{"method": "POST", "urlPathPattern": "^/v1/projects/[^/]+/namespaces/firebase:fetch$"},
@@ -437,5 +447,15 @@ func FBRCMappings(entries map[string]string) []any {
 			"jsonBody": map[string]any{"state": "UPDATE", "entries": entries, "templateVersion": version},
 		},
 	}
-	return []any{perf, rc}
+}
+
+// FBRCMappings serve Remote Config over HTTP for Map Remote setups (no device override).
+func FBRCMappings(entries map[string]string) []any {
+	perf := map[string]any{
+		"name":     "firebase-performance/fetch",
+		"priority": 1,
+		"request":  map[string]any{"method": "POST", "urlPathPattern": "^/v1/projects/[^/]+/namespaces/fireperf:fetch$"},
+		"response": map[string]any{"status": 200},
+	}
+	return []any{perf, FBRCFetchMapping(entries)}
 }
