@@ -192,6 +192,8 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 pre.code { background: var(--bg-side); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0; max-height: 240px; overflow: auto; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; }
 .hint { color: var(--muted); font-size: 12.5px; margin: 0; } .hint.bad { color: var(--bad); font-weight: 550; } .hint.good { color: var(--ok); }
+.branches { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; margin-top: 6px; }
+.branch { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); } .branch:last-child { border-bottom: 0; } .branch .n { flex: 1; word-break: break-all; font: 12.5px var(--mono); } .branch small { color: var(--muted); }
 
 @media (max-width: 1100px) { .page { grid-template-columns: minmax(0, 1fr); } .panel { border-left: 0; border-top: 1px solid var(--line); } }
 @media (max-width: 860px) {
@@ -249,6 +251,7 @@ const ICONS = {
   flow: '<circle cx="3.5" cy="4" r="1.5"/><circle cx="3.5" cy="12" r="1.5"/><path d="M6.5 4h7M6.5 12h7M3.5 5.5v5"/>',
   bookmark: '<path d="M4 2.5h8v11L8 10.6 4 13.5z"/>',
   check: '<circle cx="8" cy="8" r="6"/><path d="m5.6 8.2 1.8 1.8 3.1-3.5"/>',
+  branch: '<circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="6" r="1.5"/><path d="M4.5 5v6M11.5 7.5c0 2.6-3 2.6-7 3.6"/>',
   right: '<path d="m6 3.5 4.5 4.5L6 12.5"/>',
   plus: '<path d="M8 3.5v9M3.5 8h9"/>',
   alert: '<path d="M8 2.2 14.4 13H1.6z"/><path d="M8 6.6v3M8 11.4v.1"/>',
@@ -294,8 +297,8 @@ function tint(name) {
 }
 
 // ---------- state
-let proj = { open: false, recent: [] }, items = [], saved = [], savedDir = '', health = null, rows = [];
-let state = { state: 'idle', custom: [], log: [] }, notice = '', dismissedErr = '', current = null, stateSig = '', rowsSig = '';
+let proj = { open: false, recent: [] }, items = [], saved = [], savedDir = '', git = null, health = null, rows = [];
+let state = { state: 'idle', custom: [], log: [] }, notice = '', dismissedErr = '', current = null, stateSig = '', rowsSig = '', gitBusy = false;
 
 const KIND = { scenario: 'Scenario', profile: 'Customer', flow: 'Test flow' };
 const VIEWS = ['session', 'library', 'saved', 'setup'];
@@ -335,6 +338,7 @@ function renderSidebar() {
   const others = (proj.recent || []).filter((r) => r.path !== proj.path);
   const tree = [];
   tree.push(h('button', { class: 'navbtn proj', onclick: () => openProjectDialog() }, h('span', { class: 'sq', style: 'background:' + tint(proj.name) }), h('span', { class: 'label', style: 'font-weight:600' }, proj.name), h('span', { class: 'count' }, '')));
+  if (git && git.repo) tree.push(h('button', { class: 'navbtn sub', onclick: openGitDialog, title: 'Project version' }, icon('branch'), h('span', { class: 'label' }, git.branch + (git.behind > 0 ? ' · ' + git.behind + ' new' : '') + (git.dirty && git.dirty.length ? ' · changed' : ''))));
   tree.push(h('button', { class: 'navbtn sub', onclick: reloadCatalog, title: 'Read the scenarios from disk again' }, icon('refresh'), h('span', { class: 'label' }, 'Reload from disk')));
   for (const r of others) tree.push(h('button', { class: 'navbtn proj', ...(r.exists ? {} : { disabled: '' }), onclick: () => openRecent(r.path), title: r.path }, h('span', { class: 'sq', style: 'background:' + tint(r.name) }), h('span', { class: 'label' }, r.name)));
   fill($('sidebar'), 
@@ -356,6 +360,7 @@ function renderSidebar() {
 
 function renderTopbar() {
   const bits = [];
+  if (git && git.repo) bits.push(h('button', { class: 'chip dashed', onclick: openGitDialog, title: git.behind > 0 ? 'Updates are available' : 'The project\'s git branch' }, icon('branch'), git.branch + (git.behind > 0 ? ' · ' + git.behind + ' new' : '') + (git.dirty && git.dirty.length ? ' · changed' : '')));
   if (proj.platform) bits.push(h('span', { class: 'chip' }, proj.platform));
   fill($('topbar'), 
     h('div', { class: 'crumbs' }, h('span', {}, 'Projects'), h('span', { class: 'sep' }, '/'), h('span', {}, proj.name), h('span', { class: 'sep' }, '/'), h('b', {}, TITLES[viewName()])),
@@ -559,6 +564,7 @@ function mountSession() {
       h('p', {}, 'Pick a scenario or a customer, press Start, then use the app. Every request it makes shows up here.'),
       starting || stopping ? null : h('button', { class: 'btn primary', onclick: () => go('library') }, 'Browse mocks')));
     const kv = [['Project', proj.name], ['Platform', proj.platform || 'unknown']];
+    if (git && git.repo) { kv.push(['Branch', git.branch]); if (git.commit) kv.push(['Latest change', git.commit.subject + ' · ' + git.commit.when]); }
     fill(panel, h('div', { class: 'ph' }, 'Details'), kvList(kv),
       h('div', { class: 'ph' }, 'Setup', health ? h('span', {}, health.overall === 'ok' ? 'All good' : 'Needs a look') : null),
       h('p', { class: 'hintp' }, 'Checks for Java, the mock server, port 18080 and Charles. ', h('a', { href: '#/setup' }, 'Open setup check')));
@@ -689,7 +695,7 @@ async function deleteSaved(c) {
 async function reloadCatalog() { try { items = (await api('/api/catalog')).items; notice = ''; } catch (e) { flash(e.message); } loadSaved(); renderAll(); }
 async function openRecent(path) {
   if (state.state !== 'idle') { flash('Stop the running mock before changing project.'); return; }
-  try { await api('/api/project/open', { path }); await loadProject(); } catch (e) { flash(e.message); }
+  try { await api('/api/project/open', { path }); await loadProject(true); } catch (e) { flash(e.message); }
 }
 async function quit() {
   if (serving() && !confirm('This stops the running mock and closes MockStro. Quit?')) return;
@@ -717,13 +723,19 @@ async function refreshJournal() {
 }
 async function loadSaved() { try { const r = await api('/api/saved'); saved = r.items; savedDir = r.dir; } catch { return; } renderAll(); }
 async function checkHealth() { try { health = await api('/api/health'); } catch { return; } renderAll(); }
-async function loadProject() {
+async function loadGit(fetchFirst) {
+  if (!proj.open) { git = null; return; }
+  if (fetchFirst) { try { git = await api('/api/git/fetch', {}); } catch {} }
+  try { git = await api('/api/git'); } catch { return; }
+  renderAll();
+}
+async function loadProject(autoFetch) {
   try { proj = await api('/api/project'); } catch { return; }
   if (!proj.open) { items = []; saved = []; current = null; renderChrome(); fill($('welcome-chooser'), projectChooser()); return; }
   try { items = (await api('/api/catalog')).items; } catch (e) { notice = e.message; }
   await refresh();
   mountView();
-  loadSaved(); checkHealth();
+  loadSaved(); checkHealth(); loadGit(autoFetch);
 }
 
 // ---------- dialogs
@@ -819,7 +831,7 @@ function projectChooser(done) {
   const path = h('input', { class: 'input', type: 'text', placeholder: '/Users/you/code/project', 'aria-label': 'Project folder path' });
   async function open(p) {
     msg.className = 'hint'; msg.textContent = 'Opening…';
-    try { await api('/api/project/open', { path: p }); await loadProject(); done && done(); }
+    try { await api('/api/project/open', { path: p }); await loadProject(true); done && done(); }
     catch (e) { msg.className = 'hint bad'; msg.textContent = e.message; }
   }
   async function pick() {
@@ -846,11 +858,59 @@ function openProjectDialog() {
   showDialog();
 }
 
+// git: branch, update, switch
+function gitSummary() {
+  if (git.detached) return 'Not on a branch. Switch to one below.';
+  if (!git.upstream) return 'This branch is not linked to a remote branch, so there is nothing to pull.';
+  if (git.ahead > 0 && git.behind > 0) return 'Your copy and the remote have both changed, so it cannot update by itself. Ask a developer.';
+  if (git.behind > 0) return git.behind + (git.behind === 1 ? ' new change is' : ' new changes are') + ' available.';
+  if (git.ahead > 0) return 'You have ' + git.ahead + (git.ahead === 1 ? ' change' : ' changes') + ' that are not on the remote.';
+  return 'Up to date as of the last check.';
+}
+async function openGitDialog() {
+  await loadGit();
+  if (!git || !git.repo) return;
+  let branches = [], filter = '', msg = '', msgClass = 'hint';
+  try { branches = await api('/api/git/branches'); } catch (e) { msg = e.message; msgClass = 'hint bad'; }
+  const locked = () => state.state !== 'idle' || gitBusy;
+  const dirty = () => git.dirty && git.dirty.length;
+  async function act(label, fn) {
+    gitBusy = true; msg = label + '…'; msgClass = 'hint'; draw();
+    try { const r = await fn(); msg = (r && r.message) || 'Done.'; msgClass = 'hint good'; await loadProject(); }
+    catch (e) { msg = e.message; msgClass = 'hint bad'; }
+    gitBusy = false; await loadGit(); try { branches = await api('/api/git/branches'); } catch {} draw();
+  }
+  function draw() {
+    const q = filter.trim().toLowerCase();
+    const shown = branches.filter((b) => !q || b.name.toLowerCase().includes(q));
+    fill(dlgBody, 
+      h('h2', { id: 'dlg-title' }, 'Project version'),
+      kvList([['Branch', git.branch + (git.upstream ? '  (follows ' + git.upstream + ')' : '')], git.commit ? ['Latest', git.commit.subject + ' · ' + git.commit.hash + ' · ' + git.commit.when] : null].filter(Boolean)),
+      h('p', { class: 'hint' + (git.ahead > 0 && git.behind > 0 ? ' bad' : '') }, gitSummary()),
+      dirty() ? h('p', { class: 'hint bad' }, 'These files have changes, so updating and switching are off: ' + git.dirty.slice(0, 10).join(', ') + '. Ask a developer.') : null,
+      state.state !== 'idle' ? h('p', { class: 'hint bad' }, 'Stop the running mock first. Updating or switching changes the files it is using.') : null,
+      h('div', { style: 'display:flex;gap:8px' },
+        h('button', { class: 'btn', ...(gitBusy ? { disabled: '' } : {}), onclick: () => act('Checking for updates', () => api('/api/git/fetch', {})) }, 'Check for updates'),
+        h('button', { class: 'btn' + (git.behind > 0 ? ' primary' : ''), ...(locked() || git.behind === 0 || dirty() ? { disabled: '' } : {}), onclick: () => act('Updating', () => api('/api/git/pull', {})) }, 'Update to latest')),
+      field('Switch branch',
+        h('input', { class: 'input', type: 'search', placeholder: 'Search branches', 'aria-label': 'Search branches', value: filter,
+          oninput: (e) => { filter = e.target.value; draw(); const i = dlgBody.querySelector('input[type=search]'); i.focus(); i.setSelectionRange(filter.length, filter.length); } }),
+        h('div', { class: 'branches' }, shown.length ? shown.map((b) => h('div', { class: 'branch' },
+          h('span', { class: 'n' }, b.name, b.remote ? h('small', {}, '  (not on this Mac yet)') : null, b.current ? h('small', {}, '  (current)') : null),
+          h('small', {}, b.when),
+          h('button', { class: 'btn sm', ...(b.current || locked() || dirty() ? { disabled: '' } : {}), onclick: () => act('Switching to ' + b.name, () => api('/api/git/switch', { branch: b.name })) }, 'Switch'))) : h('div', { class: 'branch' }, 'No branches match.'))),
+      h('p', { class: msgClass, role: 'status', 'aria-live': 'polite' }, msg),
+      h('div', { class: 'row2' }, h('button', { class: 'btn', onclick: closeDialog }, 'Close')));
+  }
+  draw(); showDialog();
+}
+
 (async () => {
-  await loadProject();
+  await loadProject(true);
   setInterval(refresh, 1000);
   setInterval(refreshJournal, 1000);
   setInterval(checkHealth, 5000);
+  setInterval(() => loadGit(), 30000);
 })();
 </script>
 </body>
