@@ -12,8 +12,6 @@ command -v osacompile >/dev/null 2>&1 || fail "osacompile is missing; it ships w
 bin=${1:-$(command -v mockstro || true)}
 [ -n "$bin" ] && [ -x "$bin" ] || fail "cannot find the mockstro binary; pass its full path"
 bin=$(CDPATH='' cd -- "$(dirname -- "$bin")" && pwd)/$(basename -- "$bin")
-# The path is embedded in a quoted shell command inside AppleScript.
-case "$bin" in *[!0-9A-Za-z._/+@~-]*) fail "the binary path may only contain letters, digits and . _ / + @ ~ -" ;; esac
 
 dest=${MOCKSTRO_APP_DIR:-$HOME/Applications}
 app=$dest/Mockstro.app
@@ -22,16 +20,24 @@ mkdir -p "$dest" "$(dirname "$log")"
 
 script=$(mktemp "${TMPDIR:-/tmp}/mockstro-launcher.XXXXXX")
 trap 'rm -f "$script"' EXIT
-# A login shell plus the usual Homebrew locations (its Java is keg-only) gives the app a PATH
-# that finds Java without loading ~/.zshrc.
-brewpath=/opt/homebrew/opt/openjdk@17/bin:/opt/homebrew/bin:/usr/local/opt/openjdk@17/bin:/usr/local/bin
-cat > "$script" <<APPLESCRIPT
-do shell script "/bin/zsh -lc 'export PATH=$brewpath:\$PATH; exec \"$bin\" ui' >> \"$log\" 2>&1 &"
+# Escape a value for an AppleScript string literal; `quoted form of` then quotes it for the shell.
+as_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"; }
+{
+  echo "set bin to $(as_string "$bin")"
+  echo "set logFile to $(as_string "$log")"
+  # A login shell gives the app a PATH without loading ~/.zshrc. Homebrew's JDKs are keg-only,
+  # so add them, and prefer any registered JDK 17+ (e.g. Temurin) that java_home finds.
+  cat <<'APPLESCRIPT'
+set jdks to "/opt/homebrew/opt/openjdk/bin:/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/opt/openjdk@17/bin:/usr/local/opt/openjdk/bin:/usr/local/opt/openjdk@21/bin:/usr/local/opt/openjdk@17/bin"
+set startUI to "export PATH=" & jdks & ":/opt/homebrew/bin:/usr/local/bin:$PATH; if jh=$(/usr/libexec/java_home -v 17+ 2>/dev/null); then export PATH=$jh/bin:$PATH; fi; exec \"$1\" ui"
+do shell script "/bin/zsh -lc " & quoted form of startUI & " mockstro-ui " & quoted form of bin & " >> " & quoted form of logFile & " 2>&1 &"
 APPLESCRIPT
+} > "$script"
 
 rm -rf "$app"
 osacompile -o "$app" "$script"
 defaults write "$app/Contents/Info" LSUIElement -bool true # no Dock icon while it launches
+codesign --force --sign - "$app" 2>/dev/null # editing Info.plist breaks osacompile's ad-hoc signature
 touch "$app"
 
 echo "Created $app"
