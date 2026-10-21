@@ -81,6 +81,7 @@ See [integration](docs/integration.md).
 - [Devices](docs/devices.md): agent access, parallel runs, booting
 - [CI and agents](docs/ci.md): reports, exit codes, result stages
 - [TUI](docs/tui.md): tabs and keys
+- [Web UI](docs/web-ui.md): `mockstro ui`, a browser front end for `mock`
 - Integration: [overview](docs/integration.md), [Android](docs/android-integration.md), [iOS](docs/ios-integration.md)
 - [Kotlin Toolchain](docs/kotlin-toolchain.md), [WebSockets](docs/websockets.md)
 - [Contributing](CONTRIBUTING.md)
