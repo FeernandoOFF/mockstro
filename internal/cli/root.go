@@ -176,7 +176,7 @@ func Execute(version string) int {
 	tui := &cobra.Command{Use: "tui", Short: "Open the interactive terminal UI", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return runTUI(g, f) }}
 
-	root.AddCommand(initCommand(g, version), skillCommand(g), run, mock, check, list, resolve, status, sweep, lastRun, recordAPI, playback, boot, prune, proxy, tui)
+	root.AddCommand(initCommand(g, version), skillCommand(g), run, mock, check, list, resolve, status, sweep, lastRun, recordAPI, playback, boot, prune, proxy, tui, uiCommand(g, f))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
