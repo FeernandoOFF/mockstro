@@ -16,6 +16,9 @@ mock.
 - **Terminal:** `mockstro ui` inside a project opens that project. Elsewhere it reopens the last
   project it used, or shows a folder chooser. `--no-open` skips the browser and `--port` moves the
   page. If a UI is already running on the port, it just opens it.
+- **Double-click:** `sh scripts/install-ui-launcher.sh [/path/to/mockstro]` creates
+  `~/Applications/Mockstro.app`. It starts the UI with no terminal window and writes its output to
+  `~/Library/Logs/mockstro-ui.log`. The page's **Quit** button stops the mock and the UI.
 
 Recent projects are remembered in `ui.json` under `MOCKSTRO_STATE_DIR`, or under
 `~/Library/Application Support/mockstro/` when that is unset.
