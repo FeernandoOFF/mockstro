@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -74,6 +75,7 @@ type Server struct {
 	port     int
 	mux      *http.ServeMux
 	quit     func()
+	gitMu    sync.Mutex
 
 	// charlesConfig is where Charles keeps its settings; overridden in tests.
 	charlesConfig string
@@ -94,6 +96,11 @@ func NewServer(ws *Workspace, ex execx.Runner, port int) (*Server, error) {
 	s.mux.HandleFunc("GET /api/project", s.projectInfo)
 	s.mux.HandleFunc("POST /api/project/open", s.openProject)
 	s.mux.HandleFunc("POST /api/project/pick", s.pickProject)
+	s.mux.HandleFunc("GET /api/git", s.gitInfo)
+	s.mux.HandleFunc("GET /api/git/branches", s.gitBranches)
+	s.mux.HandleFunc("POST /api/git/fetch", s.gitFetch)
+	s.mux.HandleFunc("POST /api/git/pull", s.gitPull)
+	s.mux.HandleFunc("POST /api/git/switch", s.gitSwitch)
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/catalog", s.catalog)
 	s.mux.HandleFunc("GET /api/state", s.state)
