@@ -26,10 +26,13 @@ A sidebar on the left, a top bar with breadcrumbs, and one view at a time. The p
 system's light or dark setting.
 
 - **Sidebar:** **Session**, the **Library** (Mocks, Saved responses),
-  **Setup check**, and a **Projects** tree. The tree lists the open project with
+  **Setup check**, and a **Projects** tree. The tree lists the open project with its git branch and
   **Reload from disk** (after a `git pull`), plus recent projects to switch to. The footer shows
   whether the mock is running and has the **Quit** button.
-- **Top bar:** breadcrumbs and the project's platform.
+- **Top bar:** breadcrumbs, the project's git branch as a chip, and its platform. The branch chip
+  opens the **Version** dialog: the branch, its latest commit and whether it is up to date, with
+  **Check for updates**, **Update to latest** and a branch list to **Switch** to. The page fetches
+  once when a project opens; pulling and switching are always the tester's click.
 - **Mocks:** everything that can be started, in one list grouped by the customer it is for:
   **Elec only**, **Gas only** and **Dual fuel**, plus **Other** for anything that fits none. Each
   group folds, and starts open only when it holds the running mock. Inside a group are the
@@ -81,3 +84,15 @@ The Setup check view checks, and says how to fix:
 
 The Charles rules check reads only the Map Remote section of
 `~/Library/Preferences/com.xk72.charles.config`. Charles saves that file as rules change.
+
+## Updating the checkout from the page
+
+Pull and switch run `git` in the project's folder with these rules:
+
+- A pull is `git pull --ff-only`. Nothing is merged, rebased, stashed, reset or discarded; if the
+  branch cannot fast-forward the page says so and leaves the checkout alone.
+- Both pull and switch refuse while a tracked file has local changes, naming the files. Untracked
+  files, such as saved stubs under `stubs/local/`, never block them.
+- Both refuse while a mock is running, because the files under it would change.
+- Git never prompts. Anything that needs a sign-in fails with a plain message instead of hanging.
+- Branch names are validated and passed as arguments, never through a shell.
