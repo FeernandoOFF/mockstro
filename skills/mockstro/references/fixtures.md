@@ -1,22 +1,45 @@
-# Fixture edits
+# Flows and mocks
 
-Inspect existing files before choosing names or adding a new abstraction.
+Read the neighbouring flows, stubs and profiles first, and reuse their names and patterns.
 
-- Flows in `.maestro/flows/` declare `appId: ${APP_ID}`, `tags` and mock properties in their YAML
-  header, followed by `---` and Maestro steps. Put platform subflows under `shared/`
-  and select them with native `runFlow.when.platform` conditions.
-- `properties.apiProfile` selects `wiremock/profiles/<name>.json`. `shared.json` is always
-  loaded. Profiles list stub names in a `mappings` array.
-- `properties.apiOverrides` lists extra stubs, replacing same-route mappings from the
-  profile. `fbrcOverrides` values are strings.
-- `properties.apiVerifications` checks the request journal after the flow, using `stub`
-  and `atLeast`, `exactly` or `atMost` counts.
-- Stubs in `wiremock/stubs/` may `extends` another stub or a template from `wiremock/bases/`.
-  Only `response` is inherited; request, priority and scenario fields belong to each stub.
-  In a child response, `"__remove__"` deletes an inherited key and `null` sets a JSON null.
-- Bodies live in `wiremock/__files/`; use `bodyFileName` for shared or substantial bodies.
+## Flows
 
-Inspect effective mappings with `./mockstrow resolve <stub>`. Validate with
-`./mockstrow setup`, then rerun the affected flow. For manual inspection,
-`./mockstrow mock <profile-or-scenario>` serves on port 18080; attaching to a device is
-an explicit additional action (`--attach --device`).
+Flows live in `.maestro/flows/<feature>/`. Each has a YAML header, `---`, then Maestro steps:
+
+```yaml
+appId: ${APP_ID}
+tags: [smoke, account]
+properties:
+  apiProfile: signed-in          # wiremock/profiles/signed-in.json, on top of shared.json
+  apiOverrides: [account-empty]  # extra stubs; replace same-route stubs from the profile
+  fbrcOverrides:                 # Remote Config values, always strings
+    new_home_enabled: "true"
+  apiVerifications:              # request counts checked after the flow
+    - stub: account-empty
+      atLeast: 1                 # or exactly / atMost
+---
+- launchApp
+- assertVisible: "No accounts yet"
+```
+
+- Write `appId: ${APP_ID}` in every flow and subflow; the real IDs live in `mockstro.yaml`.
+  mockstro sets `APP_ID` and `WIREMOCK_PORT` itself.
+- Tags select flows. Branch per platform with Maestro's `runFlow` + `when: { platform: iOS }`,
+  with platform subflows under `.maestro/shared/`.
+
+## Mocks
+
+- `wiremock/profiles/<name>.json` lists stub names: `{"mappings": [...]}`. `shared.json`
+  always loads.
+- `wiremock/stubs/*.json` are WireMock mappings. A stub may `extends` another stub or a
+  template in `wiremock/bases/`. Only `response` is inherited; `request`, `priority` and
+  scenario fields stay each stub's own. In a child, `"__remove__"` deletes an inherited key
+  and `null` sets a JSON null.
+- Bodies live in `wiremock/__files/`; use `bodyFileName` for shared or large bodies.
+- `scenarios/*.yaml` are named mock setups for `./mockstrow mock`.
+
+## Checking your work
+
+- `./mockstrow resolve <stub>` prints a stub with its `extends` chain applied.
+- `./mockstrow mock <profile|scenario>` serves a mock on port 18080 for manual inspection;
+  attach it to a device only when asked (`--attach --device <serial>`).

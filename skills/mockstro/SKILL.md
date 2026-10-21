@@ -1,43 +1,52 @@
 ---
 name: mockstro
-description: Run and debug a project's Maestro UI flows with mockstro and WireMock, or edit their flows, profiles, scenarios and API fixtures.
+description: End-to-end (E2E) mobile UI testing with mockstro. Use to run or debug Maestro flows on Android emulators or iOS simulators, write or edit flows, or change their WireMock API mocks (stubs, profiles, scenarios). Any task touching `.maestro/` or `./mockstrow`.
 ---
 
-Use the project's `./mockstrow` from its repository root. It downloads and verifies the
-pinned CLI on first use and reuses the cache offline. If missing, ask the maintainer for
-the project's wrapper and `cliVersion` pin in `.maestro/mockstro.yaml`; bootstrap requires
-an explicit release version.
-When the user requests testing the development CLI, use `./mockstrow --dev` followed by
-the usual arguments. It requires `mockstro-dev` on PATH or an explicit `MOCKSTRO_DEV_CLI`
-executable path. Normal wrapper invocations keep using the pinned release.
+Run everything through the project's `./mockstrow` from the repository root; it fetches the
+pinned CLI itself. `./mockstrow <command> --help` is the flag reference. Without a wrapper,
+ask the maintainer to run the mockstro installer.
 
-1. Read the project's `.maestro/` configuration and relevant flow. Use `./mockstrow --help`
-   and command help to discover flags. Read `mockstro.yaml` and optional ignored
-   `mockstro.local.yaml`; keep each platform's lite/proxy or full/runtime integration.
-2. Inspect `./mockstrow --owner agent status --json` before using a device. Status exits
-   0 when idle, 10 when active with a free device, 11 when nothing is free. Agents use
-   designated devices; let mockstro manage locks and ports. Boot a designated emulator
-   only when needed. Confirm any proposed use of a personal physical device with the user.
-3. Run an explicit flow with `./mockstrow --owner agent run <flow.yaml>`, or the requested
-   tags. All configured platforms run by default; `--platform android|ios` narrows the run.
-   Use `--env-file <yaml-map>` and repeatable `-e KEY=VALUE` for test inputs. Use `--skip-build` only when the installed app is suitable for the change.
-4. Read the reported run directory: `run.json`, `junit.xml`, `result.tsv` and per-flow logs.
-   Separate fixture/setup/override failures from UI assertions. Report the flow, stage,
-   evidence and platform-specific rerun command; verify fixes with the smallest relevant
-   rerun. `run --rerun-failed` selects only failed flow/platform pairs from the last run.
-   Flows share one Maestro process per batch; add `--isolate` if a failure might come
-   from an earlier flow in the same batch.
+## Running and debugging flows
 
-Write flows with `appId: ${APP_ID}`. App IDs belong to platform config. Keep platform
-branches in native Maestro conditions; tags are selection labels, not platform routing.
-`APP_ID` and `WIREMOCK_PORT` are injected by the runner and cannot be overridden.
-Full targets run concurrently; selecting lite causes sequential execution.
+1. **Orient.** Read `.maestro/mockstro.yaml`, the optional `mockstro.local.yaml`, and the
+   target flows. Done when you know which flows, which platforms, and whether each platform
+   is `lite` (one device, sequential) or `full` (parallel).
+2. **Claim a device.** `./mockstrow --owner agent status --json`; `--quiet` exits 0 idle,
+   10 busy with a free device, 11 nothing free. You may use only designated emulators and
+   simulators (the platform's `devices` list); `./mockstrow boot <name>` starts one. Ask the
+   user before using a personal physical device. Done when each platform has a free
+   designated device.
+3. **Run.** `./mockstrow --owner agent run <flow.yaml>…` or `--tags <tags>`; `--platform`
+   narrows to one platform. Test inputs go in `--env-file <yaml>` or `-e KEY=VALUE`. Add
+   `--skip-build` only when the installed app already contains the change under test.
+   Done when the run prints its run directory.
+4. **Triage.** In the run directory read `run.json`, `result.tsv` and each failing flow's
+   log. Classify every failure by its stage:
+   - `TEST`: a UI assertion or app behaviour.
+   - `VERIFY`: the flow passed but an `apiVerifications` count was wrong; check the stubs.
+   - `SETUP`: fixtures, build, install or device; fix the environment, not the flow.
+   - `OVERRIDE` (full only): the app never confirmed it read the run's mock; check the app's E2E seam.
+   Flows share one Maestro process per batch; rerun with `--isolate` when a failure might
+   come from an earlier flow. Done when every failing flow/platform pair has a stage,
+   evidence from its log, and a rerun command.
+5. **Verify.** After a fix, run the narrowest rerun: the single flow on the single platform,
+   or `--rerun-failed`. Done when it passes.
 
-For fixture edits, read [references/fixtures.md](references/fixtures.md).
-When dependency setup is requested, `./mockstrow setup` validates fixtures, installs missing
-Maestro through Homebrew or its official installer, and fetches checksum-pinned WireMock jars
-for the selected platforms. Existing Maestro installs are reused. Java 17+ must work first;
-relay the CLI's Homebrew command if Java is missing or too old. Android tools, Xcode and
-devices remain separate prerequisites.
-Use the CLI's prerequisite errors to identify missing tools; install them only within the
-user's requested scope. Keep generated `.maestro/.runtime/` artifacts out of commits.
+Report each failure as flow, platform, stage, evidence and rerun command.
+
+## Writing flows and mocks
+
+Before creating or editing flows, stubs, profiles or scenarios, read
+[references/fixtures.md](references/fixtures.md). Validate with `./mockstrow check`, then
+verify with the narrowest rerun.
+
+## Environment
+
+- `./mockstrow check` validates fixtures and checks Java 17+, Maestro and WireMock. Pass
+  `--install` to install a missing Maestro only when the user asked for dependency setup.
+  Relay its install command when Java is missing; Android tools, Xcode and devices are the
+  user's to install.
+- To test a development CLI, put `--dev` first: `./mockstrow --dev run …` (uses
+  `mockstro-dev` on PATH or `MOCKSTRO_DEV_CLI`).
+- Leave `.maestro/.runtime/` out of commits.
