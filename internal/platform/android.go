@@ -105,7 +105,7 @@ func (a *Android) DeviceName(ctx context.Context, serial string) string {
 func (a *Android) Designated() []string {
 	var names []string
 	names = append(names, splitNames(a.P.Env["MAESTRO_AGENT_AVDS"])...)
-	names = append(names, globalDesignated()...)
+	names = append(names, GlobalDesignated()...)
 	return uniq(names)
 }
 

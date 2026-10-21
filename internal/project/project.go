@@ -29,6 +29,7 @@ type Project struct {
 	Devices         []string
 	MaestroRoot     string // <root>/.maestro
 	Env             map[string]string
+	Warnings        []string // unknown config keys, ignored
 
 	BuildSystem         string
 	KotlinAndroidModule string

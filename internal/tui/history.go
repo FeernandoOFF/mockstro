@@ -60,12 +60,12 @@ type historyModel struct {
 	sCur      int
 }
 
-func (hm *historyModel) load() { hm.apply(hm.scan()) }
+func (hm *historyModel) load() { hm.apply(scanRuns(hm.a.query)) }
 
-// scan reads every run dir; it touches no model state so it can run off the UI loop.
-func (hm *historyModel) scan() []*histRun {
+// scanRuns reads every run dir; it touches no model state so it can run off the UI loop.
+func scanRuns(query *engine.Engine) []*histRun {
 	var runs []*histRun
-	for _, rd := range hm.a.query.RunDirs(context.Background(), true) {
+	for _, rd := range query.RunDirs(context.Background(), true) {
 		hr := &histRun{dir: rd.Path, at: rd.ModTime, size: rd.Size, active: rd.Active, err: engine.RunError(rd.Path), rd: rd}
 		readResults(hr)
 		runs = append(runs, hr)
@@ -156,7 +156,8 @@ func (hm *historyModel) onTick(t time.Time) tea.Cmd {
 		return nil
 	}
 	hm.scanning = true
-	return func() tea.Msg { return histScanMsg(hm.scan()) }
+	query := hm.a.query
+	return func() tea.Msg { return histScanMsg(scanRuns(query)) }
 }
 func (hm *historyModel) selected() *histRun {
 	if hm.cursor < len(hm.runs) {

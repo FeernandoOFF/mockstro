@@ -285,7 +285,8 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 		args = append(args, flowPath)
 	}
 	before := r.resultDirs()
-	runErr := e.Exec.Run(ctx, execx.Cmd{Name: "maestro", Args: args, Stdout: lw, Stderr: lw})
+	maestro, _ := e.maestroCommand()
+	runErr := e.Exec.Run(ctx, execx.Cmd{Name: maestro, Args: args, Stdout: lw, Stderr: lw})
 	res.Artifacts, res.Shots = r.newArtifacts(before)
 	lw.Flush()
 	if logFile != nil {

@@ -22,7 +22,7 @@ reports the result. It has a CLI for scripts, agents and CI, and a TUI for human
 
 ## Install
 
-From an app repository that already has `.maestro/`, run the project installer.
+From an app repository that already has `.maestro/mockstro.yaml`, run the project installer.
 No global mockstro or Go installation is needed:
 
 ```bash
@@ -37,13 +37,15 @@ rm "$installer"
 
 ./mockstrow --version
 ./mockstrow skill install --claude   # optional Claude link; canonical skill is in .agents/skills
-# Commit mockstrow, .maestro/.mockstro-version and the installed skill/link.
+# Commit mockstrow, .maestro/mockstro.yaml and the installed skill/link.
 ```
 
 The installer verifies the released wrapper, uses it to download and verify the pinned
-CLI, then calls that CLI's bootstrap command. It preserves `.maestro/` configuration
-and refuses to overwrite an existing wrapper or pin. It installs no global binary.
-If a CLI is already available, `mockstro bootstrap --cli-version vX.Y.Z` adds the same files.
+CLI, then calls that CLI's bootstrap command. It adds `cliVersion` to the existing
+`.maestro/mockstro.yaml`, preserves the other settings, and refuses to overwrite an
+existing wrapper or a conflicting pin. It installs no global binary.
+If a CLI is already available, `mockstro bootstrap --cli-version vX.Y.Z` sets the pin
+and adds the wrapper.
 The release workflow must publish the new assets before installation from GitHub works;
 older releases may lack them. Source installation remains `make install` (Go 1.25.6+).
 
@@ -55,6 +57,17 @@ After cloning the app, teammates simply run:
 ```
 
 Stable and prerelease pins (such as `v0.1.0-rc.1`) are supported.
+The pin is a standalone top-level scalar in `.maestro/mockstro.yaml`:
+
+```yaml
+cliVersion: v0.1.0-rc.1
+platforms:
+  android:
+    appId: com.example.app
+```
+
+Change `cliVersion` to select another published release. The wrapper reads only this
+field from the shared config; machine-local overrides do not change the CLI version.
 The wrapper supports macOS/Linux on arm64/amd64, downloads the exact pinned release,
 verifies SHA256, and atomically caches the binary under `~/.cache/mockstro/cli/`
 (or `MOCKSTRO_CACHE_DIR`). It verifies cached binaries before reuse, works offline
@@ -62,8 +75,24 @@ after the first download, and never substitutes a global `mockstro`. Installatio
 first use need `curl` and `sha256sum` or `shasum`.
 
 Runtime: Java 17+, the Maestro CLI, and `adb` (Android) or Xcode (iOS), plus a configured
-device. `./mockstrow setup` validates fixtures and fetches the checksum-pinned WireMock jar.
-External mobile tools and devices are managed separately.
+device. `./mockstrow setup` validates fixtures, installs Maestro if missing, and fetches the
+checksum-pinned WireMock jars required by the selected platforms (`--platform` can narrow them).
+Existing Maestro installations are reused without upgrading them. Installation uses
+[Homebrew or Maestro's official installer](https://docs.maestro.dev/maestro-cli/how-to-install-maestro-cli);
+the latter requires `bash`, `curl` and `unzip`. Mockstro also recognizes the official
+`~/.maestro/bin/maestro` location (or `MAESTRO_DIR/bin/maestro`), so its next run needs no
+terminal restart or manual PATH change.
+
+Setup checks that Java can run and is version 17 or newer. If Java is missing, unusable,
+or too old, it stops with the install command; Java is installed manually:
+
+```bash
+brew install --cask temurin@17  # macOS
+# Linux with Homebrew: brew install openjdk@17
+```
+
+After installing Java, check `JAVA_HOME` and rerun `./mockstrow setup`.
+Android tools, Xcode and devices are managed separately.
 
 The built-in skill ships with the CLI release. `skill install` copies it into
 `.agents/skills/mockstro`; `--claude` adds a relative `.claude/skills/mockstro` symlink to
@@ -77,9 +106,8 @@ mockstro works on the nearest parent directory that contains `.maestro/`. Use `-
 
 ```
 .maestro/
-├── .mockstro-version         # CLI release pin read by the root mockstrow launcher
 ├── config.yaml
-├── mockstro.yaml             # platforms, app IDs, builds, devices and test defaults
+├── mockstro.yaml             # cliVersion pin, platforms, builds, devices and test defaults
 ├── mockstro.local.yaml       # ignored machine overrides (optional)
 ├── flows/<feature>/*.yaml    # Maestro flows, grouped by feature
 ├── shared/                   # sub-flows reused through runFlow
@@ -186,7 +214,7 @@ Tabs (`1`–`6`, `tab`, `h`/`l`):
 
 | Tab | What it does |
 | --- | --- |
-| Dashboard | devices and bootable AVDs/simulators (boot, boot headless, stop, clear proxy, toggle keyboard), active runs of every project, sweep |
+| Dashboard | running devices and all installed, stopped AVDs/simulators; toggle agent access, boot, boot headless, stop, clear proxy, toggle keyboard; active runs of every project and sweep |
 | Flows | filter by tag or text, multi-select, open a run form that shows the equivalent CLI command |
 | Run | live workers, per-flow results, each worker's Maestro output; cancel, re-run failed |
 | History | past runs with per-flow logs and sizes; re-run failed, delete, prune |
@@ -195,6 +223,14 @@ Tabs (`1`–`6`, `tab`, `h`/`l`):
 
 Shared keys: `↑↓`/`jk` move, `u`/`d` page, `g`/`G` top/bottom, `enter`/`f` focus right, `/`
 filter, `space` select, `x` stop/delete, `y` copy, `r` refresh, `q` quit.
+
+On the Dashboard, select an emulator/simulator and press `a` to allow or disable agent access.
+The `agents: yes/no` label shows its designation; this applies to agent emulator selection in
+both lite and full integration. The action edits `platforms.<platform>.devices` in
+`.maestro/mockstro.yaml`, or the existing `devices` override in `mockstro.local.yaml`, then
+reloads the configuration. Physical phones have no designation toggle. Machine-wide
+designations are marked `(global)` and must be removed from `~/.config/mockstro/designated.txt`.
+The device list scrolls to keep the selected emulator visible.
 
 Press `e` on a flow (including Run/History results), mock scenario/profile/flow, or
 stub to open its source in `$EDITOR` (`$VISUAL`, then `vi` if unset). Editor arguments
@@ -241,6 +277,7 @@ can independently opt into full integration once its debug app supports the over
 
 ```yaml
 # .maestro/mockstro.yaml
+cliVersion: v0.1.0-rc.1
 platforms:
   android:
     project: ../android-app
@@ -266,8 +303,15 @@ env:
 Source project paths are relative to the owning suite repository, including in local
 overrides. They can point at the same checkout for a monorepo or separate checkouts.
 All flows, shared subflows and mocks belong to this suite's `.maestro/`.
-Use `mockstro.local.yaml` to override only `env` or each platform's `project`, `devices`,
-`build`, and `env`. Local files cannot redefine test cases, app IDs or integration modes.
+Use `mockstro.local.yaml` to override `env` or an existing platform's `project`, `devices`,
+`build`, and `env`. Devices lists replace the shared list; build fields and variables
+merge. Existing platforms keep their shared app IDs and integration modes.
+
+The local file can also add a complete platform absent from `mockstro.yaml`. For example,
+an Android repository can commit only its Android configuration and optionally add an
+iOS checkout locally. The added platform supports the same fields and validation as a
+shared platform, including a required `appId`. It participates in default runs only on
+machines with that local definition. Both platforms use the owning suite's flows and mocks.
 
 ```yaml
 # .maestro/mockstro.local.yaml — ignored
@@ -275,6 +319,14 @@ platforms:
   android:
     project: /Users/me/projects/android-app
     devices: [My_Pixel]
+  ios: # optional local platform; absent from the shared config
+    project: ../ios-app
+    appId: com.example.ios
+    integration: full
+    devices: [My_iPhone]
+    build:
+      project: App.xcodeproj
+      scheme: App
 ```
 
 Each selected flow runs on every configured platform by default. On a Mac, full targets
@@ -321,8 +373,8 @@ current configuration/input files; secrets and resolved test values are not save
 
 Other per-platform options: `proxyBaseUrl`, `fallbackUrl`, `fbrcUrl`, `overrideKey`,
 `acceptKey`. Android build defaults to `assembleDebug` and `app/build/outputs/apk/debug/*.apk`;
-iOS requires `build.project` and `build.scheme` when building. App IDs are always explicit.
-Kotlin toolchain builds are future work; execution targets already keep source roots separate.
+iOS native builds require `build.project` and `build.scheme`. App IDs are always explicit.
+For Kotlin Toolchain builds, use `build.system: kotlin-toolchain`; see [the build guide](docs/kotlin-toolchain.md).
 
 Environment: `MOCKSTRO_KEEP_RUNS` (finished run dirs kept per project, default 20),
 `MOCKSTRO_STATE_DIR`, `MOCKSTRO_CACHE_DIR`.
@@ -347,13 +399,27 @@ Install the current checkout as a separate command on your PATH:
 ```bash
 make install-dev                     # installs ~/.local/bin/mockstro-dev
 cd /path/to/your/app
-mockstro-dev tui
-mockstro-dev --version                # dev-prefixed Git version, including dirty state
+./mockstrow --version                 # the project's pinned release
+./mockstrow --dev --version           # dev-prefixed Git version, including dirty state
+./mockstrow run --tags smoke          # run with the pinned release
+./mockstrow --dev run --tags smoke    # run the same flows with mockstro-dev
 ```
 
-Run `make install-dev` again after changing the source. The released `mockstro` and
-the project's pinned `./mockstrow` remain independent. `make build-dev` only builds
-`bin/mockstro-dev`; `make uninstall-dev` removes the development command.
+Put `--dev` first: the wrapper consumes it and forwards all remaining arguments to
+`mockstro-dev` on PATH. Dev mode skips the release download/cache and leaves the version pin
+unchanged; a missing dev executable produces an error. Without `--dev`, the wrapper always
+uses the pinned release, even when a dev binary or override is available.
+
+To test a specific build without installing it, run `make build-dev` in the mockstro checkout,
+then from your app repository:
+
+```bash
+MOCKSTRO_DEV_CLI=/path/to/mockstro/bin/mockstro-dev ./mockstrow --dev run --tags smoke
+```
+
+Existing projects need the updated `mockstrow` script to use `--dev`; their release pin can
+stay as-is. Run `make install-dev` (or `make build-dev`) again after changing the source.
+You can also invoke `mockstro-dev` directly. `make uninstall-dev` removes the development command.
 Override `BIN_DIR` if needed, for example `make install-dev BIN_DIR="$HOME/bin"`.
 
 ```bash

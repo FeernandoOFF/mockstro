@@ -7,38 +7,37 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 
+	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/skills"
 )
 
 //go:embed mockstrow
 var Wrapper []byte
 
-var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
-
-// Project adds a wrapper and explicit pin to an existing .maestro project.
-// Existing files are never replaced, including symlinks.
+// Project adds a wrapper and pins cliVersion in the existing project config.
+// Existing wrappers and conflicting pins are never replaced, including symlinks.
 func Project(root, version string) error {
-	if !releaseTag.MatchString(version) {
-		return fmt.Errorf("release must be a tag such as v1.2.3 (got %q)", version)
+	if err := project.ValidateCLIVersion(version); err != nil {
+		return err
 	}
 	st, err := os.Stat(filepath.Join(root, ".maestro"))
 	if err != nil || !st.IsDir() {
 		return fmt.Errorf("bootstrap requires an existing .maestro directory in %s", root)
 	}
-	for _, name := range []string{"mockstrow", filepath.Join(".maestro", ".mockstro-version")} {
-		if _, err := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
-			return fmt.Errorf("refusing to overwrite %s", filepath.Join(root, name))
-		}
+	wrapper := filepath.Join(root, "mockstrow")
+	if _, err := os.Lstat(wrapper); !os.IsNotExist(err) {
+		return fmt.Errorf("refusing to overwrite %s", wrapper)
 	}
-	// Write the pin first; remove only our new pin if writing the wrapper fails.
-	pin := filepath.Join(root, ".maestro", ".mockstro-version")
-	if err := create(pin, []byte(version+"\n"), 0644); err != nil {
+	config, data, err := pinnedConfig(root, version)
+	if err != nil {
 		return err
 	}
-	if err := create(filepath.Join(root, "mockstrow"), Wrapper, 0755); err != nil {
-		os.Remove(pin)
+	if err := create(wrapper, Wrapper, 0755); err != nil {
+		return err
+	}
+	if err := replaceConfig(config, data); err != nil {
+		os.Remove(wrapper)
 		return err
 	}
 	return nil

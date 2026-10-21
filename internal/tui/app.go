@@ -31,8 +31,11 @@ const (
 var tabNames = []string{"Dashboard", "Flows", "Run", "History", "Mock", "Stubs"}
 
 type (
-	evMsg       engine.Event
-	statusMsg   struct{ st *engine.Status }
+	evMsg     engine.Event
+	statusMsg struct {
+		st    *engine.Status
+		query *engine.Engine
+	}
 	tickMsg     time.Time
 	activityMsg struct {
 		level, text string
@@ -120,13 +123,14 @@ func tick() tea.Cmd {
 }
 
 func (a *app) loadFixtures() tea.Cmd {
+	store := a.store
 	return func() tea.Msg {
 		var m fixturesMsg
-		m.counts, m.err = a.store.ValidateAll(true)
-		m.flows, _ = a.store.Flows()
-		m.scenarios, _ = a.store.Scenarios()
-		m.profiles, _ = a.store.ProfileNames()
-		m.stubs, _ = a.store.StubNames()
+		m.counts, m.err = store.ValidateAll(true)
+		m.flows, _ = store.Flows()
+		m.scenarios, _ = store.Scenarios()
+		m.profiles, _ = store.ProfileNames()
+		m.stubs, _ = store.StubNames()
 		return m
 	}
 }
@@ -136,11 +140,12 @@ func (a *app) refreshStatus() tea.Cmd {
 		return nil
 	}
 	a.statusBusy = true
+	p, opts, query := a.p, a.opts, a.query
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		st, _ := engine.SuiteStatus(ctx, a.p, a.opts, a.query.Exec)
-		return statusMsg{st}
+		st, _ := engine.SuiteStatus(ctx, p, opts, query.Exec)
+		return statusMsg{st: st, query: query}
 	}
 }
 
@@ -188,8 +193,37 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	case statusMsg:
 		a.statusBusy = false
-		a.status = m.st
+		if m.query != nil && m.query != a.query {
+			return a, a.refreshStatus()
+		}
+		a.dash.setStatus(m.st)
 		return a, nil
+	case agentAccessMsg:
+		a.dash.savingAgents = false
+		if m.err != nil {
+			a.log("error", "agent access: %v", m.err)
+			return a, nil
+		}
+		a.p = m.p
+		a.store = fixtures.New(m.p)
+		a.query = engine.New(m.p, a.opts, a.query.Exec, a.query.Sink)
+		if a.status != nil {
+			for i := range a.status.Devices {
+				d := &a.status.Devices[i]
+				if d.Name == m.name && (d.Platform == m.platform || d.Platform == "" && a.query.Opts.Platform == m.platform) {
+					d.Designated = m.allow
+				}
+			}
+			for i := range a.status.Emulators {
+				d := &a.status.Emulators[i]
+				if d.Name == m.name && d.Platform == m.platform {
+					d.Designated = m.allow
+				}
+			}
+			a.dash.setStatus(a.status)
+		}
+		a.log("info", "%s: agents %s; saved %s", m.name, map[bool]string{true: "allowed", false: "disabled"}[m.allow], a.p.Rel(m.path))
+		return a, tea.Batch(a.refreshStatus(), a.loadFixtures())
 	case fixturesMsg:
 		a.flows, a.scenarios, a.profiles, a.stubs, a.counts, a.fixErr = m.flows, m.scenarios, m.profiles, m.stubs, m.counts, m.err
 		if m.err != nil {

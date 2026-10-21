@@ -40,6 +40,7 @@ type simDevice struct {
 	Name        string `json:"name"`
 	State       string `json:"state"`
 	IsAvailable bool   `json:"isAvailable"`
+	OSVersion   string
 }
 
 func (i *IOS) simctl(ctx context.Context, args ...string) (string, error) {
@@ -63,10 +64,29 @@ func (i *IOS) sims(ctx context.Context, fresh bool) []simDevice {
 	if json.Unmarshal([]byte(out), &parsed) != nil {
 		return i.cache
 	}
+	var runtimes struct {
+		Runtimes []struct{ Identifier, Name, Version string }
+	}
+	versions := map[string]string{}
+	if out, err := i.simctl(ctx, "list", "runtimes", "-j"); err == nil && json.Unmarshal([]byte(out), &runtimes) == nil {
+		for _, r := range runtimes.Runtimes {
+			osName, _, ok := strings.Cut(r.Name, " ")
+			if ok && r.Version != "" {
+				versions[r.Identifier] = osName + " " + r.Version
+			}
+		}
+	}
 	var all []simDevice
-	for _, list := range parsed.Devices {
+	for runtime, list := range parsed.Devices {
 		for _, d := range list {
 			if d.IsAvailable {
+				d.OSVersion = versions[runtime]
+				if d.OSVersion == "" {
+					_, name, _ := strings.Cut(runtime, "SimRuntime.")
+					if osName, version, ok := strings.Cut(name, "-"); ok {
+						d.OSVersion = osName + " " + strings.ReplaceAll(version, "-", ".")
+					}
+				}
 				all = append(all, d)
 			}
 		}
@@ -78,7 +98,7 @@ func (i *IOS) sims(ctx context.Context, fresh bool) []simDevice {
 func (i *IOS) Devices(ctx context.Context) ([]Device, error) {
 	var out []Device
 	for _, s := range i.sims(ctx, false) {
-		out = append(out, Device{Serial: s.UDID, Name: s.Name, Class: "emulator", State: s.State})
+		out = append(out, Device{Serial: s.UDID, Name: s.Name, OSVersion: s.OSVersion, Class: "emulator", State: s.State})
 	}
 	return out, nil
 }
@@ -96,7 +116,7 @@ func (i *IOS) DeviceName(ctx context.Context, serial string) string {
 func (i *IOS) Class(string) string { return "emulator" }
 
 func (i *IOS) Designated() []string {
-	return uniq(append(append([]string(nil), i.P.IOSSimNames...), globalDesignated()...))
+	return uniq(append(append([]string(nil), i.P.IOSSimNames...), GlobalDesignated()...))
 }
 
 func (i *IOS) Bootable(ctx context.Context) []string {
@@ -115,8 +135,11 @@ func (i *IOS) Bootable(ctx context.Context) []string {
 func (i *IOS) Boot(ctx context.Context, name string, headless bool, progress func(string)) (string, error) {
 	udid := ""
 	for _, s := range i.sims(ctx, true) {
-		if s.Name == name {
+		if s.Name == name || s.UDID == name {
 			udid = s.UDID
+			if s.UDID == name {
+				break
+			}
 		}
 	}
 	if udid == "" {

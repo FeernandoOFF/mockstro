@@ -123,7 +123,8 @@ func (r *Run) RunBatch(ctx context.Context, flows []*fixtures.Flow, stopped func
 	tailStop := make(chan struct{})
 	tailDone := make(chan struct{})
 	go func() { b.tail.follow(tailStop); close(tailDone) }()
-	runErr := e.Exec.Run(bctx, execx.Cmd{Name: "maestro", Args: args, Stdout: lw, Stderr: lw})
+	maestro, _ := e.maestroCommand()
+	runErr := e.Exec.Run(bctx, execx.Cmd{Name: maestro, Args: args, Stdout: lw, Stderr: lw})
 	close(tailStop)
 	<-tailDone
 	b.tail.close()

@@ -26,6 +26,7 @@ func TestInstaller(t *testing.T) {
 	}
 	config := filepath.Join(project, ".maestro", "config.yaml")
 	os.WriteFile(config, []byte("existing config"), 0644)
+	writeSuite(t, project)
 	// Fake the transport and released CLI. The installer must verify and execute
 	// the actual wrapper, which then verifies this CLI and delegates bootstrap.
 	os.WriteFile(filepath.Join(bin, "curl"), []byte(`#!/bin/sh
@@ -66,7 +67,7 @@ cp "$ASSETS/${3##*/}" "$2"
 	if err == nil || !strings.Contains(out, "checksum mismatch") || strings.Contains(out, "unverified-wrapper") {
 		t.Fatalf("accepted corrupt wrapper: %q, %v", out, err)
 	}
-	for _, path := range []string{filepath.Join(project, "mockstrow"), filepath.Join(project, ".maestro", ".mockstro-version")} {
+	for _, path := range []string{filepath.Join(project, "mockstrow")} {
 		// Even a dangling symlink must block installation before network access.
 		os.Remove(filepath.Join(assets, "requests"))
 		os.Symlink("missing", path)

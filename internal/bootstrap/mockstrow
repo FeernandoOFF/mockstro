@@ -1,10 +1,34 @@
 #!/bin/sh
-# Project-local mockstro launcher. Commit this file with .maestro/.mockstro-version.
+# Project-local mockstro launcher. Pin cliVersion in .maestro/mockstro.yaml.
 set -eu
 fail() { echo "mockstrow: $*" >&2; exit 1; }
+# Development is explicit; normal invocations always use the project's release pin.
+if [ "${1:-}" = --dev ]; then
+    shift
+    dev_cli=${MOCKSTRO_DEV_CLI:-mockstro-dev}
+    command -v "$dev_cli" >/dev/null 2>&1 ||
+        fail "development CLI not found: $dev_cli; run 'make install-dev' in the mockstro checkout, or set MOCKSTRO_DEV_CLI to the built executable"
+    echo "mockstrow: using development CLI $dev_cli" >&2
+    exec "$dev_cli" "$@"
+fi
 root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-[ -f "$root/.maestro/.mockstro-version" ] || fail "missing $root/.maestro/.mockstro-version; ask the project maintainer to pin a release"
-version=$(cat "$root/.maestro/.mockstro-version")
+config=$root/.maestro/mockstro.yaml
+[ -f "$config" ] || fail "missing $config; ask the project maintainer to pin cliVersion"
+# Read only the standalone top-level scalar; bootstrapping needs no YAML runtime.
+version=$(awk '
+    /^cliVersion[[:space:]]*:/ {
+        if (++seen > 1) exit 2
+        value = $0
+        sub(/^cliVersion[[:space:]]*:[[:space:]]*/, "", value)
+        sub(/[[:space:]]*#.*/, "", value)
+        sub(/[[:space:]]*$/, "", value)
+        if (value ~ /^"[^"]*"$/ || value ~ /^\047[^\047]*\047$/)
+            value = substr(value, 2, length(value) - 2)
+        if (value == "") exit 2
+        print value
+    }
+' "$config") || fail "cliVersion must contain one release tag on a top-level line in $config"
+[ -n "$version" ] || fail "missing cliVersion in $config; ask the project maintainer to pin a release"
 case "$version" in *[!0-9A-Za-z.-]*|"") fail "pin must contain one release tag" ;; esac
 printf '%s\n' "$version" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || fail "pin must be a release tag such as v1.2.3"
 case $(uname -s) in

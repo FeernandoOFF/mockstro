@@ -55,7 +55,7 @@ func testApp(t *testing.T) *app {
 	a.stubTab = newStubsModel(a)
 	a.Update(tea.WindowSizeMsg{Width: 160, Height: 45})
 	a.Update(a.loadFixtures()())
-	a.Update(statusMsg{&engine.Status{
+	a.Update(statusMsg{st: &engine.Status{
 		Devices:   []engine.StatusDevice{{Device: platform.Device{Serial: "emulator-5554", Name: "Pixel", Class: "emulator"}, Eligible: true, Designated: true}},
 		Available: engine.Available{Eligible: []string{"emulator-5554"}},
 		Bootable:  []string{"Pixel_B"},
@@ -637,7 +637,7 @@ func TestMockAttachmentUnavailableAfterRefresh(t *testing.T) {
 				st.Devices[0].LockedBy = &locked
 				st.Available.Eligible = []string{"emulator-5554"}
 			}
-			a.Update(statusMsg{st})
+			a.Update(statusMsg{st: st})
 			if a.mock.attachDevice != selected {
 				t.Fatalf("refresh changed selection to %q", a.mock.attachDevice)
 			}
@@ -668,7 +668,7 @@ func TestMockAttachmentSurvivesDeviceReordering(t *testing.T) {
 	key(a, "a")
 	st := *a.status
 	st.Available.Eligible = []string{"emulator-5556", "emulator-5554"}
-	a.Update(statusMsg{&st})
+	a.Update(statusMsg{st: &st})
 	if a.mock.attachDevice != "emulator-5554" {
 		t.Fatalf("refresh changed selected device to %q", a.mock.attachDevice)
 	}
@@ -692,7 +692,7 @@ func TestMockAttachmentUsesDevicePlatform(t *testing.T) {
 			a.p.Integration = android.Integration
 			a.opts.Platform = ""
 			a.query = engine.New(a.p, a.opts, a.query.Exec, nil)
-			a.Update(statusMsg{&engine.Status{
+			a.Update(statusMsg{st: &engine.Status{
 				Devices: []engine.StatusDevice{
 					{Platform: "android", Device: platform.Device{Serial: "emulator-5554", Class: "emulator"}, Eligible: true},
 					{Platform: "ios", Device: platform.Device{Serial: sim, Class: "emulator"}, Eligible: true},

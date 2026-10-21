@@ -36,6 +36,10 @@ func (e *Engine) isDesignated(ctx context.Context, serial string) bool {
 
 // Allowed reports whether this owner may drive serial at all.
 func (e *Engine) Allowed(ctx context.Context, serial string) bool {
+	// Agent access to emulators is explicit in both lite and full projects.
+	if e.Plat.Class(serial) == "emulator" && e.Owner != "human" {
+		return e.isDesignated(ctx, serial)
+	}
 	if e.Opts.MapRemote || e.Opts.Lite {
 		return true
 	}

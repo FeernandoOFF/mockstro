@@ -11,6 +11,11 @@ import (
 
 // Init writes a complete small suite. Existing template files are never replaced.
 func Init(root string, cfg Config) error {
+	if cfg.CLIVersion != "" {
+		if err := ValidateCLIVersion(cfg.CLIVersion); err != nil {
+			return err
+		}
+	}
 	if len(cfg.Platforms) == 0 {
 		return fmt.Errorf("provide --android-app-id and/or --ios-app-id")
 	}

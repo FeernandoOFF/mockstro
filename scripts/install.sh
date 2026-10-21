@@ -10,9 +10,8 @@ case "$version" in *[!0-9A-Za-z.-]*|"") fail "version must be one release tag su
 printf '%s\n' "$version" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || fail "version must be a release tag such as v1.2.3"
 project=$(CDPATH='' cd -- "${2:-.}" && pwd)
 [ -d "$project/.maestro" ] || fail "expected an existing .maestro directory in $project"
-for path in "$project/mockstrow" "$project/.maestro/.mockstro-version"; do
-    [ ! -e "$path" ] && [ ! -L "$path" ] || fail "refusing to overwrite $path"
-done
+[ -f "$project/.maestro/mockstro.yaml" ] || fail "expected an existing .maestro/mockstro.yaml in $project"
+[ ! -e "$project/mockstrow" ] && [ ! -L "$project/mockstrow" ] || fail "refusing to overwrite $project/mockstrow"
 command -v curl >/dev/null 2>&1 || fail "install curl to download mockstro"
 sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -42,5 +41,5 @@ chmod 755 "$tmp/mockstrow"
 # The released wrapper is the single CLI downloader. Use its verified cache and
 # the CLI's bootstrap command so both installation entry points behave alike.
 mkdir "$tmp/.maestro"
-printf '%s\n' "$version" > "$tmp/.maestro/.mockstro-version"
+printf 'cliVersion: %s\n' "$version" > "$tmp/.maestro/mockstro.yaml"
 "$tmp/mockstrow" -C "$project" bootstrap --cli-version "$version"

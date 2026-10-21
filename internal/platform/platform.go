@@ -25,10 +25,11 @@ import (
 )
 
 type Device struct {
-	Serial string `json:"serial"`
-	Name   string `json:"name,omitempty"`
-	Class  string `json:"class"` // emulator | physical
-	State  string `json:"state,omitempty"`
+	Serial    string `json:"serial"`
+	Name      string `json:"name,omitempty"`
+	OSVersion string `json:"osVersion,omitempty"`
+	Class     string `json:"class"` // emulator | physical
+	State     string `json:"state,omitempty"`
 }
 
 // Override is what the app reads to point itself at a run's WireMock.
@@ -142,4 +143,5 @@ func notInstalled(p *project.Project, serial string) error {
 	return fmt.Errorf("%s is not installed on %s; drop --skip-build", p.AppID, serial)
 }
 
-func globalDesignated() []string { return readNameList(paths.DesignatedFile()) }
+// GlobalDesignated lists machine-wide device names allowed in every project.
+func GlobalDesignated() []string { return readNameList(paths.DesignatedFile()) }

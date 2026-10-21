@@ -120,7 +120,7 @@ func Execute(version string) int {
 	mock.Flags().BoolVar(&f.skipBuild, "skip-build", false, "with --attach: use the build already on the device")
 	mock.Flags().BoolVar(&f.clearProxy, "clear-proxy", false, "with --attach: remove a device-wide HTTP proxy first")
 
-	setup := &cobra.Command{Use: "setup", Short: "Validate all fixtures and fetch the pinned WireMock jar",
+	setup := &cobra.Command{Use: "setup", Short: "Validate fixtures, install Maestro if missing and fetch pinned WireMock jars",
 		RunE: func(cmd *cobra.Command, args []string) error { return setupCmd(cmd.Context(), g) }}
 
 	list := &cobra.Command{Use: "list [profiles|scenarios]", Short: "List flows, profiles or scenarios", Args: cobra.MaximumNArgs(1),
@@ -247,6 +247,11 @@ func loadProject(g *globals) (*project.Project, error) {
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) && errors.Is(err, os.ErrNotExist) && pathErr.Path == filepath.Join(root, ".maestro", "mockstro.yaml") {
 		return nil, projectInitHint(root, err)
+	}
+	if p != nil {
+		for _, w := range p.Warnings {
+			fmt.Fprintln(os.Stderr, "warning:", w)
+		}
 	}
 	return p, err
 }
@@ -406,7 +411,12 @@ func setupCmd(ctx context.Context, g *globals) error {
 	if err != nil {
 		return err
 	}
-	e := newEngine(p, engine.DefaultOptions(), NewPrinter())
+	targets, err := p.Selected(g.platform)
+	if err != nil {
+		return err
+	}
+	printer := NewPrinter()
+	e := newEngine(targets[0], engine.DefaultOptions(), printer)
 	if err := e.CheckEnvironment("setup"); err != nil {
 		return err
 	}
@@ -415,11 +425,27 @@ func setupCmd(ctx context.Context, g *globals) error {
 		return err
 	}
 	fmt.Println(counts)
-	jar, err := e.EnsureJar(ctx)
-	if err != nil {
+	if err := e.EnsureMaestro(ctx); err != nil {
 		return err
 	}
-	fmt.Printf("WireMock is ready at %s (SHA-256 verified).\n", jar)
+	seen := map[string]bool{}
+	for _, target := range targets {
+		child := newEngine(target, engine.DefaultOptions(), printer)
+		if target != targets[0] {
+			if _, err := child.Store.ValidateAll(true); err != nil {
+				return err
+			}
+		}
+		if seen[target.WireMockVersion] {
+			continue
+		}
+		jar, err := child.EnsureJar(ctx)
+		if err != nil {
+			return err
+		}
+		seen[target.WireMockVersion] = true
+		fmt.Printf("WireMock is ready at %s (SHA-256 verified).\n", jar)
+	}
 	return nil
 }
 

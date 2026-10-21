@@ -237,12 +237,16 @@ func (e *Engine) CheckEnvironment(command string) error {
 	}
 	var missing []string
 	for _, n := range need {
-		if _, err := e.Exec.LookPath(n); err != nil {
+		_, err := e.Exec.LookPath(n)
+		if n == "maestro" {
+			_, err = e.maestroCommand()
+		}
+		if err != nil {
 			missing = append(missing, n)
 		}
 	}
 	if len(missing) > 0 {
-		hints := map[string]string{"maestro": "brew install mobile-dev-inc/tap/maestro", "HandBrakeCLI": "brew install handbrake", "java": "a JDK 17+", "adb": "Android platform-tools", "xcrun": "Xcode command line tools"}
+		hints := map[string]string{"maestro": "run `mockstro setup` to install", "HandBrakeCLI": "brew install handbrake", "java": javaInstallHint, "adb": "Android platform-tools", "xcrun": "Xcode command line tools"}
 		var parts []string
 		for _, m := range missing {
 			if h, ok := hints[m]; ok {

@@ -11,7 +11,7 @@ import (
 func bootstrapCommand(g *globals) *cobra.Command {
 	var version string
 	cmd := &cobra.Command{
-		Use: "bootstrap", Short: "Add a pinned wrapper to an existing .maestro project (preserves config)", Args: cobra.NoArgs,
+		Use: "bootstrap", Short: "Add a wrapper and pin cliVersion in mockstro.yaml (preserves settings)", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root, err := installRoot(g)
 			if err != nil {
@@ -20,7 +20,7 @@ func bootstrapCommand(g *globals) *cobra.Command {
 			if err := bootstrap.Project(root, version); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Added mockstrow and .maestro/.mockstro-version. Commit both; run ./mockstrow --help to download the pinned CLI.")
+			fmt.Fprintln(cmd.OutOrStdout(), "Added mockstrow and pinned cliVersion in .maestro/mockstro.yaml. Commit both; run ./mockstrow --help to download the pinned CLI.")
 			return nil
 		},
 	}

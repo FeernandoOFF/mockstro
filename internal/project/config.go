@@ -2,6 +2,7 @@ package project
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -17,6 +18,14 @@ import (
 type Variables map[string]string
 
 var variableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
+
+func ValidateCLIVersion(version string) error {
+	if !releaseTag.MatchString(version) {
+		return fmt.Errorf("cliVersion must be a release tag such as v1.2.3 (got %q)", version)
+	}
+	return nil
+}
 
 func ValidateVariable(key string) error {
 	if !variableName.MatchString(key) {
@@ -57,7 +66,7 @@ func ReadVariables(path string) (Variables, error) {
 		return nil, err
 	}
 	var v Variables
-	if err = decode(b, &v); err != nil {
+	if _, err = decode(b, &v); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if v == nil {
@@ -92,8 +101,9 @@ type TargetConfig struct {
 	AcceptKey       string      `yaml:"acceptKey,omitempty"`
 }
 type Config struct {
-	Env       Variables               `yaml:"env,omitempty"`
-	Platforms map[string]TargetConfig `yaml:"platforms"`
+	CLIVersion string                  `yaml:"cliVersion,omitempty"`
+	Env        Variables               `yaml:"env,omitempty"`
+	Platforms  map[string]TargetConfig `yaml:"platforms"`
 }
 
 type LocalTarget struct {
@@ -103,16 +113,33 @@ type LocalTarget struct {
 	Env     Variables    `yaml:"env,omitempty"`
 }
 type LocalConfig struct {
-	Env       Variables              `yaml:"env,omitempty"`
-	Platforms map[string]LocalTarget `yaml:"platforms"`
+	Env Variables `yaml:"env,omitempty"`
+	// Shared platforms accept machine overrides; new platforms accept a full definition.
+	Platforms map[string]yaml.Node `yaml:"platforms"`
 }
 
-func decode(b []byte, dest any) error {
+// decode returns unknown keys as warnings rather than errors, so configs written
+// for a newer CLI still load.
+func decode(b []byte, dest any) ([]string, error) {
 	if len(bytes.TrimSpace(b)) == 0 {
-		return nil
+		return nil, nil
 	}
+	err := decodeOne(b, dest, true)
+	var typeErr *yaml.TypeError
+	if !errors.As(err, &typeErr) {
+		return nil, err
+	}
+	for _, msg := range typeErr.Errors {
+		if !strings.Contains(msg, "not found in type") {
+			return nil, err
+		}
+	}
+	return typeErr.Errors, decodeOne(b, dest, false)
+}
+
+func decodeOne(b []byte, dest any, strict bool) error {
 	d := yaml.NewDecoder(bytes.NewReader(b))
-	d.KnownFields(true)
+	d.KnownFields(strict)
 	if err := d.Decode(dest); err != nil {
 		return err
 	}
@@ -121,6 +148,20 @@ func decode(b []byte, dest any) error {
 		return fmt.Errorf("expected one YAML document")
 	}
 	return nil
+}
+
+// resolveAliases copies n with aliases inlined, so it can be re-encoded on its own.
+func resolveAliases(n *yaml.Node) *yaml.Node {
+	if n.Kind == yaml.AliasNode {
+		return resolveAliases(n.Alias)
+	}
+	c := *n
+	c.Anchor = ""
+	c.Content = make([]*yaml.Node, len(n.Content))
+	for i, child := range n.Content {
+		c.Content[i] = resolveAliases(child)
+	}
+	return &c
 }
 
 // Load requires the new typed config; legacy project.env is intentionally not read.
@@ -135,9 +176,22 @@ func Load(root string) (*Project, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	var warnings []string
+	warn := func(path string, msgs []string) {
+		for _, msg := range msgs {
+			warnings = append(warnings, fmt.Sprintf("%s: %s (ignored)", path, msg))
+		}
+	}
 	var cfg Config
-	if err := decode(b, &cfg); err != nil {
+	msgs, err := decode(b, &cfg)
+	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	warn(path, msgs)
+	if cfg.CLIVersion != "" {
+		if err := ValidateCLIVersion(cfg.CLIVersion); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
 	}
 	if len(cfg.Platforms) == 0 {
 		return nil, fmt.Errorf("%s: configure at least one platform", path)
@@ -145,16 +199,39 @@ func Load(root string) (*Project, error) {
 	var local LocalConfig
 	path = filepath.Join(maestro, "mockstro.local.yaml")
 	if b, err = os.ReadFile(path); err == nil {
-		if err = decode(b, &local); err != nil {
+		msgs, err := decode(b, &local)
+		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
+		warn(path, msgs)
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	for name := range local.Platforms {
-		if _, ok := cfg.Platforms[name]; !ok {
-			return nil, fmt.Errorf("local override references unconfigured platform %q", name)
+	overrides := map[string]LocalTarget{}
+	for name, node := range local.Platforms {
+		data, err := yaml.Marshal(resolveAliases(&node))
+		if err != nil {
+			return nil, fmt.Errorf("%s: platform %s: %w", path, name, err)
 		}
+		var l LocalTarget
+		var msgs []string
+		if _, shared := cfg.Platforms[name]; shared {
+			msgs, err = decode(data, &l)
+			if err == nil && len(msgs) > 0 {
+				err = fmt.Errorf("only project, devices, build and env can be overridden locally: %s", strings.Join(msgs, "; "))
+			}
+		} else {
+			var t TargetConfig
+			msgs, err = decode(data, &t)
+			// Platform variables from this file retain local precedence.
+			l.Env, t.Env = t.Env, nil
+			cfg.Platforms[name] = t
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: platform %s: %w", path, name, err)
+		}
+		warn(path+": platform "+name, msgs)
+		overrides[name] = l
 	}
 	targets := map[string]*Project{}
 	for name, t := range cfg.Platforms {
@@ -170,7 +247,7 @@ func Load(root string) (*Project, error) {
 		if t.Integration != "lite" && t.Integration != "full" {
 			return nil, fmt.Errorf("platform %s: integration must be lite or full", name)
 		}
-		l := local.Platforms[name]
+		l := overrides[name]
 		if l.Project != nil {
 			t.Project = *l.Project
 		}
@@ -289,5 +366,6 @@ func Load(root string) (*Project, error) {
 	}
 	suite := *first
 	suite.Targets = targets
+	suite.Warnings = warnings
 	return &suite, nil
 }

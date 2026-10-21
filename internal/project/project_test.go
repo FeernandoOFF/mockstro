@@ -85,14 +85,14 @@ platforms:
 
 func TestConfigRejectsInvalidSettings(t *testing.T) {
 	for name, text := range map[string]string{
-		"missing-platforms":  "env: {USER: user}\n",
-		"unknown-field":      "platforms: {android: {appId: x, typo: true}}\n",
-		"unknown-platform":   "platforms: {web: {appId: x}}\n",
-		"missing-app":        "platforms: {ios: {integration: lite}}\n",
-		"invalid-mode":       "platforms: {android: {appId: x, integration: surprise}}\n",
-		"reserved":           "env: {WIREMOCK_PORT: 1234}\nplatforms: {android: {appId: x}}\n",
-		"nested-variable":    "env: {USER: [one, two]}\nplatforms: {android: {appId: x}}\n",
-		"multiple-documents": "platforms: {android: {appId: x}}\n---\nplatforms: {ios: {appId: x}}\n",
+		"missing-platforms":   "env: {USER: user}\n",
+		"unknown-platform":    "platforms: {web: {appId: x}}\n",
+		"missing-app":         "platforms: {ios: {integration: lite}}\n",
+		"invalid-mode":        "platforms: {android: {appId: x, integration: surprise}}\n",
+		"reserved":            "env: {WIREMOCK_PORT: 1234}\nplatforms: {android: {appId: x}}\n",
+		"nested-variable":     "env: {USER: [one, two]}\nplatforms: {android: {appId: x}}\n",
+		"multiple-documents":  "platforms: {android: {appId: x}}\n---\nplatforms: {ios: {appId: x}}\n",
+		"invalid-cli-version": "cliVersion: latest\nplatforms: {android: {appId: x}}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -102,7 +102,15 @@ func TestConfigRejectsInvalidSettings(t *testing.T) {
 			}
 		})
 	}
-	for _, text := range []string{"platforms: {ios: {project: ../ios}}", "platforms: {android: {appId: other}}", "cases: {login: anything}"} {
+	for _, text := range []string{
+		"platforms: {ios: {project: ../ios}}",
+		"platforms: {android: {appId: other}}",
+		"platforms: {android: {integration: full}}",
+		"platforms: {web: {appId: x}}",
+		"platforms: {ios: {appId: '${APP_ID}'}}",
+		"platforms: {ios: {appId: x, integration: surprise}}",
+		"platforms: {ios: {appId: x, wiremockVersion: arbitrary}}",
+	} {
 		root := t.TempDir()
 		writeConfig(t, root, "mockstro.yaml", "platforms: {android: {appId: x}}\n")
 		writeConfig(t, root, "mockstro.local.yaml", text)
@@ -114,6 +122,98 @@ func TestConfigRejectsInvalidSettings(t *testing.T) {
 	writeConfig(t, root, "project.env", "APP_PACKAGE=old\n")
 	if _, err := Load(root); err == nil {
 		t.Fatal("read legacy project.env")
+	}
+}
+
+func TestConfigWarnsOnUnknownKeys(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, "mockstro.yaml", "platforms: {android: {appId: x, typo: true}}\n")
+	writeConfig(t, root, "mockstro.local.yaml", "cases: {login: anything}\nplatforms: {ios: {appId: y, build: {typo: true}}}\n")
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Warnings) != 3 {
+		t.Fatalf("warnings = %q", p.Warnings)
+	}
+	if p.Targets["android"].AppID != "x" || p.Targets["ios"].AppID != "y" {
+		t.Fatalf("unknown keys broke decoding: %+v", p.Targets)
+	}
+}
+
+func TestLocalConfigResolvesAliasesAcrossPlatforms(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, "mockstro.yaml", "platforms: {android: {appId: x}, ios: {appId: y}}\n")
+	writeConfig(t, root, "mockstro.local.yaml", "platforms:\n  android: &shared\n    devices: [Pixel]\n  ios: *shared\n")
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Targets["ios"].Devices; len(got) != 1 || got[0] != "Pixel" {
+		t.Fatalf("ios devices = %q", got)
+	}
+}
+
+func TestLocalConfigAddsOptionalPlatform(t *testing.T) {
+	for _, added := range []string{"ios", "android"} {
+		t.Run(added, func(t *testing.T) {
+			shared := "android"
+			if added == shared {
+				shared = "ios"
+			}
+			root := t.TempDir()
+			writeConfig(t, root, "mockstro.yaml", "env: {USER: shared}\nplatforms:\n  "+shared+":\n    appId: example.shared\n")
+			local := `env: {USER: local, KEEP: root}
+platforms:
+  ` + shared + `:
+    devices: [Shared_device_override]
+  ` + added + `:
+    appId: example.local
+    project: ../other-app
+    integration: full
+    devices: [Local_device]
+    proxyBaseUrl: https://api.example.test
+    fallbackUrl: https://fallback.example.test
+    fbrcUrl: https://config.example.test
+    overrideKey: local_override
+    acceptKey: local_accept
+    wiremockVersion: 4.0.0-beta.40
+    websocketPath: /ws
+    build:
+      project: App.xcodeproj
+      scheme: App
+      task: assembleLocal
+      artifact: local/build/*
+    env:
+      USER: platform-local
+`
+			writeConfig(t, root, "mockstro.local.yaml", local)
+			p, err := Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			targets, err := p.Selected("")
+			if err != nil || len(targets) != 2 {
+				t.Fatal("local platform did not join default runs", targets, err)
+			}
+			a := p.Targets[added]
+			if a.AppID != "example.local" || a.Lite() || a.SourceRoot() != filepath.Clean(filepath.Join(root, "../other-app")) || a.FlowsRoot() != p.FlowsRoot() || len(a.Devices) != 1 || a.Devices[0] != "Local_device" {
+				t.Fatal("local platform configuration lost", a)
+			}
+			if a.IOSProject != "App.xcodeproj" || a.IOSScheme != "App" || a.GradleTask != "assembleLocal" || a.APKGlob != "local/build/*" || a.ProxyBaseURL != "https://api.example.test" || a.FallbackURL != "https://fallback.example.test" || a.FBRCURL != "https://config.example.test" || a.OverrideKey != "local_override" || a.AcceptKey != "local_accept" || a.WireMockVersion != "4.0.0-beta.40" || a.WebSocketPath != "/ws" {
+				t.Fatal("full local platform settings were not loaded", a)
+			}
+			if a.Variables["USER"] != "shared" || a.LocalVariables["USER"] != "platform-local" || a.LocalVariables["KEEP"] != "root" || p.Targets[shared].LocalVariables["USER"] != "local" || p.Targets[shared].Devices[0] != "Shared_device_override" {
+				t.Fatal("local variable or existing platform overrides changed", p.Targets)
+			}
+			if err := os.Remove(filepath.Join(root, ".maestro/mockstro.local.yaml")); err != nil {
+				t.Fatal(err)
+			}
+			p, err = Load(root)
+			if err != nil || len(p.Targets) != 1 || p.Targets[added] != nil || p.Targets[shared].AppID != "example.shared" {
+				t.Fatal("local platform was not optional", p, err)
+			}
+		})
 	}
 }
 

@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,11 +19,22 @@ import (
 type StatusDevice struct {
 	Platform string `json:"platform"`
 	platform.Device
-	LockedBy   *string `json:"lockedBy"`
-	Designated bool    `json:"designated"`
-	Eligible   bool    `json:"eligible"`
-	Proxy      string  `json:"proxy,omitempty"`    // device-wide HTTP proxy, "" when none
-	Keyboard   string  `json:"keyboard,omitempty"` // shown | hidden
+	LockedBy         *string `json:"lockedBy"`
+	Designated       bool    `json:"designated"`
+	GlobalDesignated bool    `json:"globalDesignated"`
+	Eligible         bool    `json:"eligible"`
+	Proxy            string  `json:"proxy,omitempty"`    // device-wide HTTP proxy, "" when none
+	Keyboard         string  `json:"keyboard,omitempty"` // shown | hidden
+}
+
+// StatusEmulator is an installed, stopped emulator/simulator. Running ones are in Devices.
+type StatusEmulator struct {
+	Platform         string `json:"platform"`
+	Name             string `json:"name"`
+	Serial           string `json:"serial,omitempty"`
+	OSVersion        string `json:"osVersion,omitempty"`
+	Designated       bool   `json:"designated"`
+	GlobalDesignated bool   `json:"globalDesignated"`
 }
 
 type Available struct {
@@ -32,16 +45,17 @@ type Available struct {
 
 // Status is the `status --json` payload.
 type Status struct {
-	SchemaVersion int            `json:"schemaVersion"`
-	GeneratedAt   string         `json:"generatedAt"`
-	RepoRoot      string         `json:"repoRoot"`
-	Platform      string         `json:"platform"`
-	Owner         string         `json:"owner"`
-	ActiveCount   int            `json:"activeCount"`
-	Runs          []registry.Run `json:"runs"`
-	Devices       []StatusDevice `json:"devices"`
-	Available     Available      `json:"available"`
-	Bootable      []string       `json:"bootable"`
+	SchemaVersion int              `json:"schemaVersion"`
+	GeneratedAt   string           `json:"generatedAt"`
+	RepoRoot      string           `json:"repoRoot"`
+	Platform      string           `json:"platform"`
+	Owner         string           `json:"owner"`
+	ActiveCount   int              `json:"activeCount"`
+	Runs          []registry.Run   `json:"runs"`
+	Devices       []StatusDevice   `json:"devices"`
+	Available     Available        `json:"available"`
+	Bootable      []string         `json:"bootable"`
+	Emulators     []StatusEmulator `json:"emulators"`
 }
 
 func (e *Engine) Status(ctx context.Context) *Status {
@@ -53,6 +67,7 @@ func (e *Engine) Status(ctx context.Context) *Status {
 		SchemaVersion: 1, GeneratedAt: time.Now().UTC().Format(time.RFC3339), RepoRoot: e.P.Root,
 		Platform: e.Opts.Platform, Owner: e.Owner, ActiveCount: len(runs), Runs: runs,
 		Devices: []StatusDevice{}, Available: Available{Emulator: []string{}, Physical: []string{}, Eligible: []string{}},
+		Emulators: []StatusEmulator{}, Bootable: []string{},
 	}
 	busy := map[string]string{}
 	for _, r := range runs {
@@ -64,14 +79,38 @@ func (e *Engine) Status(ctx context.Context) *Status {
 	if e.Opts.Platform == "ios" {
 		tool = "xcrun"
 	}
+	var installed []platform.Device
+	if android, ok := e.Plat.(*platform.Android); ok {
+		names := android.InstalledAVDs(ctx)
+		slices.Sort(names)
+		for _, name := range slices.Compact(names) {
+			installed = append(installed, platform.Device{Name: name, OSVersion: android.AVDVersion(name)})
+		}
+	}
+	running := map[string]bool{}
+	global := platform.GlobalDesignated()
+	designated := e.Plat.Designated()
 	if _, err := e.Exec.LookPath(tool); err == nil {
 		devs, _ := e.Plat.Devices(ctx)
 		for _, d := range devs {
+			if e.Opts.Platform == "ios" {
+				installed = append(installed, d)
+			}
 			if e.Opts.Platform == "ios" && d.State != "Booted" {
 				continue
 			}
 			d.Name = e.Plat.DeviceName(ctx, d.Serial)
-			sd := StatusDevice{Platform: e.Opts.Platform, Device: d, Designated: e.isDesignated(ctx, d.Serial), Proxy: e.Plat.DeviceProxy(ctx, d.Serial), Keyboard: e.Plat.Keyboard(ctx, d.Serial)}
+			if android, ok := e.Plat.(*platform.Android); ok {
+				d.OSVersion = android.DeviceVersion(ctx, d.Serial)
+			}
+			if d.Class == "emulator" {
+				if e.Opts.Platform == "ios" {
+					running[d.Serial] = true
+				} else {
+					running[d.Name] = true
+				}
+			}
+			sd := StatusDevice{Platform: e.Opts.Platform, Device: d, Designated: slices.Contains(designated, d.Name), GlobalDesignated: slices.Contains(global, d.Name), Proxy: e.Plat.DeviceProxy(ctx, d.Serial), Keyboard: e.Plat.Keyboard(ctx, d.Serial)}
 			if id, ok := busy[d.Serial]; ok {
 				sd.LockedBy = &id
 			} else if e.DeviceLocked(d.Serial) {
@@ -91,11 +130,25 @@ func (e *Engine) Status(ctx context.Context) *Status {
 			}
 			st.Devices = append(st.Devices, sd)
 		}
-		st.Bootable = e.BootCandidates(ctx)
 	}
-	if st.Bootable == nil {
-		st.Bootable = []string{}
+	slices.SortFunc(installed, func(a, b platform.Device) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.OSVersion, b.OSVersion), cmp.Compare(a.Serial, b.Serial))
+	})
+	for _, device := range installed {
+		name, id := device.Name, device.Name
+		if e.Opts.Platform == "ios" {
+			id = device.Serial
+		}
+		if name == "" || running[id] {
+			continue
+		}
+		allowed := slices.Contains(designated, name)
+		st.Emulators = append(st.Emulators, StatusEmulator{Platform: e.Opts.Platform, Name: name, Serial: device.Serial, OSVersion: device.OSVersion, Designated: allowed, GlobalDesignated: slices.Contains(global, name)})
+		if allowed || e.Owner == "human" {
+			st.Bootable = append(st.Bootable, name)
+		}
 	}
+	st.Bootable = slices.Compact(st.Bootable)
 	return st
 }
 
@@ -120,10 +173,12 @@ func SuiteStatus(ctx context.Context, p *project.Project, o Options, ex execx.Ru
 			copy := *st
 			copy.Devices = nil
 			copy.Bootable = nil
+			copy.Emulators = []StatusEmulator{}
 			copy.Available = Available{Emulator: []string{}, Physical: []string{}, Eligible: []string{}}
 			out = &copy
 		}
 		out.Devices = append(out.Devices, st.Devices...)
+		out.Emulators = append(out.Emulators, st.Emulators...)
 		out.Available.Emulator = append(out.Available.Emulator, st.Available.Emulator...)
 		out.Available.Physical = append(out.Available.Physical, st.Available.Physical...)
 		out.Available.Eligible = append(out.Available.Eligible, st.Available.Eligible...)

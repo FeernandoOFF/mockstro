@@ -112,9 +112,10 @@ func (r *runModel) start(o engine.Options, total int) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
 	done := r.done
+	p := a.p
 	go func() {
 		defer close(done)
-		s := engine.RunSuite(ctx, a.p, o, execx.Real{}, func(ev engine.Event) { a.prog.Send(evMsg(ev)) })
+		s := engine.RunSuite(ctx, p, o, execx.Real{}, func(ev engine.Event) { a.prog.Send(evMsg(ev)) })
 		a.prog.Send(runDoneMsg{s})
 	}()
 	a.log("info", "run started: %s", commandLine(o))

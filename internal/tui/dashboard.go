@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/paths"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 // dashModel: devices, bootable AVDs/simulators, active runs across every project, activity.
@@ -22,6 +25,14 @@ type dashModel struct {
 	confirmProxy string // serial awaiting confirmation
 	confirmStop  string
 	clearing     string
+	savingAgents bool
+}
+
+type agentAccessMsg struct {
+	p                    *project.Project
+	path, name, platform string
+	allow                bool
+	err                  error
 }
 
 type keyboardSetMsg struct {
@@ -77,16 +88,16 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 	if d.confirmSweep {
 		d.confirmSweep = false
 		if confirmed(k) {
+			query := a.query
 			return func() tea.Msg {
-				return sweepDoneMsg(a.query.Sweep(context.Background(), false))
+				return sweepDoneMsg(query.Sweep(context.Background(), false))
 			}
 		}
 		return nil
 	}
-	var boot []string
+	boot := d.bootables()
 	nDev := 0
 	if a.status != nil {
-		boot = a.status.Bootable
 		nDev = len(a.status.Devices)
 	}
 	if c, ok := navKey(k.String(), d.cursor, nDev+len(boot)); ok {
@@ -94,6 +105,37 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	switch k.String() {
+	case "a":
+		if a.query.Owner != "human" || d.savingAgents {
+			return nil
+		}
+		var selected engine.StatusEmulator
+		if d.cursor < nDev {
+			device := a.status.Devices[d.cursor]
+			if device.Class != "emulator" {
+				return nil
+			}
+			selected = engine.StatusEmulator{Platform: device.Platform, Name: device.Name, Designated: device.Designated, GlobalDesignated: device.GlobalDesignated}
+		} else if i := d.cursor - nDev; i >= 0 && i < len(boot) {
+			selected = boot[i]
+		}
+		if selected.Name == "" {
+			a.log("warn", "emulator name is unavailable; refresh devices first")
+			return nil
+		}
+		if selected.GlobalDesignated {
+			a.log("warn", "%s is designated globally; edit %s to remove its agent access", selected.Name, paths.DesignatedFile())
+			return nil
+		}
+		if selected.Platform == "" {
+			selected.Platform = a.query.Opts.Platform
+		}
+		root, allow := a.p.Root, !selected.Designated
+		d.savingAgents = true
+		return func() tea.Msg {
+			p, path, err := project.SetAgentDevice(root, selected.Platform, selected.Name, allow)
+			return agentAccessMsg{p: p, path: path, name: selected.Name, platform: selected.Platform, allow: allow, err: err}
+		}
 	case "p":
 		if d.cursor < nDev {
 			dv := a.status.Devices[d.cursor]
@@ -144,16 +186,21 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 		if d.booting != "" || i < 0 || i >= len(boot) {
 			return nil
 		}
-		name := boot[i]
+		item := boot[i]
+		name := item.Name
+		bootID := emulatorID(item)
 		query := a.query
-		if platform, rest, ok := strings.Cut(name, "/"); ok && (platform == "android" || platform == "ios") {
+		if item.Platform != "" {
 			o := a.opts
-			o.Platform = platform
+			o.Platform = item.Platform
 			query = engine.New(a.p, o, a.query.Exec, nil)
-			name = rest
+		}
+		if query.Owner != "human" && !item.Designated {
+			a.log("warn", "%s is not available to agents", name)
+			return nil
 		}
 		headless := k.String() == "B"
-		d.booting = name
+		d.booting = bootID
 		mode := ""
 		if headless {
 			mode = " headless"
@@ -162,7 +209,7 @@ func (d *dashModel) key(k tea.KeyMsg) tea.Cmd {
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 			defer cancel()
-			serial, err := query.Plat.Boot(ctx, name, headless, func(s string) { a.prog.Send(activityMsg{"info", s}) })
+			serial, err := query.Plat.Boot(ctx, bootID, headless, func(s string) { a.prog.Send(activityMsg{"info", s}) })
 			return bootDoneMsg{name, serial, err}
 		}
 	case "S":
@@ -180,6 +227,7 @@ func (d *dashModel) view(w, h int) (string, string) {
 	botH := h - topH
 
 	var dev strings.Builder
+	selectedLine := 0
 	if st == nil {
 		dev.WriteString(sMuted.Render("probing devices…"))
 	} else {
@@ -189,6 +237,7 @@ func (d *dashModel) view(w, h int) (string, string) {
 		for i, x := range st.Devices {
 			cur := "  "
 			if i == d.cursor {
+				selectedLine = strings.Count(dev.String(), "\n")
 				cur = sSel.Render("› ")
 			}
 			state := sOK.Render("free")
@@ -198,14 +247,16 @@ func (d *dashModel) view(w, h int) (string, string) {
 				state = sMuted.Render("not eligible")
 			}
 			des := ""
-			if x.Designated {
-				des = sTitle.Render(" ★")
+			if x.Class == "emulator" {
+				des = agentLabel(x.Designated, x.GlobalDesignated)
 			}
-			fmt.Fprintf(&dev, "%s%s %s%s  %s\n", cur, pad(strings.TrimPrefix(x.Platform+"/"+x.Serial, "/"), 24), pad(x.Name, 22), des, state)
+			dev.WriteString(dashboardDeviceRow(cur, strings.TrimPrefix(x.Platform+"/"+x.Name, "/"), x.OSVersion, des, leftW-4) + "\n")
+			fmt.Fprintf(&dev, "    %s  %s", pad(x.Serial, 24), state)
 			switch x.Keyboard {
 			case "shown", "hidden":
-				dev.WriteString(sMuted.Render("    ⌨ keyboard "+x.Keyboard) + "\n")
+				dev.WriteString(sMuted.Render("  ⌨ keyboard " + x.Keyboard))
 			}
+			dev.WriteString("\n")
 			switch {
 			case x.Serial == d.clearing:
 				dev.WriteString(sWarn.Render("    applying…") + "\n")
@@ -213,20 +264,22 @@ func (d *dashModel) view(w, h int) (string, string) {
 				dev.WriteString(sBad.Render("    ⚠ proxy "+x.Proxy) + sMuted.Render("  (p to clear)") + "\n")
 			}
 		}
-		dev.WriteString("\n" + sBold.Render("Bootable") + sMuted.Render("  (b to boot, B headless)") + "\n")
-		if len(st.Bootable) == 0 {
-			dev.WriteString(sMuted.Render("none — set platforms.android.devices in .maestro/mockstro.yaml or list AVDs in "+paths.DesignatedFile()) + "\n")
+		dev.WriteString("\n" + sBold.Render("Stopped emulators / simulators") + "\n")
+		boot := d.bootables()
+		if len(boot) == 0 {
+			dev.WriteString(sMuted.Render("none installed or all are running") + "\n")
 		}
-		for i, n := range st.Bootable {
+		for i, item := range boot {
 			cur := "  "
 			if i+len(st.Devices) == d.cursor {
+				selectedLine = strings.Count(dev.String(), "\n")
 				cur = sSel.Render("› ")
 			}
-			line := cur + n
-			if n == d.booting {
-				line += sWarn.Render("  booting…")
+			name := strings.TrimPrefix(item.Platform+"/"+item.Name, "/")
+			if emulatorID(item) == d.booting {
+				name += sWarn.Render("  booting…")
 			}
-			dev.WriteString(line + "\n")
+			dev.WriteString(dashboardDeviceRow(cur, name, item.OSVersion, agentLabel(item.Designated, item.GlobalDesignated), leftW-4) + "\n")
 		}
 	}
 
@@ -282,7 +335,7 @@ func (d *dashModel) view(w, h int) (string, string) {
 	}
 
 	top := lipgloss.JoinHorizontal(lipgloss.Top,
-		panel("Devices", dev.String(), leftW, topH),
+		panel("Devices", dashboardWindow(dev.String(), selectedLine, topH-3), leftW, topH),
 		lipgloss.JoinVertical(lipgloss.Left,
 			panel("Project", info.String(), rightW, 7),
 			panel("Active runs (all projects)", runs.String(), rightW, topH-7)))
@@ -327,10 +380,13 @@ func (d *dashModel) selectionKeys() string {
 	}
 	if d.cursor < len(st.Devices) {
 		dv := st.Devices[d.cursor]
-		if dv.LockedBy != nil {
-			return ""
-		}
 		keys := ""
+		if dv.Class == "emulator" {
+			keys = d.agentKey(dv.Designated, dv.GlobalDesignated)
+		}
+		if dv.LockedBy != nil {
+			return keys
+		}
 		if dv.Proxy != "" {
 			keys += " · p clear device proxy"
 		}
@@ -342,8 +398,126 @@ func (d *dashModel) selectionKeys() string {
 		}
 		return keys
 	}
-	if d.cursor-len(st.Devices) < len(st.Bootable) {
-		return " · enter/b boot · B boot headless"
+	if i := d.cursor - len(st.Devices); i >= 0 && i < len(d.bootables()) {
+		item := d.bootables()[i]
+		keys := d.agentKey(item.Designated, item.GlobalDesignated)
+		if d.a.query.Owner == "human" || item.Designated {
+			keys += " · enter/b boot · B boot headless"
+		}
+		return keys
 	}
 	return ""
+}
+
+func (d *dashModel) bootables() []engine.StatusEmulator {
+	st := d.a.status
+	if st == nil {
+		return nil
+	}
+	if st.Emulators != nil {
+		return st.Emulators
+	}
+	var out []engine.StatusEmulator
+	for _, name := range st.Bootable {
+		platform := d.a.query.Opts.Platform
+		if prefix, rest, ok := strings.Cut(name, "/"); ok && (prefix == "android" || prefix == "ios") {
+			platform, name = prefix, rest
+		}
+		out = append(out, engine.StatusEmulator{Platform: platform, Name: name})
+	}
+	return out
+}
+
+// setStatus keeps the selected device while moving agent emulators to the top
+// of each section, including after an agent-access toggle.
+func (d *dashModel) setStatus(st *engine.Status) {
+	selected := d.selectionID()
+	d.a.status = st
+	if st == nil {
+		d.cursor = 0
+		return
+	}
+	rank := func(allowed bool) int {
+		if allowed {
+			return 0
+		}
+		return 1
+	}
+	slices.SortStableFunc(st.Devices, func(a, b engine.StatusDevice) int {
+		return cmp.Or(
+			cmp.Compare(rank(a.Class == "emulator" && (a.Designated || a.GlobalDesignated)), rank(b.Class == "emulator" && (b.Designated || b.GlobalDesignated))),
+			cmp.Compare(a.Platform, b.Platform), cmp.Compare(a.Name, b.Name), cmp.Compare(a.Serial, b.Serial))
+	})
+	slices.SortStableFunc(st.Emulators, func(a, b engine.StatusEmulator) int {
+		return cmp.Or(
+			cmp.Compare(rank(a.Designated || a.GlobalDesignated), rank(b.Designated || b.GlobalDesignated)),
+			cmp.Compare(a.Platform, b.Platform), cmp.Compare(a.Name, b.Name), cmp.Compare(a.OSVersion, b.OSVersion), cmp.Compare(a.Serial, b.Serial))
+	})
+	count := len(st.Devices) + len(d.bootables())
+	previous := min(d.cursor, max(0, count-1))
+	if selected != "" {
+		for d.cursor = 0; d.cursor < count; d.cursor++ {
+			if d.selectionID() == selected {
+				return
+			}
+		}
+	}
+	d.cursor = previous
+}
+
+func (d *dashModel) selectionID() string {
+	st := d.a.status
+	if st == nil || d.cursor < 0 {
+		return ""
+	}
+	if d.cursor < len(st.Devices) {
+		device := st.Devices[d.cursor]
+		return device.Platform + "/device/" + device.Serial
+	}
+	if i := d.cursor - len(st.Devices); i < len(d.bootables()) {
+		device := d.bootables()[i]
+		return device.Platform + "/emulator/" + emulatorID(device)
+	}
+	return ""
+}
+
+func emulatorID(device engine.StatusEmulator) string {
+	if device.Serial != "" {
+		return device.Serial
+	}
+	return device.Name
+}
+
+func dashboardDeviceRow(cursor, name, version, access string, width int) string {
+	right := sMuted.Render(version) + access
+	if right != "" {
+		right = "  " + right
+	}
+	return cursor + pad(name, max(0, width-lipgloss.Width(cursor)-lipgloss.Width(right))) + right
+}
+
+func (d *dashModel) agentKey(allowed, global bool) string {
+	if d.a.query.Owner != "human" || global || d.savingAgents {
+		return ""
+	}
+	if allowed {
+		return " · a disable agents"
+	}
+	return " · a allow agents"
+}
+
+func agentLabel(allowed, global bool) string {
+	if global {
+		return sOK.Render("  agents: yes (global)")
+	}
+	if allowed {
+		return sOK.Render("  agents: yes")
+	}
+	return sMuted.Render("  agents: no")
+}
+
+func dashboardWindow(body string, selected, height int) string {
+	lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
+	start, end := window(len(lines), selected, max(1, height))
+	return strings.Join(lines[start:end], "\n")
 }
