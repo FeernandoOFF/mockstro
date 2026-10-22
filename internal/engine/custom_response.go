@@ -27,6 +27,11 @@ type CustomResponse struct {
 	Headers map[string]string `json:"headers"`
 	Body    string            `json:"body"`
 	DelayMs int               `json:"delayMs"`
+	// Scenario and State make the response apply only while that WireMock scenario is in that
+	// state, and the state machine keep running: editing the answer before a payment leaves the
+	// answer after it to change as before. Both empty means every state.
+	Scenario string `json:"scenario,omitempty"`
+	State    string `json:"state,omitempty"`
 }
 
 // Validate reports the first problem in terms a tester can act on.
@@ -39,6 +44,12 @@ func (c *CustomResponse) Validate() error {
 	}
 	if c.Status < 100 || c.Status > 599 {
 		return fmt.Errorf("status must be between 100 and 599")
+	}
+	if (c.Scenario == "") != (c.State == "") {
+		return fmt.Errorf("a scenario and its state go together")
+	}
+	if len(c.Scenario) > 200 || len(c.State) > 200 || strings.ContainsAny(c.Scenario+c.State, "\r\n\t") {
+		return fmt.Errorf("scenario and state must be short single-line names")
 	}
 	if c.DelayMs < 0 || c.DelayMs > maxCustomDelayMs {
 		return fmt.Errorf("delay must be between 0 and %d ms", maxCustomDelayMs)
@@ -57,7 +68,12 @@ func (c *CustomResponse) Validate() error {
 	return nil
 }
 
-func (c *CustomResponse) key() string { return c.Method + " " + c.Path }
+func (c *CustomResponse) key() string {
+	if c.Scenario != "" {
+		return c.Method + " " + c.Path + " [" + c.Scenario + ": " + c.State + "]"
+	}
+	return c.Method + " " + c.Path
+}
 
 func (c *CustomResponse) mapping() map[string]any {
 	headers := map[string]any{}
@@ -68,12 +84,16 @@ func (c *CustomResponse) mapping() map[string]any {
 	if c.DelayMs > 0 {
 		response["fixedDelayMilliseconds"] = c.DelayMs
 	}
-	return map[string]any{
+	m := map[string]any{
 		"name":     "custom/" + c.key(),
 		"priority": 1,
 		"request":  map[string]any{"method": c.Method, "urlPath": c.Path},
 		"response": response,
 	}
+	if c.Scenario != "" {
+		m["scenarioName"], m["requiredScenarioState"] = c.Scenario, c.State
+	}
+	return m
 }
 
 // SetCustomResponse serves c for its method and path, replacing an earlier custom response for

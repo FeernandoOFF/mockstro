@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"math"
@@ -11,11 +12,13 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/ojson"
 	"github.com/feernandooff/mockstro/internal/project"
 )
 
@@ -450,29 +453,44 @@ func stubLabel(stub string) string {
 	return strings.ToUpper(words[:1]) + words[1:]
 }
 
-// StubInfo says which call a stub answers.
+// Where a stub in a preview comes from, highest priority first.
+const (
+	GroupTest     = "test"     // added by the flow or scenario itself
+	GroupCustomer = "customer" // the customer profile
+	GroupShared   = "shared"   // defaults every target gets
+)
+
+// StubInfo says which call a stub answers and what it answers with, in brief.
 type StubInfo struct {
-	Name   string `json:"name"`
-	Method string `json:"method,omitempty"`
-	Path   string `json:"path,omitempty"`
+	Name     string `json:"name"`
+	Group    string `json:"group"`
+	Method   string `json:"method,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Status   int    `json:"status,omitempty"`
+	Editable bool   `json:"editable"`           // one exact path, so a custom response can take its place
+	Checked  bool   `json:"checked,omitempty"`  // the flow's apiVerifications count this stub
+	Replaced bool   `json:"replaced,omitempty"` // a higher-priority stub answers the same method and path
+	Scenario string `json:"scenario,omitempty"` // its answer changes as the app calls other stubs in the same scenario
+	State    string `json:"state,omitempty"`    // the scenario state it answers in ("Started" is the beginning)
+	Next     string `json:"next,omitempty"`     // the state calling it moves the scenario to
+	After    string `json:"after,omitempty"`    // for a later state: the call that gets the scenario there, e.g. "POST /api/topup"
 }
 
 // Preview is what a mock would do, read from its files without starting it.
 type Preview struct {
-	Kind         string            `json:"kind"`
-	Ref          string            `json:"ref"`
-	Title        string            `json:"title"`
-	Description  string            `json:"description"`
-	Profile      string            `json:"profile,omitempty"`
-	Customer     string            `json:"customer"`
-	FBRC         map[string]string `json:"fbrc"`
-	Stubs        []StubInfo        `json:"stubs"`        // what this target adds on top of its customer
-	DefaultStubs int               `json:"defaultStubs"` // what the customer profile and shared defaults already answer
-	Steps        []Step            `json:"steps,omitempty"`
-	Checks       []LiveCheck       `json:"checks,omitempty"`
+	Kind        string            `json:"kind"`
+	Ref         string            `json:"ref"`
+	Title       string            `json:"title"`
+	Description string            `json:"description"`
+	Profile     string            `json:"profile,omitempty"`
+	Customer    string            `json:"customer"`
+	FBRC        map[string]string `json:"fbrc"`
+	Stubs       []StubInfo        `json:"stubs"` // everything it will answer, highest priority first
+	Steps       []Step            `json:"steps,omitempty"`
+	Checks      []LiveCheck       `json:"checks,omitempty"`
 }
 
-// PreviewOf reads one catalog item's steps, checks, extra stubs and Remote Config.
+// PreviewOf reads one catalog item's steps, checks, stubs and Remote Config.
 func PreviewOf(p *project.Project, it CatalogItem) (Preview, error) {
 	s := fixtures.New(p)
 	pv := Preview{Kind: it.Kind, Ref: it.Ref, Title: it.Title, Description: it.Description, Profile: it.Profile,
@@ -480,44 +498,74 @@ func PreviewOf(p *project.Project, it CatalogItem) (Preview, error) {
 	if pv.FBRC == nil {
 		pv.FBRC = map[string]string{}
 	}
-	var stubs []string
-	var header *fixtures.Header
+	var tests, customer []string
 	switch it.Kind {
 	case "flow":
 		f, err := s.Flow(it.Ref)
 		if err != nil {
 			return pv, err
 		}
-		header, pv.Steps = f.Header, FlowSteps(f.Path)
+		tests, pv.Steps, pv.Checks = f.Header.Overrides, FlowSteps(f.Path), ChecksFor(f.Header.Verifications)
 	case "scenario":
 		sc, err := s.FindScenario(it.Ref)
 		if err != nil {
 			return pv, err
 		}
 		if sc != nil {
-			header = sc.Header
+			tests, pv.Checks = sc.Header.Overrides, ChecksFor(sc.Header.Verifications)
 		}
 	case "profile":
-		names, err := s.ProfileMappings(it.Ref)
+		customer = []string{}
+	}
+	profile := it.Profile
+	if it.Kind == "profile" {
+		profile = it.Ref
+	}
+	if profile != "" {
+		names, err := s.ProfileMappings(profile)
 		if err != nil {
 			return pv, err
 		}
-		stubs = names
+		customer = names
 	}
-	if header != nil {
-		stubs = header.Overrides
-		pv.Checks = ChecksFor(header.Verifications)
+	shared, _ := s.ProfileMappings("shared")
+
+	checked := map[string]bool{}
+	for _, c := range pv.Checks {
+		checked[c.Stub] = true
 	}
-	for _, name := range stubs {
-		pv.Stubs = append(pv.Stubs, stubInfo(s, name))
-	}
-	if it.Kind != "profile" && it.Profile != "" {
-		if names, err := s.ProfileMappings(it.Profile); err == nil {
-			pv.DefaultStubs = len(names)
+	answered := map[string]bool{} // method and path already taken by a higher-priority group
+	for _, group := range []struct {
+		name  string
+		stubs []string
+	}{{GroupTest, tests}, {GroupCustomer, customer}, {GroupShared, shared}} {
+		taken := map[string]bool{}
+		for _, name := range group.stubs {
+			info := stubInfo(s, name)
+			info.Group, info.Checked = group.name, checked[name]
+			if key := info.Method + " " + info.Path; info.Editable && answered[key] {
+				info.Replaced = true
+			}
+			taken[info.Method+" "+info.Path] = info.Editable
+			pv.Stubs = append(pv.Stubs, info)
+		}
+		for key, exact := range taken {
+			if exact {
+				answered[key] = true
+			}
 		}
 	}
-	if shared, err := s.ProfileMappings("shared"); err == nil && it.Kind != "profile" {
-		pv.DefaultStubs += len(shared)
+	// Name what gets a scenario into each later state, so "paid" reads as "after POST /api/topup".
+	setters := map[string]string{}
+	for _, st := range pv.Stubs {
+		if st.Scenario != "" && st.Next != "" {
+			setters[st.Scenario+"\x00"+st.Next] = st.Method + " " + st.Path
+		}
+	}
+	for i, st := range pv.Stubs {
+		if st.Scenario != "" && st.State != "" && st.State != "Started" {
+			pv.Stubs[i].After = setters[st.Scenario+"\x00"+st.State]
+		}
 	}
 	return pv, nil
 }
@@ -528,14 +576,114 @@ func stubInfo(s *fixtures.Store, name string) StubInfo {
 	if err != nil {
 		return info
 	}
+	info.Scenario, info.State, info.Next = stub.String("scenarioName"), stub.String("requiredScenarioState"), stub.String("newScenarioState")
 	if req := stub.Object("request"); req != nil {
 		info.Method = req.String("method")
 		for _, k := range []string{"urlPath", "urlPathPattern", "url", "urlPattern"} {
 			if v := req.String(k); v != "" {
 				info.Path = v
+				info.Editable = (k == "urlPath" || k == "url") && info.Method != "" && info.Method != "ANY" && !strings.ContainsAny(v, "?#")
 				break
 			}
 		}
 	}
+	if resp := stub.Object("response"); resp != nil {
+		if v, ok := resp.Get("status"); ok {
+			info.Status = numberOf(v)
+		}
+	}
 	return info
+}
+
+func numberOf(v any) int {
+	switch n := v.(type) {
+	case json.Number:
+		i, _ := strconv.Atoi(n.String())
+		return i
+	case float64:
+		return int(n)
+	case int:
+		return n
+	}
+	return 0
+}
+
+// StubDetail is one stub's response in full, as the app would get it.
+type StubDetail struct {
+	Name      string            `json:"name"`
+	Method    string            `json:"method"`
+	Path      string            `json:"path"`
+	Status    int               `json:"status"`
+	Headers   map[string]string `json:"headers"`
+	Body      string            `json:"body"`
+	DelayMs   int               `json:"delayMs,omitempty"`
+	Scenario  string            `json:"scenario,omitempty"`  // see StubInfo.Scenario
+	State     string            `json:"state,omitempty"`     // see StubInfo.State
+	Next      string            `json:"next,omitempty"`      // see StubInfo.Next
+	Template  bool              `json:"template,omitempty"`  // the body uses {{templates}} that WireMock fills in per request
+	Truncated bool              `json:"truncated,omitempty"` // the body is longer than what is shown
+	Editable  bool              `json:"editable"`
+}
+
+const maxStubBodyShown = 256 << 10
+
+// StubDetailOf resolves a stub (including what it extends) and reads its body: inline text, JSON,
+// or a file under __files.
+func StubDetailOf(p *project.Project, name string) (StubDetail, error) {
+	s := fixtures.New(p)
+	// A stub name is a path under the stubs folder; one that climbs out of it is not a stub.
+	if !filepath.IsLocal(filepath.FromSlash(name)) || !s.StubExists(name) {
+		return StubDetail{}, fmt.Errorf("unknown stub %q", name)
+	}
+	stub, err := s.ResolvedStub(name)
+	if err != nil {
+		return StubDetail{}, err
+	}
+	info := stubInfo(s, name)
+	d := StubDetail{Name: name, Method: info.Method, Path: info.Path, Status: info.Status, Headers: map[string]string{}, Editable: info.Editable, Scenario: info.Scenario, State: info.State, Next: info.Next}
+	resp := stub.Object("response")
+	if resp == nil {
+		return d, nil
+	}
+	if h := resp.Object("headers"); h != nil {
+		for _, k := range h.Keys() {
+			d.Headers[k] = h.String(k)
+		}
+	}
+	if v, ok := resp.Get("fixedDelayMilliseconds"); ok {
+		d.DelayMs = numberOf(v)
+	}
+	if t, ok := resp.Get("transformers"); ok {
+		if raw, err := ojson.Marshal(t); err == nil && bytes.Contains(raw, []byte("response-template")) {
+			d.Template = true
+		}
+	}
+	switch {
+	case resp.Has("jsonBody"):
+		v, _ := resp.Get("jsonBody")
+		raw, err := ojson.Marshal(v)
+		if err != nil {
+			return d, err
+		}
+		var pretty bytes.Buffer
+		if json.Indent(&pretty, raw, "", "  ") == nil {
+			d.Body = pretty.String()
+		} else {
+			d.Body = string(raw)
+		}
+	case resp.Has("body"):
+		d.Body = resp.String("body")
+	case resp.Has("bodyFileName"):
+		file := filepath.Join(p.BodiesRoot(), filepath.FromSlash(resp.String("bodyFileName")))
+		if rel, err := filepath.Rel(p.BodiesRoot(), file); err != nil || strings.HasPrefix(rel, "..") {
+			return d, fmt.Errorf("body file %q is outside the project's __files", resp.String("bodyFileName"))
+		}
+		if b, err := os.ReadFile(file); err == nil {
+			d.Body = string(b)
+		}
+	}
+	if len(d.Body) > maxStubBodyShown {
+		d.Body, d.Truncated = d.Body[:maxStubBodyShown], true
+	}
+	return d, nil
 }

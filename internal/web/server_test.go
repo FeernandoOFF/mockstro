@@ -402,7 +402,7 @@ properties:
 	if got := render(pv.Steps, ""); got != "do: Tap “Pay now” -- Open the app first.\nsee: You should see “Thanks”\n" {
 		t.Errorf("steps:\n%s", got)
 	}
-	if len(pv.Stubs) != 1 || pv.Stubs[0] != (StubInfo{Name: "ping", Method: "GET", Path: "/ping"}) {
+	if want := (StubInfo{Name: "ping", Group: GroupTest, Method: "GET", Path: "/ping", Status: 200, Editable: true, Checked: true}); len(pv.Stubs) != 1 || pv.Stubs[0] != want {
 		t.Errorf("stubs: %+v", pv.Stubs)
 	}
 	if len(pv.Checks) != 1 || pv.Checks[0].Expect != "exactly 1" {
@@ -433,5 +433,128 @@ func TestServeChecksTheRemoteConfigDraftBeforeStarting(t *testing.T) {
 	}
 	if st := mgr(s).State(); st.State != StateIdle {
 		t.Errorf("a refused draft must not start the mock: %v", st.State)
+	}
+}
+
+func TestPreviewListsEveryStubByPriorityAndMarksReplacedOnes(t *testing.T) {
+	s, p := testServer(t)
+	m := p.MaestroRoot
+	write(t, m, "wiremock/stubs/shared-health.json", `{"name":"shared-health","request":{"method":"GET","urlPath":"/health"},"response":{"status":200,"jsonBody":{"ok":true}}}`)
+	write(t, m, "wiremock/stubs/customer-who.json", `{"name":"customer-who","request":{"method":"GET","urlPath":"/who"},"response":{"status":200}}`)
+	write(t, m, "wiremock/stubs/any-api.json", `{"name":"any-api","request":{"method":"ANY","urlPathPattern":"^/api/.*$"},"response":{"status":404}}`)
+	write(t, m, "wiremock/stubs/down.json", `{"name":"down","request":{"method":"GET","urlPath":"/health"},"response":{"status":503}}`)
+	write(t, m, "wiremock/profiles/shared.json", `{"mappings": ["shared-health", "any-api"]}`)
+	write(t, m, "wiremock/profiles/gas-only.json", `{"mappings": ["customer-who"]}`)
+	write(t, m, "flows/h/down.yaml", "appId: x\nproperties:\n  apiProfile: gas-only\n  apiOverrides:\n    - down\n---\n- tapOn: \"Go\"\n")
+
+	rec := do(s, "GET", "/api/preview?kind=flow&ref="+filepath.Join(m, "flows", "h", "down.yaml"), goodHost, nil, "")
+	var pv Preview
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &pv) != nil {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body)
+	}
+	var got []string
+	for _, st := range pv.Stubs {
+		line := st.Group + ": " + st.Name
+		if st.Replaced {
+			line += " (replaced)"
+		}
+		if !st.Editable {
+			line += " (not editable)"
+		}
+		got = append(got, line)
+	}
+	want := []string{"test: down", "customer: customer-who", "shared: shared-health (replaced)", "shared: any-api (not editable)"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("stubs:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestStubDetailShowsTheResponseTheAppWouldGet(t *testing.T) {
+	s, p := testServer(t)
+	m := p.MaestroRoot
+	write(t, m, "wiremock/stubs/stateful.json", `{"name":"stateful","scenarioName":"balance","requiredScenarioState":"Started","request":{"method":"GET","urlPath":"/bal"},"response":{"status":200}}`)
+	write(t, m, "wiremock/stubs/json-stub.json", `{"name":"json-stub","request":{"method":"GET","urlPath":"/j"},"response":{"status":201,"headers":{"Content-Type":"application/json"},"fixedDelayMilliseconds":250,"jsonBody":{"a":1,"b":[true]}}}`)
+	write(t, m, "wiremock/stubs/file-stub.json", `{"name":"file-stub","request":{"method":"GET","urlPath":"/f"},"response":{"status":200,"bodyFileName":"pages/hello.html","transformers":["response-template"]}}`)
+	write(t, m, "wiremock/__files/pages/hello.html", "<p>hello {{now}}</p>")
+	write(t, m, "wiremock/stubs/escape.json", `{"name":"escape","request":{"method":"GET","urlPath":"/e"},"response":{"status":200,"bodyFileName":"../../../outside.txt"}}`)
+
+	get := func(name string) (StubDetail, int) {
+		rec := do(s, "GET", "/api/stub?name="+name, goodHost, nil, "")
+		var d StubDetail
+		_ = json.Unmarshal(rec.Body.Bytes(), &d)
+		return d, rec.Code
+	}
+	d, code := get("json-stub")
+	if code != http.StatusOK || d.Status != 201 || d.DelayMs != 250 || d.Headers["Content-Type"] != "application/json" || !strings.Contains(d.Body, "\n  \"a\": 1") || !d.Editable {
+		t.Errorf("json stub: %d %+v", code, d)
+	}
+	if d, code = get("stateful"); code != http.StatusOK || d.Scenario != "balance" {
+		t.Errorf("a stateful stub must say which scenario it belongs to: %d %+v", code, d)
+	}
+	d, code = get("file-stub")
+	if code != http.StatusOK || d.Body != "<p>hello {{now}}</p>" || !d.Template {
+		t.Errorf("file stub: %d %+v", code, d)
+	}
+	if _, code = get("escape"); code == http.StatusOK {
+		t.Error("a body file outside __files must not be read")
+	}
+	if _, code = get("nope"); code != http.StatusNotFound {
+		t.Errorf("unknown stub: %d, want 404", code)
+	}
+	// A real JSON file next to the stubs folder, which a crafted name could otherwise reach.
+	write(t, m, "wiremock/outside.json", `{"request":{"method":"GET","urlPath":"/secret"},"response":{"status":200,"jsonBody":{"secret":true}}}`)
+	if d, code = get("..%2Foutside"); code != http.StatusNotFound || strings.Contains(d.Body, "secret") {
+		t.Errorf("a name that climbs out of the stubs folder: %d %+v, want 404", code, d)
+	}
+	if _, code = get("..%2F..%2Fetc%2Fpasswd"); code != http.StatusNotFound {
+		t.Errorf("a name that is not a stub: %d, want 404", code)
+	}
+}
+
+func TestServeChecksEditedResponsesBeforeStarting(t *testing.T) {
+	s, _ := testServer(t)
+	h := map[string]string{tokenHeader: s.token, "Content-Type": "application/json"}
+	for name, body := range map[string]string{
+		"bad method":               `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"BREW","path":"/a","status":200}]}`,
+		"bad path":                 `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"GET","path":"a","status":200}]}`,
+		"bad JSON":                 `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"GET","path":"/a","status":200,"body":"{","headers":{"Content-Type":"application/json"}}]}`,
+		"bad status":               `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"GET","path":"/a","status":99}]}`,
+		"scenario without a state": `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"GET","path":"/a","status":200,"scenario":"balance"}]}`,
+	} {
+		rec := do(s, "POST", "/api/serve", goodHost, h, body)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "response for") {
+			t.Errorf("%s: %d %s, want 400 naming the response", name, rec.Code, rec.Body)
+		}
+	}
+	if st := mgr(s).State(); st.State != StateIdle {
+		t.Errorf("a refused response must not start the mock: %v", st.State)
+	}
+}
+
+func TestPreviewTellsStatesOfOneCallApartAndNamesWhatMovesThem(t *testing.T) {
+	s, p := testServer(t)
+	m := p.MaestroRoot
+	write(t, m, "wiremock/stubs/bal-before.json", `{"name":"bal-before","scenarioName":"balance","requiredScenarioState":"Started","request":{"method":"GET","urlPath":"/bal"},"response":{"status":200,"jsonBody":{"overdue":50}}}`)
+	write(t, m, "wiremock/stubs/bal-after.json", `{"name":"bal-after","scenarioName":"balance","requiredScenarioState":"paid","request":{"method":"GET","urlPath":"/bal"},"response":{"status":200,"jsonBody":{"overdue":0}}}`)
+	write(t, m, "wiremock/stubs/pay.json", `{"name":"pay","scenarioName":"balance","newScenarioState":"paid","request":{"method":"POST","urlPath":"/pay"},"response":{"status":200}}`)
+	write(t, m, "flows/b/pay.yaml", "appId: x\nproperties:\n  apiProfile: gas-only\n  apiOverrides:\n    - bal-before\n    - bal-after\n    - pay\n---\n- tapOn: \"Go\"\n")
+
+	rec := do(s, "GET", "/api/preview?kind=flow&ref="+filepath.Join(m, "flows", "b", "pay.yaml"), goodHost, nil, "")
+	var pv Preview
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &pv) != nil {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body)
+	}
+	by := map[string]StubInfo{}
+	for _, st := range pv.Stubs {
+		by[st.Name] = st
+	}
+	if b := by["bal-before"]; b.Scenario != "balance" || b.State != "Started" || b.After != "" {
+		t.Errorf("the first state: %+v", b)
+	}
+	if a := by["bal-after"]; a.State != "paid" || a.After != "POST /pay" {
+		t.Errorf("the later state names what gets it there: %+v", a)
+	}
+	if pay := by["pay"]; pay.Next != "paid" {
+		t.Errorf("the call that moves the scenario on: %+v", pay)
 	}
 }

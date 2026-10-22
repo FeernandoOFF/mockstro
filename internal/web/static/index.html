@@ -200,7 +200,7 @@ pre.code { background: var(--bg-side); border: 1px solid var(--line); border-rad
   .shell { grid-template-columns: 56px minmax(0, 1fr); }
   .sidebar .label, .sidebar .count, .sidebar .glabel, .sidebar .tree, .sidebar .brand span, .sidebar .sidefoot .txt { display: none; }
   .nav a { justify-content: center; padding: 0; } .brand { justify-content: center; padding-left: 0; padding-right: 0; }
-  .head, .banner, .tabs, .row, .bar, .gh, .check, details.fold > summary, .logline, .note { padding-left: 16px; padding-right: 16px; } .banner { margin-left: 16px; margin-right: 16px; }
+  .head, .banner, .tabs, .row, .bar, .gh, .check, details.fold > summary, .logline, .note, .pv-detail, .pv-filter { padding-left: 16px; padding-right: 16px; } .banner { margin-left: 16px; margin-right: 16px; }
   .head .top { flex-direction: column; } .search { width: 100%; }
 }
 /* Test script: a served flow's steps and live checks in a side panel, so the requests stay in view */
@@ -228,6 +228,15 @@ pre.code { background: var(--bg-side); border: 1px solid var(--line); border-rad
 .panel .fbv { width: auto; flex: 1; min-width: 0; }
 .panel .fb-add { padding: 12px 0; flex-wrap: wrap; border-bottom: 0; } .panel .fb-add .input { flex-basis: 100%; max-width: none !important; }
 .panel .fb-bar { padding: 12px 0; flex-wrap: wrap; }
+/* preview: the responses a mock will serve */
+.pv-dim { opacity: .55; }
+.pv-detail { padding: 2px 28px 14px; }
+.pv-detail pre { margin: 6px 0 0; padding: 10px 12px; background: var(--bg-side); border: 1px solid var(--line); border-radius: 6px; max-height: 320px; overflow: auto; font: 12.5px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-meta { color: var(--muted); font-size: 12.5px; }
+.pv-route { border-left: 3px solid var(--line-strong); }
+.pv-state .row { padding-left: 24px; }
+.pv-filter { padding: 8px 28px; border-bottom: 1px solid var(--line); }
+.tg-pick { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
 .tg-more { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 12px; }
 .tg-more > summary { cursor: pointer; font-weight: 650; }
 .tg-more[open] > summary { margin-bottom: 12px; }
@@ -605,39 +614,141 @@ let previewTarget = null;
 function openPreview(it) { previewTarget = { kind: it.kind, ref: it.ref }; go('preview'); }
 const sameValues = (a, b) => { const ka = Object.keys(a); return ka.length === Object.keys(b).length && ka.every((k) => k in b && a[k] === b[k]); };
 
+// Which step of a scenario a stub answers in, in words a tester can follow.
+const stateWord = (st) => !st.state || st.state === 'Started' ? 'At the start' : 'After ' + (st.after || st.state);
+const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
+const flatValues = (v, prefix, out) => {
+  if (v && typeof v === 'object') for (const k of Object.keys(v)) flatValues(v[k], prefix ? prefix + (Array.isArray(v) ? '[' + k + ']' : '.' + k) : k, out);
+  else out[prefix || '(value)'] = JSON.stringify(v);
+  return out;
+};
+// What differs between two JSON bodies, as field: before → after. Null when either is not JSON.
+function bodyDiff(a, b) {
+  try {
+    const x = flatValues(JSON.parse(a), '', {}), y = flatValues(JSON.parse(b), '', {});
+    return [...new Set([...Object.keys(x), ...Object.keys(y)])].filter((k) => x[k] !== y[k]).map((k) => ({ key: k, from: x[k] === undefined ? '(absent)' : x[k], to: y[k] === undefined ? '(absent)' : y[k] }));
+  } catch { return null; }
+}
+
 function mountPreview() {
   const headSlot = h('div'), main = h('div'), panel = h('aside', { class: 'panel' });
   const el = h('div', { class: 'page tg' }, h('div', { class: 'col' }, headSlot, main), panel);
   const it = items.find((i) => previewTarget && i.kind === previewTarget.kind && i.ref === previewTarget.ref);
   let pv = null, failed = '', draft = null;
+  const customDraft = new Map(), details = new Map(), expanded = new Set();
+  let filterText = '';
   if (!it) { setTimeout(() => go('library')); return { el, update() {} }; }
 
+  const keyOf = (st) => st.method + ' ' + st.path + (st.scenario && st.state ? ' [' + st.scenario + ': ' + st.state + ']' : '');
+  const changedFbrc = () => pv && draft && !sameValues(draft, pv.fbrc);
   function drawHead() {
-    const changed = pv && draft && !sameValues(draft, pv.fbrc);
+    const changed = changedFbrc() || customDraft.size > 0;
     const label = (serving() ? 'Switch to this' : 'Start') + (changed ? ' with your changes' : '');
     fill(headSlot, head(it.title, badge('', 'Preview'), pv ? pv.description || [KIND_LABEL[it.kind], it.profile ? 'Customer ' + it.profile : null].filter(Boolean).join(' · ') : 'Reading it…',
       [h('button', { class: 'btn', onclick: () => go('library') }, 'Back to mocks'),
-       h('button', { class: 'btn primary', ...(!pv || busy() ? { disabled: '' } : {}), onclick: () => start(it, changed ? draft : undefined) }, icon('play'), label)]));
+       h('button', { class: 'btn primary', ...(!pv || busy() ? { disabled: '' } : {}), onclick: () => start(it, changedFbrc() ? draft : undefined, customDraft.size ? [...customDraft.values()] : undefined) }, icon('play'), label)]));
   }
+
+  async function detailOf(name) {
+    if (!details.has(name)) details.set(name, await api('/api/stub?name=' + encodeURIComponent(name)));
+    return details.get(name);
+  }
+  async function editStub(st) {
+    let d;
+    try { d = await detailOf(st.name); } catch (e) { flash(e.message); return; }
+    const mine = customDraft.get(keyOf(st)) || {};
+    openEditor({ method: d.method, path: d.path, ...(st.scenario && st.state ? { scenario: st.scenario, state: st.state } : {}), status: mine.status || d.status, headers: mine.headers || d.headers, body: mine.body !== undefined ? mine.body : d.body, delayMs: mine.delayMs !== undefined ? mine.delayMs : d.delayMs },
+      '', { onApply: (payload) => { customDraft.set(keyOf(st), payload); drawHead(); drawStubs(); },
+            info: st.scenario && st.state ? 'This answer is used ' + lowerFirst(stateWord(st)) + '. Your edit keeps the test\'s steps, so the other answers still change as before.' : '',
+            note: [d.scenario && !d.state ? 'This call is part of a scenario but has no state of its own, so a response set here replaces it for every state and it will stop changing.' : '', d.template ? 'This response uses {{templates}} that WireMock fills in for each request. Editing replaces it with the fixed text below.' : '', d.truncated ? 'The body is longer than what is shown here. Editing replaces it with the text below.' : ''].filter(Boolean).join(' ') });
+  }
+  function detailBox(st) {
+    const mine = customDraft.get(keyOf(st)), d = details.get(st.name);
+    if (!d) return h('div', { class: 'pv-detail pv-meta' }, 'Loading…');
+    const show = mine || d;
+    const hdrs = Object.entries(show.headers || {}).map(([k, v]) => k + ': ' + v).join('\n');
+    return h('div', { class: 'pv-detail' },
+      h('div', { class: 'pv-meta' }, [mine ? 'Your edited response' : 'Response', 'status ' + show.status, show.delayMs ? show.delayMs + ' ms delay' : null, !mine && d.template ? 'uses templates' : null].filter(Boolean).join(' · ')),
+      hdrs ? h('pre', {}, hdrs) : null, show.body ? h('pre', {}, show.body + (!mine && d.truncated ? '\n… (cut off)' : '')) : h('div', { class: 'pv-meta', style: 'margin-top:6px' }, 'No body.'));
+  }
+  function stubRow(st, label) {
+    const mine = customDraft.get(keyOf(st)), open = expanded.has(st.name);
+    const noEdit = st.next ? 'This call moves the test on, so it can\'t be edited here. Edit the answers it leads to instead.' : !st.editable ? 'This stub answers several URLs, so it can\'t be edited here. Once the app calls it, edit it from Requests.' : st.replaced ? 'The stub above answers this call instead. Edit that one.' : '';
+    const row = h('div', { class: 'row' + (st.replaced ? ' pv-dim' : '') },
+      h('div', { class: 'grow' }, label ? h('div', { class: 'rt' }, label) : h('div', { class: 'rt mono' }, st.method ? st.method + ' ' + st.path : st.name),
+        h('div', { class: 'rm' }, [st.method ? st.name : null, st.checked ? 'checked by this test' : null, st.next ? 'moves the test on to "' + st.next + '"' : (!label && st.scenario ? 'changes as the test runs' : null), st.replaced ? 'replaced by the stub above' : null].filter(Boolean).join(' · '))),
+      mine ? badge('warn', 'edited') : null,
+      st.status ? h('span', { class: 'chip' }, String(mine ? mine.status : st.status)) : null,
+      h('button', { class: 'btn sm ghost', onclick: async () => { if (open) expanded.delete(st.name); else { expanded.add(st.name); drawStubs(); try { await detailOf(st.name); } catch (e) { flash(e.message); expanded.delete(st.name); } } drawStubs(); } }, open ? 'Hide' : 'View'),
+      mine ? h('button', { class: 'btn sm', onclick: () => { customDraft.delete(keyOf(st)); drawHead(); drawStubs(); } }, 'Revert') : null,
+      h('button', { class: 'btn sm', ...(noEdit ? { disabled: '', title: noEdit } : {}), onclick: () => editStub(st) }, 'Edit'));
+    return h('div', {}, row, open ? detailBox(st) : null);
+  }
+  const asked = new Set();
+  function routeBlock(states) {
+    const sorted = [...states].sort((a, b) => (b.state === 'Started') - (a.state === 'Started'));
+    for (const st of sorted) if (!asked.has(st.name)) { asked.add(st.name); detailOf(st.name).then(drawStubs).catch(() => {}); }
+    const bodyOf = (st) => { const mine = customDraft.get(keyOf(st)), d = details.get(st.name); return mine ? mine.body : d ? d.body : null; };
+    const changes = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const a = bodyOf(sorted[i - 1]), b = bodyOf(sorted[i]);
+      if (a === null || b === null) continue;
+      const diff = bodyDiff(a, b);
+      if (diff === null) continue;
+      changes.push(h('div', { class: 'pv-detail' }, h('div', { class: 'pv-meta' }, (diff.length ? 'What changes ' + lowerFirst(stateWord(sorted[i])) : 'The answers at the start and ' + lowerFirst(stateWord(sorted[i])) + ' are the same')),
+        diff.length ? h('pre', {}, diff.slice(0, 12).map((c) => c.key + ': ' + c.from + ' → ' + c.to).join('\n') + (diff.length > 12 ? '\n… and ' + (diff.length - 12) + ' more' : '')) : null));
+    }
+    return h('div', { class: 'pv-route' },
+      h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'rt mono' }, sorted[0].method + ' ' + sorted[0].path),
+        h('div', { class: 'rm' }, sorted.length + ' answers, one for each step of the test (scenario ' + sorted[0].scenario + ')'))),
+      changes, sorted.map((st) => h('div', { class: 'pv-state' }, stubRow(st, stateWord(st)))));
+  }
+  // Stubs that answer one call in different steps of the same scenario read as one call, in order.
+  function blocksOf(rows) {
+    const out = [], seen = new Map();
+    for (const st of rows) {
+      const k = st.scenario && st.state ? st.method + ' ' + st.path + ' ' + st.scenario : '';
+      if (k && seen.has(k)) seen.get(k).push(st); else { const b = [st]; out.push(b); if (k) seen.set(k, b); }
+    }
+    return out.map((b) => b.length > 1 ? routeBlock(b) : stubRow(b[0]));
+  }
+  const stubsEl = h('div');
+  const filterInput = h('input', { class: 'input', type: 'search', placeholder: 'Filter by path or stub name', 'aria-label': 'Filter responses', oninput: (e) => { filterText = e.target.value; drawStubs(); } });
+  function drawStubs() {
+    const q = filterText.trim().toLowerCase();
+    const shown = pv.stubs.filter((st) => !q || [st.path, st.name, st.method].join(' ').toLowerCase().includes(q));
+    const who = pv.kind === 'profile' ? it.ref : pv.profile;
+    const groups = [['test', 'Added by this ' + (pv.kind === 'flow' ? 'test' : 'mock')], ['customer', 'Customer' + (who ? ': ' + who : '')], ['shared', 'Shared defaults']];
+    fill(stubsEl, groups.map(([g, title]) => {
+      const rows = shown.filter((st) => st.group === g);
+      if (!rows.length) return null;
+      return fold('pv:' + g, g === 'test', !!q, '', [h('span', { class: 'fname' }, title), h('span', { class: 'fcount' }, String(rows.length)), h('span', { class: 'grow' }),
+        rows.some((st) => customDraft.has(keyOf(st))) ? badge('warn', 'edited') : null], blocksOf(rows));
+    }), shown.length ? null : h('div', { class: 'note' }, pv.stubs.length ? 'Nothing matches that.' : 'This mock answers no extra calls.'));
+  }
+
   function drawBody() {
     if (failed) { fill(main, h('div', { class: 'note' }, failed)); fill(panel); return; }
     if (!pv) { fill(main, h('div', { class: 'note' }, 'Reading it…')); return; }
     const platforms = guidePlatforms(pv.steps);
     let pick = guidePlatform(platforms);
     const pad = (...kids) => h('div', { style: 'padding:6px 28px 8px' }, ...kids);
-    const drawMain = () => fill(main,
-      pv.steps && pv.steps.length ? pad(stepsPanel(pv, platforms, pick, (p) => { store.set('platform', p); pick = p; drawMain(); }, 'What you will do and see once it is running.')) : null,
-      pv.checks && pv.checks.length ? pad(h('div', { class: 'ph' }, 'Checked while it runs'), h('div', { class: 'tg-checks' }, pv.checks.map((c) => h('div', { class: 'tg-chk' },
-        h('span', { class: 'ic' }, '…'), h('div', {}, h('div', { class: 'ct' }, c.label), h('div', { class: 'cd' }, 'Expected ' + c.expect + ' once you start')))))) : null,
-      pad(h('div', { class: 'ph' }, pv.kind === 'profile' ? 'API calls it answers' : 'Extra API calls it answers', h('span', {}, pv.kind === 'profile' ? pv.stubs.length + ' stubs' : pv.defaultStubs + ' more come from the customer and shared defaults')),
-        pv.stubs.length ? h('div', {}, pv.stubs.map((st) => h('div', { class: 'tg-step' }, h('div', { class: 'grow' },
-          h('div', { class: 'mono' }, st.method ? st.method + ' ' + st.path : st.name), st.method ? h('div', { class: 'tg-note' }, st.name) : null))))
-          : h('p', { class: 'hintp' }, 'None beyond the customer\'s own.')));
+    const drawMain = () => {
+      fill(main,
+        pv.steps && pv.steps.length ? fold('pv:steps', true, false, '', [h('span', { class: 'fname' }, 'Test script'), h('span', { class: 'fcount' }, doCount(pv.steps, pick) + ' steps')],
+          [pad(stepsPanel(pv, platforms, pick, (p) => { store.set('platform', p); pick = p; drawMain(); }, 'What you will do and see once it is running.'))]) : null,
+        pv.checks && pv.checks.length ? pad(h('div', { class: 'ph' }, 'Checked while it runs'), h('div', { class: 'tg-checks' }, pv.checks.map((c) => h('div', { class: 'tg-chk' },
+          h('span', { class: 'ic' }, '…'), h('div', {}, h('div', { class: 'ct' }, c.label), h('div', { class: 'cd' }, 'Expected ' + c.expect + ' once you start')))))) : null,
+        pad(h('div', { class: 'ph' }, 'Responses it will serve', h('span', {}, pv.stubs.length + ' API calls')),
+          h('p', { class: 'hintp', style: 'margin:0' }, 'View a response to see exactly what the app gets, or edit it. Edits are applied the moment you start.')),
+        h('div', { class: 'pv-filter' }, filterInput), stubsEl);
+      drawStubs();
+    };
     drawMain();
     fill(panel, h('div', { class: 'ph' }, 'Remote Config', h('span', {}, Object.keys(pv.fbrc).length + ' set')),
       fbrcEditor({ name: pv.ref, fbrc: pv.fbrc, defaultFbrc: pv.fbrc }, { draftOnly: true, onChange: (d) => { draft = d; drawHead(); } }),
       h('div', { class: 'ph', style: 'margin-top:22px' }, 'Details'),
-      kvList([['Type', KIND[pv.kind] || pv.kind], ['Customer', pv.profile || 'none'], ['Extra stubs', String(pv.stubs.length)]]));
+      kvList([['Type', KIND[pv.kind] || pv.kind], ['Customer', pv.profile || 'none'], ['API calls', String(pv.stubs.length)]]));
   }
   api('/api/preview?kind=' + encodeURIComponent(it.kind) + '&ref=' + encodeURIComponent(it.ref))
     .then((r) => { pv = r; draft = { ...r.fbrc }; drawHead(); drawBody(); })
@@ -682,12 +793,14 @@ function stepsPanel(s, platforms, pick, onPick, hint) {
     return h('div', { class: 'tg-step tg-' + st.kind }, h('span', { class: 'tg-mark', 'aria-hidden': 'true' }, st.kind === 'gone' ? '–' : '✓'), text);
   });
   return h('div', {},
-    h('div', { class: 'ph' }, 'Test script', platforms.length > 1
-      ? h('span', {}, ...platforms.map((p) => h('button', { class: 'seg', 'aria-pressed': String(p === pick), onclick: () => onPick(p) }, PLATFORM_NAME[p] || p)))
-      : null),
+    platforms.length > 1 ? h('div', { class: 'tg-pick' }, h('span', { class: 'hint' }, 'Steps for'),
+      ...platforms.map((p) => h('button', { class: 'seg', 'aria-pressed': String(p === pick), onclick: () => onPick(p) }, PLATFORM_NAME[p] || p))) : null,
     h('p', { class: 'hintp', style: 'margin:0 0 8px' }, hint || 'To run it again, stop the mock and start it again.'),
     stepRows(s.steps));
 }
+
+// How many things the tester does on the platform being shown, for the fold's heading.
+const doCount = (steps, pick) => (steps || []).filter((st) => !st.platform || st.platform === pick).reduce((n, st) => n + (st.kind === 'do' ? 1 : 0) + doCount(st.steps, pick), 0);
 
 // The checks sit in the side panel so they stay in view on every tab while the tester follows the steps.
 function checkPanel(checks) {
@@ -703,7 +816,8 @@ function mountSession() {
   let tab = store.get('tab', 'requests'), onlyUnmatched = false;
   const headSlot = h('div'), slot = h('div'), tabsEl = h('div', { class: 'tabs', role: 'tablist' }), body = h('div'), panel = h('aside', { class: 'panel' });
   // The steps are rebuilt only when they change and the folded details keep their open state, so neither jumps on the 1 s refresh.
-  const checksSlot = h('div'), stepsSlot = h('div'), moreBody = h('div'), moreEl = h('details', { class: 'tg-more' }, h('summary', {}, 'Details and saved responses'), moreBody);
+  const checksSlot = h('div'), stepsSum = h('summary', {}), stepsSlot = h('div'), stepsEl = h('details', { class: 'tg-more', ...(store.get('steps-fold', 'open') === 'open' ? { open: '' } : {}) }, stepsSum, stepsSlot), moreBody = h('div'), moreEl = h('details', { class: 'tg-more' }, h('summary', {}, 'Details and saved responses'), moreBody);
+  stepsEl.addEventListener('toggle', () => store.set('steps-fold', stepsEl.open ? 'open' : 'closed'));
   const fbrcSum = h('summary', {}), fbrcSlot = h('div'), fbrcEl = h('details', { class: 'tg-more' }, fbrcSum, fbrcSlot);
   const el = h('div', { class: 'page' }, h('div', { class: 'col' }, headSlot, slot, tabsEl, body), panel);
 
@@ -713,9 +827,9 @@ function mountSession() {
     if (!known.length) return null;
     const dis = busy() ? { disabled: '' } : {};
     return [h('div', { class: 'gh' }, 'Recent'), ...known.map(({ r, it }, i) => h('div', { class: 'row' },
-      h('div', { class: 'grow' }, h('div', { class: 'rt' }, it.title), h('div', { class: 'rm' }, [KIND_LABEL[it.kind], r.fbrc ? 'with your Remote Config changes' : null].filter(Boolean).join(' · '))),
+      h('div', { class: 'grow' }, h('div', { class: 'rt' }, it.title), h('div', { class: 'rm' }, [KIND_LABEL[it.kind], r.fbrc || r.custom ? 'with your changes' : null].filter(Boolean).join(' · '))),
       h('button', { class: 'btn sm ghost', onclick: () => openPreview(it) }, 'Preview'),
-      h('button', { class: 'btn sm' + (i === 0 ? ' primary' : ''), ...dis, onclick: () => start(it, r.fbrc) }, i === 0 ? 'Start again' : 'Start')))];
+      h('button', { class: 'btn sm' + (i === 0 ? ' primary' : ''), ...dis, onclick: () => start(it, r.fbrc, r.custom) }, i === 0 ? 'Start again' : 'Start')))];
   }
 
   function idle() {
@@ -761,7 +875,7 @@ function mountSession() {
           : h('div', { class: 'empty' }, h('p', {}, onlyUnmatched ? 'Every request so far had a stub.' : 'No requests yet. Open the app and use it; each call it makes appears here.')));
     } else if (tab === 'custom') {
       fill(body, custom.length ? custom.map((c) => h('div', { class: 'row' },
-        h('div', { class: 'grow' }, h('div', { class: 'rt mono' }, c.method + ' ' + c.path), h('div', { class: 'rm' }, 'Status ' + c.status + (c.delayMs ? ' · ' + c.delayMs + ' ms delay' : ''))),
+        h('div', { class: 'grow' }, h('div', { class: 'rt mono' }, c.method + ' ' + c.path), h('div', { class: 'rm' }, (c.scenario ? (c.state === 'Started' ? 'At the start' : 'When ' + c.scenario + ' is ' + c.state) + ' · ' : '') + 'Status ' + c.status + (c.delayMs ? ' · ' + c.delayMs + ' ms delay' : ''))),
         h('button', { class: 'btn sm', onclick: () => openEditor(c) }, 'Edit'), h('button', { class: 'btn sm danger', onclick: () => removeCustom(c.id) }, 'Remove')))
         : h('div', { class: 'empty' }, h('p', {}, 'No custom responses. Open a request on the Requests tab and choose Edit response. They last until you switch or stop.')));
     } else if (tab === 'fbrc') {
@@ -796,7 +910,8 @@ function mountSession() {
     const fsig = 'fbrc:' + JSON.stringify([s.name, s.fbrc, s.defaultFbrc]);
     if (fbrcSlot.dataset.k !== fsig) { fill(fbrcSlot, fbrcEditor(s)); fbrcSlot.dataset.k = fsig; }
     fill(moreBody, details);
-    fill(panel, checksSlot, stepsSlot, fbrcEl, moreEl);
+    fill(stepsSum, 'Test script', h('small', { style: 'color:var(--faint);margin-left:6px;font-weight:400' }, doCount(s.steps, pick) + ' steps'));
+    fill(panel, checksSlot, s.steps && s.steps.length ? stepsEl : null, fbrcEl, moreEl);
   }
 
   function update() {
@@ -865,14 +980,14 @@ async function copyText(text, btn) {
 // What the tester ran last in this project, so a stopped mock is one click away instead of a new search.
 const recentKey = () => 'recent:' + (proj.path || '');
 function recents() { try { return JSON.parse(store.get(recentKey(), '[]')); } catch { return []; } }
-function remember(it, fbrc) {
+function remember(it, fbrc, custom) {
   const keep = recents().filter((r) => !(r.kind === it.kind && r.ref === it.ref));
-  keep.unshift({ kind: it.kind, ref: it.ref, title: it.title, ...(fbrc ? { fbrc } : {}) });
+  keep.unshift({ kind: it.kind, ref: it.ref, title: it.title, ...(fbrc ? { fbrc } : {}), ...(custom ? { custom } : {}) });
   store.set(recentKey(), JSON.stringify(keep.slice(0, 5)));
 }
-// fbrc is the Remote Config the tester chose in the preview; leave it out to serve the mock's own.
-async function start(it, fbrc) {
-  try { await api('/api/serve', { kind: it.kind, ref: it.ref, ...(fbrc ? { fbrc } : {}) }); remember(it, fbrc); notice = ''; go('session'); } catch (e) { flash(e.message); }
+// fbrc and custom are what the tester set up in the preview: Remote Config values and edited responses. Leave them out to serve the mock as it is.
+async function start(it, fbrc, custom) {
+  try { await api('/api/serve', { kind: it.kind, ref: it.ref, ...(fbrc ? { fbrc } : {}), ...(custom ? { custom } : {}) }); remember(it, fbrc, custom); notice = ''; go('session'); } catch (e) { flash(e.message); }
   refresh();
 }
 async function stopMock() { try { await api('/api/stop', {}); } catch (e) { flash(e.message); } refresh(); }
@@ -976,7 +1091,7 @@ async function openDetail(id) {
   showDialog();
 }
 
-function openEditor(c, savedTitle) {
+function openEditor(c, savedTitle, opts = {}) {
   const drop = ['content-length', 'transfer-encoding', 'connection', 'matched-stub-id', 'matched-stub-name'];
   const keep = Object.fromEntries(Object.entries(c.headers || {}).filter(([k]) => !drop.includes(k.toLowerCase())));
   const status = h('input', { class: 'input', type: 'number', min: '100', max: '599', value: String(c.status) });
@@ -984,10 +1099,12 @@ function openEditor(c, savedTitle) {
   const headers = h('textarea', { class: 'input', rows: '4', spellcheck: 'false' }); headers.value = headersToText(keep);
   const body = h('textarea', { class: 'input', rows: '12', spellcheck: 'false' }); body.value = c.body || '';
   const msg = h('p', { class: 'hint', role: 'status', 'aria-live': 'polite' });
-  const apply = h('button', { class: 'btn primary' }, 'Apply response');
+  const apply = h('button', { class: 'btn primary' }, opts.onApply ? 'Use this response' : 'Apply response');
   const title = h('input', { class: 'input', type: 'text', placeholder: 'Name to save it as, e.g. Splash maintenance 503', maxlength: '80', 'aria-label': 'Name for saving' }); title.value = savedTitle || '';
   const save = h('button', { class: 'btn' }, 'Save for later');
-  const payload = () => ({ method: c.method, path: c.path, status: Number(status.value), delayMs: Number(delay.value) || 0, headers: textToHeaders(headers.value), body: body.value });
+  const plain = () => ({ method: c.method, path: c.path, status: Number(status.value), delayMs: Number(delay.value) || 0, headers: textToHeaders(headers.value), body: body.value });
+  // A response that belongs to one scenario state keeps it, so the other states still change as the test runs.
+  const payload = () => ({ ...plain(), ...(c.scenario ? { scenario: c.scenario, state: c.state } : {}) });
   const check = () => {
     const bad = jsonProblem(body.value, headers.value);
     msg.className = 'hint ' + (bad ? 'bad' : 'good');
@@ -996,20 +1113,23 @@ function openEditor(c, savedTitle) {
   };
   body.addEventListener('input', check); headers.addEventListener('input', check);
   apply.addEventListener('click', async () => {
+    if (opts.onApply) { opts.onApply(payload()); closeDialog(); return; }
     try { await api('/api/custom', payload()); closeDialog(); refresh(); } catch (e) { msg.className = 'hint bad'; msg.textContent = e.message; }
   });
   save.addEventListener('click', async () => {
     if (!title.value.trim()) { msg.className = 'hint bad'; msg.textContent = 'Type a name first so you can find it later.'; title.focus(); return; }
-    try { const r = await api('/api/saved', { title: title.value, ...payload() }); msg.className = 'hint good'; msg.textContent = 'Saved as ' + r.name + '.'; loadSaved(); }
+    try { const r = await api('/api/saved', { title: title.value, ...plain() }); msg.className = 'hint good'; msg.textContent = 'Saved as ' + r.name + '.'; loadSaved(); }
     catch (e) { msg.className = 'hint bad'; msg.textContent = e.message; }
   });
   fill(dlgBody, 
     h('h2', { id: 'dlg-title' }, 'Respond to ' + c.method + ' ' + c.path),
-    h('p', { class: 'hint' }, 'The app gets this instead, straight away. It lasts until you switch or stop the mock.'),
+    h('p', { class: 'hint' }, opts.onApply ? 'The app gets this instead of the stub\'s own answer. It is applied when you start.' : 'The app gets this instead, straight away. It lasts until you switch or stop the mock.'),
+    opts.info ? h('p', { class: 'hint' }, opts.info) : null,
+    opts.note ? h('p', { class: 'hint bad' }, opts.note) : null,
     h('div', { class: 'fields' }, field('Status', status), field('Delay (ms)', delay)),
     field('Headers, one per line', headers),
     field('Body', body, msg),
-    h('div', { style: 'display:flex;gap:8px' }, h('div', { class: 'grow' }, title), save),
+    opts.onApply ? null : h('div', { style: 'display:flex;gap:8px' }, h('div', { class: 'grow' }, title), save),
     h('div', { class: 'row2' },
       h('button', { class: 'btn', onclick: () => { try { body.value = JSON.stringify(JSON.parse(body.value), null, 2); check(); } catch {} } }, 'Format JSON'),
       h('button', { class: 'btn', onclick: closeDialog }, 'Cancel'), apply));

@@ -146,7 +146,7 @@ func (m *Manager) guideFor(t *engine.MockTarget) ([]Step, []LiveCheck) {
 
 // Serve starts the mock on ref, or switches the running server to it. It returns once the work
 // is under way; callers poll State for the outcome.
-func (m *Manager) Serve(ref string, fbrc map[string]string) error {
+func (m *Manager) Serve(ref string, fbrc map[string]string, custom []engine.CustomResponse) error {
 	m.mu.Lock()
 	if m.busy {
 		m.mu.Unlock()
@@ -162,9 +162,9 @@ func (m *Manager) Serve(ref string, fbrc map[string]string) error {
 	go func() {
 		var err error
 		if sess == nil {
-			err = m.start(ref, fbrc)
+			err = m.start(ref, fbrc, custom)
 		} else {
-			err = m.switchTo(sess, eng, ref, fbrc)
+			err = m.switchTo(sess, eng, ref, fbrc, custom)
 		}
 		m.mu.Lock()
 		m.busy = false
@@ -183,7 +183,7 @@ func (m *Manager) Serve(ref string, fbrc map[string]string) error {
 }
 
 // start serves ref. A non-nil fbrc is the Remote Config the tester chose in the preview, served from the first fetch.
-func (m *Manager) start(ref string, fbrc map[string]string) error {
+func (m *Manager) start(ref string, fbrc map[string]string, custom []engine.CustomResponse) error {
 	e := m.newEngine()
 	if err := e.CheckEnvironment("mock"); err != nil {
 		return err
@@ -201,11 +201,9 @@ func (m *Manager) start(ref string, fbrc map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if fbrc != nil {
-		if err := sess.SetFBRC(ctx, fbrc); err != nil {
-			sess.Stop()
-			return err
-		}
+	if err := applyPreview(ctx, sess, fbrc, custom); err != nil {
+		sess.Stop()
+		return err
 	}
 	m.mu.Lock()
 	m.sess, m.eng, m.state, m.since = sess, e, StateServing, time.Now()
@@ -214,7 +212,22 @@ func (m *Manager) start(ref string, fbrc map[string]string) error {
 	return nil
 }
 
-func (m *Manager) switchTo(sess *engine.MockSession, e *engine.Engine, ref string, fbrc map[string]string) error {
+// applyPreview layers what the tester set up in the preview over a freshly served target.
+func applyPreview(ctx context.Context, sess *engine.MockSession, fbrc map[string]string, custom []engine.CustomResponse) error {
+	if fbrc != nil {
+		if err := sess.SetFBRC(ctx, fbrc); err != nil {
+			return err
+		}
+	}
+	for _, c := range custom {
+		if _, err := sess.SetCustomResponse(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) switchTo(sess *engine.MockSession, e *engine.Engine, ref string, fbrc map[string]string, custom []engine.CustomResponse) error {
 	target, err := e.ResolveMockTarget([]string{ref})
 	if err != nil {
 		return err
@@ -222,10 +235,7 @@ func (m *Manager) switchTo(sess *engine.MockSession, e *engine.Engine, ref strin
 	if err := sess.Switch(context.Background(), target); err != nil {
 		return err
 	}
-	if fbrc != nil {
-		return sess.SetFBRC(context.Background(), fbrc)
-	}
-	return nil
+	return applyPreview(context.Background(), sess, fbrc, custom)
 }
 
 // watch notices WireMock dying on its own (killed, crashed) and returns the page to idle.

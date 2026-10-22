@@ -104,6 +104,7 @@ func NewServer(ws *Workspace, ex execx.Runner, port int) (*Server, error) {
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/catalog", s.catalog)
 	s.mux.HandleFunc("GET /api/preview", s.preview)
+	s.mux.HandleFunc("GET /api/stub", s.stubDetail)
 	s.mux.HandleFunc("GET /api/state", s.state)
 	s.mux.HandleFunc("GET /api/journal", s.journal)
 	s.mux.HandleFunc("GET /api/journal/{id}", s.requestDetail)
@@ -288,6 +289,23 @@ func (s *Server) preview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, pv)
+}
+
+// stubDetail returns one stub's full response, for the preview to show before anything is served.
+func (s *Server) stubDetail(w http.ResponseWriter, r *http.Request) {
+	p, _, ok := s.cur(w)
+	if !ok {
+		return
+	}
+	d, err := StubDetailOf(p, r.URL.Query().Get("name"))
+	switch {
+	case err != nil && strings.HasPrefix(err.Error(), "unknown stub"):
+		writeError(w, http.StatusNotFound, err)
+	case err != nil:
+		writeError(w, http.StatusBadGateway, err)
+	default:
+		writeJSON(w, http.StatusOK, d)
+	}
 }
 
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
@@ -535,6 +553,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		Kind string            `json:"kind"`
 		Ref  string            `json:"ref"`
 		FBRC map[string]string `json:"fbrc"` // Remote Config chosen in the preview; absent means the target's own
+		// Responses edited in the preview, served over the target as soon as it is up.
+		Custom []engine.CustomResponse `json:"custom"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -558,7 +578,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := m.Serve(req.Ref, fbrc); err != nil {
+	for i := range req.Custom {
+		if err := req.Custom[i].Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("response for %s %s: %w", req.Custom[i].Method, req.Custom[i].Path, err))
+			return
+		}
+		if err := checkBodyMatchesContentType(&req.Custom[i]); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("response for %s %s: %w", req.Custom[i].Method, req.Custom[i].Path, err))
+			return
+		}
+	}
+	if err := m.Serve(req.Ref, fbrc, req.Custom); err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
