@@ -290,7 +290,7 @@ func TestGitReservationExcludesServeStopOpenAndOtherGit(t *testing.T) {
 				t.Fatal(ctx.Err())
 			}
 			for name, invoke := range map[string]func() error{
-				"serve": func() error { return ws.Serve("scenario") },
+				"serve": func() error { return ws.Serve("scenario", nil, nil) },
 				"stop":  ws.Stop,
 				"open":  func() error { return ws.Open("/different-project") },
 				"use":   func() error { return ws.Use(fakeProject(t, "different"), engine.DefaultOptions()) },
@@ -322,7 +322,7 @@ func TestShutdownClosesWorkspaceAdmission(t *testing.T) {
 	s := gitServer(t, newRepos(t))
 	s.ws.Shutdown()
 	for name, invoke := range map[string]func() error{
-		"serve": func() error { return s.ws.Serve("scenario") },
+		"serve": func() error { return s.ws.Serve("scenario", nil, nil) },
 		"open":  func() error { return s.ws.Open("/different") },
 		"pull":  func() error { _, _, err := s.ws.Pull(context.Background()); return err },
 	} {
@@ -347,7 +347,7 @@ func blockWorkspaceStartup(t *testing.T, ws *Workspace) func() {
 		}
 	})
 	t.Cleanup(ws.Shutdown)
-	if err := ws.Serve("scenario"); err != nil {
+	if err := ws.Serve("scenario", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	return func() { close(resume) }
@@ -378,7 +378,7 @@ func TestWorkspaceMockStartupUsesInjectedRunnerAcrossProjects(t *testing.T) {
 		if err := ws.Open(p.Root); err != nil {
 			t.Fatal(err)
 		}
-		if err := ws.Serve("any"); err != nil {
+		if err := ws.Serve("any", nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		_, manager := ws.Current()

@@ -13,6 +13,7 @@ import (
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/gitrepo"
+	"github.com/feernandooff/mockstro/internal/mockruntime"
 	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/internal/workspacecoord"
 )
@@ -28,6 +29,7 @@ type RecentProject struct {
 	Path   string `json:"path"`
 	Name   string `json:"name"`
 	Exists bool   `json:"exists"`
+	Icon   bool   `json:"icon,omitempty"`
 }
 
 // recents remembers opened projects in a small JSON file; failures to read or write it are
@@ -199,7 +201,7 @@ var errWorkspaceRunning = errors.New("stop the running mock before changing proj
 // Serve admits startup or switching atomically with Open and checkout mutations.
 // Manager.Serve must set busy before returning, and Shutdown must wait for async
 // startup/stop completion; see workspacecoord.Coordinator's lifecycle contract.
-func (w *Workspace) Serve(ref string) error {
+func (w *Workspace) Serve(ref string, fbrc map[string]string, custom []mockruntime.CustomResponse) error {
 	release, err := w.operations.Reserve()
 	if err != nil {
 		return err
@@ -209,7 +211,7 @@ func (w *Workspace) Serve(ref string) error {
 	if m == nil {
 		return errNoProject
 	}
-	return m.Serve(ref)
+	return m.Serve(ref, fbrc, custom)
 }
 
 func (w *Workspace) Stop() error {

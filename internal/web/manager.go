@@ -9,6 +9,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
 	"github.com/feernandooff/mockstro/internal/mockapp"
 	"github.com/feernandooff/mockstro/internal/mockruntime"
 	"github.com/feernandooff/mockstro/internal/project"
@@ -48,6 +49,8 @@ type Serving struct {
 	FBRC        map[string]string `json:"fbrc"`        // what the app is served now
 	DefaultFBRC map[string]string `json:"defaultFbrc"` // what the target itself defines
 	Port        int               `json:"port"`
+	Steps       []Step            `json:"steps,omitempty"`
+	Checks      []LiveCheck       `json:"checks,omitempty"`
 }
 
 // StateView is the JSON the page polls.
@@ -78,6 +81,12 @@ type Manager struct {
 	life   *mockapp.Lifecycle
 	mu     sync.Mutex
 	log    []LogLine
+
+	// The guide is read once when a target is served, never on state polls.
+	guideSession *mockruntime.Session
+	guideName    string
+	guideSteps   []Step
+	guideChecks  []LiveCheck
 }
 
 func NewManager(p *project.Project, opts engine.Options, runner execx.Runner) *Manager {
@@ -126,13 +135,50 @@ func (m *Manager) State() StateView {
 		v.Custom = sess.CustomResponses()
 		snap := sess.Snapshot()
 		v.Serving = &Serving{Kind: snap.Kind, Name: snap.Name, Description: snap.Description, Profile: snap.Profile, Overrides: snap.Overrides, FBRC: snap.FBRC, DefaultFBRC: snap.Defaults, Port: snap.Port}
+		m.mu.Lock()
+		if m.guideSession == sess && m.guideName == snap.Name {
+			v.Serving.Steps, v.Serving.Checks = m.guideSteps, m.guideChecks
+		}
+		m.mu.Unlock()
 	}
 	return v
 }
-func (m *Manager) Serve(ref string) error { return m.life.Serve(ref) }
-func (m *Manager) Stop() error            { return m.life.Stop() }
-func (m *Manager) Shutdown()              { m.life.Shutdown() }
-func (m *Manager) Idle() bool             { return m.life.Idle() }
+
+// Serve applies preview edits within the lifecycle's reserved start or switch operation.
+func (m *Manager) Serve(ref string, fbrc map[string]string, custom []mockruntime.CustomResponse) error {
+	return m.life.ServeWith(ref, func(ctx context.Context, sess *mockruntime.Session) error {
+		target := sess.Target()
+		var steps []Step
+		var checks []LiveCheck
+		if target.Kind == "flow" {
+			if flow, err := fixtures.New(m.selectedProject()).Flow(target.Name); err == nil {
+				steps, checks = FlowSteps(flow.Path), ChecksFor(flow.Header.Verifications)
+			}
+		}
+		m.mu.Lock()
+		m.guideSession, m.guideName, m.guideSteps, m.guideChecks = sess, target.Name, steps, checks
+		m.mu.Unlock()
+		return applyPreview(ctx, sess, fbrc, custom)
+	})
+}
+
+// applyPreview layers the tester's edits over the freshly served target.
+func applyPreview(ctx context.Context, sess *mockruntime.Session, fbrc map[string]string, custom []mockruntime.CustomResponse) error {
+	if fbrc != nil {
+		if err := sess.SetFBRC(ctx, fbrc); err != nil {
+			return err
+		}
+	}
+	for _, c := range custom {
+		if _, err := sess.SetCustomResponse(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (m *Manager) Stop() error { return m.life.Stop() }
+func (m *Manager) Shutdown()   { m.life.Shutdown() }
+func (m *Manager) Idle() bool  { return m.life.Idle() }
 
 // Journal returns the request journal, newest first.
 func (m *Manager) Journal() ([]JournalRow, error) {

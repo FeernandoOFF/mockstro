@@ -75,7 +75,12 @@ func (m *Lifecycle) begin() (context.Context, chan struct{}, error) {
 }
 
 // Serve reserves admission before returning, including target resolution and startup.
-func (m *Lifecycle) Serve(ref string) error {
+func (m *Lifecycle) Serve(ref string) error { return m.ServeWith(ref, nil) }
+
+// ServeWith configures a started or switched session before publishing success.
+// Configuration is part of the reserved operation and shares its cancellation context.
+// A new session is stopped if configuration fails; an existing session stays available.
+func (m *Lifecycle) ServeWith(ref string, configure func(context.Context, *mockruntime.Session) error) error {
 	m.mu.Lock()
 	ctx, done, err := m.begin()
 	if err != nil {
@@ -103,6 +108,13 @@ func (m *Lifecycle) Serve(ref string) error {
 			} else {
 				err = session.Switch(ctx, target)
 			}
+		}
+		if err == nil && configure != nil {
+			err = configure(ctx, session)
+		}
+		if err != nil && starting && session != nil {
+			session.Stop()
+			session = nil
 		}
 		m.mu.Lock()
 		closing := m.closed || ctx.Err() != nil

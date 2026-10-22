@@ -144,6 +144,65 @@ func TestInvalidCustomResponseNeverReachesWireMock(t *testing.T) {
 	}
 }
 
+func TestCustomResponseCanBelongToOneScenarioState(t *testing.T) {
+	before := CustomResponse{Method: "GET", Path: "/api/bill", Status: 200, Body: `{"overdue":50}`, Scenario: "balance", State: "Started"}
+	after := CustomResponse{Method: "GET", Path: "/api/bill", Status: 200, Body: `{"overdue":0}`, Scenario: "balance", State: "paid"}
+	for _, c := range []CustomResponse{before, after} {
+		if err := c.Validate(); err != nil {
+			t.Fatalf("valid scenario response rejected: %v", err)
+		}
+	}
+	for name, c := range map[string]CustomResponse{
+		"scenario without a state": {Method: "GET", Path: "/a", Status: 200, Scenario: "balance"},
+		"state without a scenario": {Method: "GET", Path: "/a", Status: 200, State: "paid"},
+		"multi-line name":          {Method: "GET", Path: "/a", Status: 200, Scenario: "a\nb", State: "x"},
+	} {
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+
+	sess, f := newFakeSession(t)
+	if _, err := sess.SetCustomResponse(before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.SetCustomResponse(after); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sess.CustomResponses()); got != 2 {
+		t.Fatalf("one answer per state, so two for the route: got %d", got)
+	}
+	var states []string
+	for _, m := range f.mappings {
+		if m["scenarioName"] != "balance" {
+			t.Errorf("mapping lost its scenario: %v", m)
+		}
+		states = append(states, fmt.Sprint(m["requiredScenarioState"]))
+	}
+	if len(states) != 2 || states[0] == states[1] {
+		t.Errorf("each mapping is for its own state: %v", states)
+	}
+
+	// Setting the same state again replaces it instead of adding a third.
+	again := before
+	again.Body = `{"overdue":75}`
+	if _, err := sess.SetCustomResponse(again); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sess.CustomResponses()); got != 2 || len(f.mappings) != 2 {
+		t.Errorf("same route and state replaces: %d responses, %d mappings", got, len(f.mappings))
+	}
+
+	// A response with no scenario is a different key from the stateful ones: it answers every state.
+	plain := CustomResponse{Method: "GET", Path: "/api/bill", Status: 200, Body: "{}"}
+	if _, err := sess.SetCustomResponse(plain); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sess.CustomResponses()); got != 3 {
+		t.Errorf("a response for every state sits beside the per-state ones: %d", got)
+	}
+}
+
 func TestFailedCustomRemovalKeepsPublishedResponse(t *testing.T) {
 	s, f := newFakeSession(t)
 	custom, err := s.SetCustomResponse(CustomResponse{Method: "GET", Path: "/x", Status: 503})

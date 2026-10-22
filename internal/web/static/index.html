@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="mockstro-token" content="__TOKEN__">
 <title>MockStro</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
 :root {
   --bg: #ffffff; --bg-side: #f7f7f8; --bg-hover: #f1f1f3; --bg-active: #ebebee;
@@ -77,9 +78,13 @@ button.chip { cursor: pointer; } button.chip:hover { color: var(--text); }
 .glabel button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px; border-radius: 4px; display: grid; } .glabel button:hover { background: var(--bg-hover); color: var(--text); } .glabel svg { width: 14px; height: 14px; }
 .proj { gap: 8px !important; }
 .sq { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.sq.pic { width: 16px; height: 16px; margin: 0 -2px; border-radius: 4px; object-fit: contain; }
 .sub { padding-left: 30px !important; height: 28px !important; color: var(--muted); font-size: 13px; }
 .sub svg { width: 14px !important; height: 14px !important; }
 .sidefoot { border-top: 1px solid var(--line); padding: 10px 4px 0; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+.sidecheck { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 6px; margin: 0 0 6px; border-radius: 6px; font-size: 12px; color: var(--muted); text-decoration: none; }
+.sidecheck:hover, .sidecheck[aria-current="page"] { background: var(--bg-hover); color: var(--text); }
+.sidecheck svg { width: 13px; height: 13px; flex: none; } .sidecheck .dot { width: 6px; height: 6px; margin-left: auto; }
 .sidefoot .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -198,11 +203,89 @@ pre.code { background: var(--bg-side); border: 1px solid var(--line); border-rad
 @media (max-width: 1100px) { .page { grid-template-columns: minmax(0, 1fr); } .panel { border-left: 0; border-top: 1px solid var(--line); } }
 @media (max-width: 860px) {
   .shell { grid-template-columns: 56px minmax(0, 1fr); }
+  .sidecheck { justify-content: center; } .sidecheck .dot { display: none; }
   .sidebar .label, .sidebar .count, .sidebar .glabel, .sidebar .tree, .sidebar .brand span, .sidebar .sidefoot .txt { display: none; }
   .nav a { justify-content: center; padding: 0; } .brand { justify-content: center; padding-left: 0; padding-right: 0; }
-  .head, .banner, .tabs, .row, .bar, .gh, .check, details.fold > summary, .logline, .note { padding-left: 16px; padding-right: 16px; } .banner { margin-left: 16px; margin-right: 16px; }
+  .head, .banner, .tabs, .row, .bar, .gh, .check, details.fold > summary, .logline, .note, .pv-detail, .pv-filter { padding-left: 16px; padding-right: 16px; } .banner { margin-left: 16px; margin-right: 16px; }
   .head .top { flex-direction: column; } .search { width: 100%; }
 }
+/* Test script: a served flow's steps and live checks in a side panel, so the requests stay in view */
+.page.tg { grid-template-columns: minmax(0, 1fr) 400px; }
+.page.tg > .panel { padding-top: 18px; }
+@media (min-width: 1101px) { .page.tg > .panel { position: sticky; top: 0; align-self: start; max-height: calc(100vh - 48px); overflow-y: auto; } }
+.tg-step { display: flex; gap: 10px; padding: 7px 0; }
+.tg-n { width: 22px; height: 22px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 11.5px; font-weight: 650; background: var(--bg-active); color: var(--text); margin-top: 1px; }
+.tg-mark { width: 22px; flex: none; text-align: center; color: var(--faint); font-weight: 700; }
+.tg-see .tg-t, .tg-gone .tg-t { color: var(--muted); }
+.tg-t small { color: var(--faint); margin-left: 6px; font-weight: 400; }
+.tg-note { color: var(--faint); font-size: 12.5px; margin-top: 2px; }
+.tg-if { margin: 2px 0; padding: 0 0 0 10px; border-left: 2px solid var(--line-strong); }
+.tg-ifh { color: var(--muted); padding: 6px 0 0; }
+.tg-checks { padding-bottom: 14px; }
+.tg-chk { display: flex; gap: 10px; padding: 8px 0; }
+.tg-chk .ic { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex: none; margin-top: 1px; font-size: 11px; font-weight: 700; background: var(--bg-hover); color: var(--muted); }
+.tg-chk .ic.ok { background: var(--ok-bg); color: var(--ok); } .tg-chk .ic.fail { background: var(--bad-bg); color: var(--bad); }
+.tg-chk .ct { font-weight: 550; } .tg-chk .cd { color: var(--muted); font-size: 12.5px; }
+/* the Remote Config editor, narrowed to fit the side panel */
+.fb-status { padding: 4px 28px 0; margin: 0; } .fb-status[hidden] { display: none; } .fb-status.good { color: var(--ok); }
+.panel .fb-intro, .panel .fb-note, .panel .fb-status { padding-left: 0; padding-right: 0; }
+.panel .row { padding: 10px 0; flex-wrap: wrap; gap: 6px 10px; } .panel .row > .grow { flex-basis: 100%; overflow-wrap: anywhere; }
+.panel .gh { padding: 7px 8px; margin-top: 8px; }
+.panel .fbv { width: auto; flex: 1; min-width: 0; }
+.panel .note { padding: 12px 0; }
+.panel .fb-add { padding: 12px 0; flex-wrap: wrap; border-bottom: 0; } .panel .fb-add .input { flex-basis: 100%; max-width: none !important; }
+.panel .fb-bar { padding: 12px 0; flex-wrap: wrap; }
+/* preview: the responses a mock will serve */
+.pv-dim { opacity: .55; }
+.pv-detail { padding: 2px 28px 14px; }
+.pv-detail pre { margin: 6px 0 0; padding: 10px 12px; background: var(--bg-side); border: 1px solid var(--line); border-radius: 6px; max-height: 320px; overflow: auto; font: 12.5px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-meta { color: var(--muted); font-size: 12.5px; }
+.pv-route { border-left: 3px solid var(--line-strong); }
+.pv-state .row { padding-left: 24px; }
+.pv-filter { padding: 8px 28px; border-bottom: 1px solid var(--line); }
+.tg-pick { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.tg-more { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 12px; }
+.tg-more > summary { cursor: pointer; font-weight: 650; }
+.tg-more[open] > summary { margin-bottom: 12px; }
+/* preview: script first; details on demand, responses docked at the bottom */
+.back { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 0 8px 0 4px; margin: -4px 0 10px -6px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.back:hover { background: var(--bg-hover); color: var(--text); } .back svg { width: 15px; height: 15px; }
+.btn[aria-pressed="true"] { background: var(--bg-active); }
+.btn .dot { width: 6px; height: 6px; }
+.page.tg.nopanel { grid-template-columns: minmax(0, 1fr); }
+/* the preview fills the window: the heading stays put, the script scrolls, the dock sits below it */
+#content > .page.pv { flex: none; }
+.page.pv { height: calc(100vh - 48px); min-height: 0; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.page.pv > .col { display: flex; flex-direction: column; min-height: 0; }
+.page.pv > .col > .pv-main { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.page.pv > .panel { position: static; align-self: stretch; max-height: none; overflow-y: auto; }
+@media (max-width: 1100px) { .page.pv { grid-template-rows: minmax(0, 1fr) auto; } .page.pv > .panel { max-height: 45vh; } }
+.pv-script { padding: 4px 28px 28px; max-width: 760px; }
+.pv-script .ph { justify-content: flex-start; gap: 8px; margin-bottom: 8px; }
+.pv-dock { position: relative; flex: none; background: var(--bg-side); border-top: 1px solid var(--line-strong); box-shadow: 0 -12px 28px -16px rgba(0,0,0,.35); }
+.pv-grip { position: absolute; left: 0; right: 0; top: -6px; height: 14px; cursor: row-resize; z-index: 2; touch-action: none; }
+.pv-grip::after { content: ""; position: absolute; left: 50%; top: 9px; width: 40px; height: 4px; margin-left: -20px; border-radius: 4px; background: var(--line-strong); transition: background .12s, width .12s, margin .12s; }
+.pv-grip:hover::after, .pv-grip:focus-visible::after, .pv-dock.dragging .pv-grip::after { background: var(--muted); width: 56px; margin-left: -28px; }
+.pv-grip:focus-visible { outline: none; }
+.pv-dock.dragging, .pv-dock.dragging * { cursor: row-resize; user-select: none; }
+.pv-dock-head { display: flex; align-items: center; gap: 10px; width: 100%; height: 52px; padding: 4px 28px 0; border: 0; background: none; text-align: left; cursor: pointer; }
+.pv-dock-head:hover .pv-dock-hint { color: var(--text); }
+.pv-dock-head > svg { width: 14px; height: 14px; color: var(--muted); flex: none; transition: transform .15s; }
+.pv-dock.open > .pv-dock-head > svg { transform: rotate(180deg); }
+.pv-dock-head .fname { font-weight: 650; } .pv-dock-head .fcount { color: var(--muted); font-size: 12.5px; }
+.pv-dock-hint { color: var(--muted); font-size: 12.5px; }
+.pv-dock-body { overflow: auto; background: var(--bg); border-top: 1px solid var(--line); transition: height .2s ease; }
+.pv-dock:not(.open) .pv-dock-body { visibility: hidden; border-top-color: transparent; transition: height .2s ease, visibility 0s .2s; }
+.pv-dock.dragging .pv-dock-body { transition: none; }
+.pv-dock-body .pv-filter { position: sticky; top: 0; z-index: 1; background: var(--bg); }
+.pv-dock-body > .hintp { margin: 0; padding: 12px 28px 4px; }
+.pv-row { gap: 10px; }
+.pv-row > svg { width: 14px; height: 14px; color: var(--faint); flex: none; transition: transform .12s; }
+.pv-row.open > svg { transform: rotate(90deg); color: var(--text); }
+.pv-code { position: relative; }
+.pv-copy { position: absolute; top: 12px; right: 8px; background: var(--bg); }
+@media (max-width: 860px) { .pv-script, .pv-dock-head, .pv-dock-body > .hintp { padding-left: 16px; padding-right: 16px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
@@ -253,6 +336,9 @@ const ICONS = {
   check: '<circle cx="8" cy="8" r="6"/><path d="m5.6 8.2 1.8 1.8 3.1-3.5"/>',
   branch: '<circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="6" r="1.5"/><path d="M4.5 5v6M11.5 7.5c0 2.6-3 2.6-7 3.6"/>',
   right: '<path d="m6 3.5 4.5 4.5L6 12.5"/>',
+  left: '<path d="M10 3.5 5.5 8l4.5 4.5"/>',
+  up: '<path d="m3.5 10 4.5-4.5 4.5 4.5"/>',
+  panel: '<rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M10 2.5v11"/>',
   plus: '<path d="M8 3.5v9M3.5 8h9"/>',
   alert: '<path d="M8 2.2 14.4 13H1.6z"/><path d="M8 6.6v3M8 11.4v.1"/>',
   power: '<path d="M8 2v5"/><path d="M4.4 4.3a5.5 5.5 0 1 0 7.2 0"/>',
@@ -291,6 +377,15 @@ async function api(path, body) {
   return data;
 }
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+// A project's own IntelliJ / Android Studio icon when it has one, else a coloured square.
+function projIcon(p) {
+  const sq = () => h('span', { class: 'sq', style: 'background:' + tint(p.name) });
+  if (!p.icon) return sq();
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches ? '1' : '0';
+  const img = h('img', { class: 'sq pic', alt: '', src: '/api/project/icon?path=' + encodeURIComponent(p.path) + '&dark=' + dark });
+  img.addEventListener('error', () => img.replaceWith(sq()));
+  return img;
+}
 function tint(name) {
   let n = 0; for (const c of name) n = (n * 31 + c.charCodeAt(0)) % 360;
   return `hsl(${n} 55% 50%)`;
@@ -301,12 +396,16 @@ let proj = { open: false, recent: [] }, items = [], saved = [], savedDir = '', g
 let state = { state: 'idle', custom: [], log: [] }, notice = '', dismissedErr = '', current = null, stateSig = '', rowsSig = '', gitBusy = false;
 
 const KIND = { scenario: 'Scenario', profile: 'Profile', flow: 'Test flow' };
-const VIEWS = ['session', 'library', 'saved', 'setup'];
-const TITLES = { session: 'Session', library: 'Mocks', saved: 'Saved responses', setup: 'Setup check' };
+const VIEWS = ['session', 'tests', 'profiles', 'preview', 'saved', 'setup'];
+const TITLES = { session: 'Session', tests: 'Tests', profiles: 'Profiles', preview: 'Preview', saved: 'Saved responses', setup: 'Setup check' };
+// Automated tests have their own page; profiles and scenarios are the data the app is served.
+const pageOf = (kind) => kind === 'flow' ? 'tests' : 'profiles';
 const viewName = () => {
   const v = location.hash.slice(2);
-  if (['scenario', 'profile', 'flow'].includes(v)) return 'library';
-  return VIEWS.includes(v) ? v : (state.serving ? 'session' : 'library');
+  if (v === 'library' || v === 'flow') return 'tests';
+  if (v === 'profile' || v === 'scenario') return 'profiles';
+  if (v === 'preview' && !previewTarget) return 'tests';
+  return VIEWS.includes(v) ? v : (state.serving ? 'session' : 'tests');
 };
 const go = (v) => { location.hash = '#/' + v; };
 const serving = () => state.state === 'serving' && state.serving;
@@ -333,25 +432,25 @@ function banner() {
 // ---------- chrome
 function renderSidebar() {
   const view = viewName();
-  const link = (v, ic, label, count, lead) => h('a', { href: '#/' + v, ...(view === v ? { 'aria-current': 'page' } : {}), title: label }, icon(ic), h('span', { class: 'label' }, label), lead, count != null && count !== '' ? h('span', { class: 'count' }, String(count)) : null);
+  const link = (v, ic, label, count, lead) => h('a', { href: '#/' + v, ...(view === v || (view === 'preview' && previewTarget && v === pageOf(previewTarget.kind)) ? { 'aria-current': 'page' } : {}), title: label }, icon(ic), h('span', { class: 'label' }, label), lead, count != null && count !== '' ? h('span', { class: 'count' }, String(count)) : null);
   const status = health ? (health.overall === 'ok' ? 'ok' : health.overall) : '';
   const others = (proj.recent || []).filter((r) => r.path !== proj.path);
   const tree = [];
-  tree.push(h('button', { class: 'navbtn proj', onclick: () => openProjectDialog() }, h('span', { class: 'sq', style: 'background:' + tint(proj.name) }), h('span', { class: 'label', style: 'font-weight:600' }, proj.name), h('span', { class: 'count' }, '')));
+  tree.push(h('button', { class: 'navbtn proj', onclick: () => openProjectDialog() }, projIcon(proj), h('span', { class: 'label', style: 'font-weight:600' }, proj.name), h('span', { class: 'count' }, '')));
   if (git && git.repo) tree.push(h('button', { class: 'navbtn sub', onclick: openGitDialog, title: 'Project version' }, icon('branch'), h('span', { class: 'label' }, git.branch + (git.behind > 0 ? ' · ' + git.behind + ' new' : '') + (git.dirty && git.dirty.length ? ' · changed' : ''))));
   tree.push(h('button', { class: 'navbtn sub', onclick: reloadCatalog, title: 'Read the scenarios from disk again' }, icon('refresh'), h('span', { class: 'label' }, 'Reload from disk')));
-  for (const r of others) tree.push(h('button', { class: 'navbtn proj', ...(r.exists ? {} : { disabled: '' }), onclick: () => openRecent(r.path), title: r.path }, h('span', { class: 'sq', style: 'background:' + tint(r.name) }), h('span', { class: 'label' }, r.name)));
+  for (const r of others) tree.push(h('button', { class: 'navbtn proj', ...(r.exists ? {} : { disabled: '' }), onclick: () => openRecent(r.path), title: r.path }, projIcon(r), h('span', { class: 'label' }, r.name)));
   fill($('sidebar'), 
     h('div', { class: 'brand' }, h('div', { class: 'mark' }, h('i')), h('span', {}, 'MockStro')),
     h('nav', { class: 'nav' },
       link('session', 'play', 'Session', serving() ? rows.length : '', serving() ? h('span', { class: 'dot ok', style: 'margin-left:-2px' }) : null),
       h('div', { class: 'glabel' }, 'Library'),
-      link('library', 'box', 'Mocks', items.length),
+      link('profiles', 'users', 'Profiles', items.filter((it) => it.kind !== 'flow').length),
+      link('tests', 'flow', 'Tests', items.filter((it) => it.kind === 'flow').length),
       link('saved', 'bookmark', 'Saved responses', saved.length),
-      h('div', { class: 'glabel' }, 'System'),
-      link('setup', 'check', 'Setup check', '', status ? h('span', { class: 'dot ' + status, style: 'margin-left:auto' }) : null),
       h('div', { class: 'glabel' }, 'Projects', h('button', { onclick: openProjectDialog, title: 'Open another project', 'aria-label': 'Open another project' }, icon('plus'))),
       h('div', { class: 'tree' }, tree)),
+    h('a', { class: 'sidecheck', href: '#/setup', ...(view === 'setup' ? { 'aria-current': 'page' } : {}), title: 'Setup check' }, icon('check'), h('span', { class: 'label' }, 'Setup check'), status ? h('span', { class: 'dot ' + status }) : null),
     h('div', { class: 'sidefoot' },
       h('span', { class: 'dot ' + (serving() ? 'ok' : '') }),
       h('span', { class: 'txt' }, serving() ? 'Serving on :' + state.serving.port : state.state === 'idle' ? 'Mock is off' : state.state === 'starting' ? 'Starting…' : 'Stopping…'),
@@ -379,7 +478,7 @@ function renderAll() { renderChrome(); if (current) current.update(); }
 function mountView() {
   if (!proj.open) return;
   const v = viewName();
-  const build = { session: mountSession, library: mountLibrary, saved: mountSaved, setup: mountSetup }[v];
+  const build = { session: mountSession, tests: () => mountLibrary('tests'), profiles: () => mountLibrary('profiles'), preview: mountPreview, saved: mountSaved, setup: mountSetup }[v];
   current = build();
   fill($('content'), current.el);
   document.querySelector('.scroll').scrollTop = 0;
@@ -412,69 +511,81 @@ function fold(id, defaultOpen, forceOpen, cls, summary, children) {
   return wrap;
 }
 
-function mountLibrary() {
-  let query = '', feature = '';
+// The search and chip filter outlive the view, so coming back from the Session does not mean searching again.
+const libs = { tests: { query: '', feature: '' }, profiles: { query: '', feature: '' } };
+function mountLibrary(page) {
+  const lib = libs[page], tests = page === 'tests';
+  const pool = () => items.filter((it) => (it.kind === 'flow') === tests);
+  const noun = tests ? 'tests' : 'profiles';
   const headSlot = h('div'), slot = h('div'), chipsEl = h('div', { class: 'chips' }), list = h('div');
-  const search = h('div', { class: 'search' }, icon('search'), h('input', { class: 'input', type: 'search', placeholder: 'Search mocks', 'aria-label': 'Search mocks', oninput: (e) => { query = e.target.value; draw(); } }));
+  const search = h('div', { class: 'search' }, icon('search'), h('input', { class: 'input', type: 'search', value: lib.query, placeholder: 'Search ' + noun, 'aria-label': 'Search ' + noun, oninput: (e) => { lib.query = e.target.value; draw(); } }));
   const el = h('div', { class: 'page single' }, h('div', { class: 'col' }, headSlot, slot, chipsEl, list));
 
   const matches = (it) => {
-    const q = query.trim().toLowerCase();
-    if (q && ![it.title, it.description, it.profileGroup, it.profile, ...(it.tags || [])].join(' ').toLowerCase().includes(q)) return false;
-    return !feature || (it.tags || []).includes(feature);
+    const q = lib.query.trim().toLowerCase();
+    if (q && ![it.title, it.description, it.profileGroup, it.profile, it.group, ...(it.tags || [])].join(' ').toLowerCase().includes(q)) return false;
+    return !lib.feature || (it.tags || []).includes(lib.feature);
   };
 
   function libRow(it) {
     const active = isActive(it);
-    const meta = [KIND_LABEL[it.kind]];
-    if (it.profile && it.kind !== 'profile') meta.push('Profile ' + it.profile);
+    const meta = [];
+    if (it.kind === 'scenario') meta.push('Scenario');
+    if (it.profile && it.kind !== 'profile' && it.profile !== it.profileGroup) meta.push('Profile ' + it.profile);
     const nf = Object.keys(it.fbrc || {}).length;
     if (nf) meta.push(nf + ' Remote Config ' + (nf > 1 ? 'values' : 'value'));
     const tags = it.tags || [];
     if (tags.length) meta.push(tags.join(', '));
-    const act = active ? h('button', { class: 'btn sm', onclick: () => go('session') }, 'Open session')
-      : h('button', { class: 'btn sm' + (serving() ? '' : ' primary'), ...(busy() ? { disabled: '' } : {}), onclick: () => start(it) }, serving() ? 'Switch to this' : 'Start');
-    return h('div', { class: 'row' + (active ? ' active' : '') },
-      h('div', { class: 'grow' }, h('div', { class: 'rt' }, it.title), it.description ? h('div', { class: 'rd' }, it.description) : null, h('div', { class: 'rm' }, meta.join(' · '))),
+    // The row itself opens the preview; the button starts it straight away.
+    const act = active ? h('button', { class: 'btn sm', onclick: (e) => { e.stopPropagation(); go('session'); } }, 'Open session')
+      : h('button', { class: 'btn sm' + (serving() ? '' : ' primary'), ...(busy() ? { disabled: '' } : {}), onclick: (e) => { e.stopPropagation(); start(it); } }, serving() ? 'Switch to this' : 'Start');
+    return h('div', { class: 'row click' + (active ? ' active' : ''), role: 'link', tabindex: '0', 'aria-label': 'Preview ' + it.title, onclick: () => openPreview(it),
+        onkeydown: (e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openPreview(it); } } },
+      h('div', { class: 'grow' }, h('div', { class: 'rt' }, it.title), it.description ? h('div', { class: 'rd' }, it.description) : null, meta.length ? h('div', { class: 'rm' }, meta.join(' · ')) : null),
       active ? badge('ok', 'Serving') : null, act);
   }
 
   function drawChips() {
-    const counts = new Map();
-    for (const it of items) for (const t of it.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+    const all = pool(), counts = new Map();
+    for (const it of all) for (const t of it.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
     const tags = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-    if (feature && !counts.has(feature)) feature = '';
+    if (lib.feature && !counts.has(lib.feature)) lib.feature = '';
     const chip = (label, n, on, fn) => h('button', { class: 'pillbtn', 'aria-pressed': String(on), onclick: fn }, label, n != null ? h('small', {}, String(n)) : null);
-    fill(chipsEl, tags.length ? [chip('All', items.length, !feature, () => { feature = ''; drawChips(); draw(); }), ...tags.map(([t, n]) => chip(t, n, feature === t, () => { feature = feature === t ? '' : t; drawChips(); draw(); }))] : []);
+    fill(chipsEl, tags.length ? [chip('All', all.length, !lib.feature, () => { lib.feature = ''; drawChips(); draw(); }), ...tags.map(([t, n]) => chip(t, n, lib.feature === t, () => { lib.feature = lib.feature === t ? '' : t; drawChips(); draw(); }))] : []);
     chipsEl.hidden = !tags.length;
   }
 
   function draw() {
-    const filtering = !!(query.trim() || feature);
-    const shown = items.filter(matches);
+    const filtering = !!(lib.query.trim() || lib.feature);
+    const all = pool(), shown = all.filter(matches);
     fill(list);
-    if (!shown.length) { list.append(h('div', { class: 'note' }, items.length ? 'Nothing matches that.' : 'There is nothing to mock in this project yet.')); return; }
-    const order = { scenario: 0, profile: 1 };
-    for (const g of new Set(shown.map((it) => it.profileGroup || 'Other'))) {
-      const inGroup = shown.filter((it) => (it.profileGroup || 'Other') === g);
-      if (!inGroup.length) continue;
-      const mocks = inGroup.filter((it) => it.kind !== 'flow').sort((a, b) => order[a.kind] - order[b.kind] || a.title.localeCompare(b.title));
-      const tests = inGroup.filter((it) => it.kind === 'flow').sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.title.localeCompare(b.title));
-      const kids = mocks.map(libRow);
-      if (tests.length) {
-        const rows = []; let grp = null;
-        for (const it of tests) { if (it.group && it.group !== grp) { grp = it.group; rows.push(h('div', { class: 'gh' }, grp)); } rows.push(libRow(it)); }
-        kids.push(fold('a:' + g, tests.some(isActive), filtering, 'nested', [h('span', { class: 'fname' }, 'Automated tests'), h('span', { class: 'fcount' }, String(tests.length)), h('span', { class: 'grow' }), tests.some(isActive) ? badge('ok', 'Serving') : null], rows));
+    if (!shown.length) { list.append(h('div', { class: 'note' }, all.length ? 'Nothing matches that.' : tests ? 'This project has no automated tests yet.' : 'This project has no profiles yet.')); return; }
+    const groups = [...new Set(shown.map((it) => it.profileGroup || 'Other'))];
+    if (!tests) {
+      // Most groups hold one profile of the same name, so a heading only appears when it adds something.
+      const order = { profile: 0, scenario: 1 };
+      for (const g of groups) {
+        const inGroup = shown.filter((it) => (it.profileGroup || 'Other') === g).sort((a, b) => order[a.kind] - order[b.kind] || a.title.localeCompare(b.title));
+        if (groups.length > 1 && !(inGroup.length === 1 && inGroup[0].title === g)) list.append(h('div', { class: 'gh' }, g));
+        list.append(...inGroup.map(libRow));
       }
-      list.append(fold('g:' + g, inGroup.some(isActive), filtering, '', [h('span', { class: 'fname' }, g), h('span', { class: 'fcount' }, String(inGroup.length)), h('span', { class: 'grow' }), inGroup.some(isActive) ? badge('ok', 'Serving') : null], kids));
+      return;
+    }
+    for (const g of groups) {
+      const inGroup = shown.filter((it) => (it.profileGroup || 'Other') === g).sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.title.localeCompare(b.title));
+      const rows = []; let grp = null;
+      for (const it of inGroup) { if (it.group && it.group !== grp) { grp = it.group; rows.push(h('div', { class: 'gh' }, grp)); } rows.push(libRow(it)); }
+      list.append(fold('t:' + g, inGroup.some(isActive), filtering, '', [h('span', { class: 'fname' }, g), h('span', { class: 'fcount' }, String(inGroup.length)), h('span', { class: 'grow' }), inGroup.some(isActive) ? badge('ok', 'Serving') : null], rows));
     }
   }
 
   return {
     el,
     update() {
-      const lede = 'Choose a profile group, then a ready-made setup or the data an automated test uses. ' + items.length + ' in this project.';
-      if (!headSlot.firstChild) fill(headSlot, head('Mocks', null, lede, search)); else headSlot.querySelector('.lede').textContent = lede;
+      const n = pool().length;
+      const lede = tests ? 'Automated tests, grouped by the profile they use. Open one to see its steps before you start it. ' + n + ' in this project.'
+        : 'The data the app is served. Start one to explore the app by hand. ' + n + ' in this project.';
+      if (!headSlot.firstChild) fill(headSlot, head(TITLES[page], null, lede, search)); else headSlot.querySelector('.lede').textContent = lede;
       const b = banner(); fill(slot, b ? [b] : []);
       drawChips(); draw();
     },
@@ -483,7 +594,17 @@ function mountLibrary() {
 
 // Remote Config editor: change what the app is served without restarting the mock.
 let fbrcNote = null, knownKeys = null;
-function fbrcEditor(s) {
+// When the tester last applied Remote Config, so the page can say whether the app has fetched it since.
+let fbrcApplied = null;
+const fetchStatusEl = h('p', { class: 'hint fb-status', role: 'status', 'aria-live': 'polite', hidden: '' });
+function updateFetchStatus(s) {
+  if (!fbrcApplied || fbrcApplied.name !== s.name) { fetchStatusEl.hidden = true; return; }
+  const seen = rows.filter((r) => /namespaces\/firebase:fetch/.test(r.url) && r.time >= fbrcApplied.at);
+  fetchStatusEl.hidden = false;
+  fetchStatusEl.className = 'hint fb-status' + (seen.length ? ' good' : '');
+  fetchStatusEl.textContent = seen.length ? '✓ The app fetched the new values at ' + fmtTime(Math.max(...seen.map((r) => r.time))) + '.' : 'Waiting for the app to fetch the new values. Relaunch the app.';
+}
+function fbrcEditor(s, opts = {}) {
   const defaults = s.defaultFbrc || {}, current = s.fbrc || {};
   let draft = { ...current };
   const same = (a, b) => { const ka = Object.keys(a); return ka.length === Object.keys(b).length && ka.every((k) => k in b && a[k] === b[k]); };
@@ -516,16 +637,24 @@ function fbrcEditor(s) {
   }
   async function apply() {
     try { await api('/api/fbrc', { values: draft }); } catch (e) { setNote(e.message, 'bad'); return; }
-    fbrcNote = { text: 'Applied. The app picks the new values up the next time it fetches Remote Config, usually when you relaunch it.', cls: 'good' };
+    fbrcApplied = { name: s.name, at: Date.now() }; updateFetchStatus(s);
+    fbrcNote = { text: 'Applied.', cls: 'good' };
     setNote(fbrcNote.text, 'good'); refresh();
   }
   async function resetAll() {
     try { await api('/api/fbrc/reset', {}); } catch (e) { setNote(e.message, 'bad'); return; }
-    fbrcNote = { text: 'Back to the scenario\'s values. Relaunch the app to fetch them.', cls: 'good' };
+    fbrcApplied = { name: s.name, at: Date.now() }; updateFetchStatus(s);
+    fbrcNote = { text: 'Back to the scenario\'s values.', cls: 'good' };
     setNote(fbrcNote.text, 'good'); refresh();
   }
   function drawBar() {
     const n = nChanges();
+    if (opts.draftOnly) {
+      fill(bar, h('span', { class: 'grow muted' }, n ? 'Changed from this mock\'s own values. They apply when you start it.' : 'This mock\'s own values.'),
+        n ? h('button', { class: 'btn', onclick: () => { draft = { ...defaults }; clearNote(); redraw(); } }, 'Reset') : null);
+      if (opts.onChange) opts.onChange({ ...draft });
+      return;
+    }
     fill(bar, h('span', { class: 'grow muted' }, n ? n + (n === 1 ? ' change' : ' changes') + ' not applied yet' : 'No unapplied changes'),
       !same(current, defaults) ? h('button', { class: 'btn', onclick: resetAll }, 'Reset to scenario') : null,
       h('button', { class: 'btn', ...(n ? {} : { disabled: '' }), onclick: () => { draft = { ...current }; clearNote(); redraw(); } }, 'Discard'),
@@ -541,25 +670,317 @@ function fbrcEditor(s) {
   };
   redraw();
   return h('div', {},
-    h('p', { class: 'hint fb-intro' }, 'What the app gets from Remote Config. Change a value, remove one to test the app with that key missing, or add one, then apply. The app picks changes up on its next fetch, usually when you relaunch it.'),
-    note, list, removed,
+    h('p', { class: 'hint fb-intro' }, opts.draftOnly ? 'Set these before you start: change a value, remove one to test the app with that key missing, or add one. The app is served them from its first fetch.' : 'What the app gets from Remote Config. Change a value, remove one to test the app with that key missing, or add one, then apply. The app picks changes up on its next fetch, usually when you relaunch it.'),
+    note, opts.draftOnly ? null : fetchStatusEl, list, removed,
     h('div', { class: 'fb-add' }, addKey, addVal, h('button', { class: 'btn', onclick: add }, 'Add')),
     bar, dl);
 }
 
 // Session: what is running right now
+// ---------- preview: see and set up a mock before it runs
+let previewTarget = null;
+function openPreview(it) { previewTarget = { kind: it.kind, ref: it.ref }; go('preview'); }
+const sameValues = (a, b) => { const ka = Object.keys(a); return ka.length === Object.keys(b).length && ka.every((k) => k in b && a[k] === b[k]); };
+
+// Which step of a scenario a stub answers in, in words a tester can follow.
+const stateWord = (st) => !st.state || st.state === 'Started' ? 'At the start' : 'After ' + (st.after || st.state);
+const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
+const flatValues = (v, prefix, out) => {
+  if (v && typeof v === 'object') for (const k of Object.keys(v)) flatValues(v[k], prefix ? prefix + (Array.isArray(v) ? '[' + k + ']' : '.' + k) : k, out);
+  else out[prefix || '(value)'] = JSON.stringify(v);
+  return out;
+};
+// What differs between two JSON bodies, as field: before → after. Null when either is not JSON.
+function bodyDiff(a, b) {
+  try {
+    const x = flatValues(JSON.parse(a), '', {}), y = flatValues(JSON.parse(b), '', {});
+    return [...new Set([...Object.keys(x), ...Object.keys(y)])].filter((k) => x[k] !== y[k]).map((k) => ({ key: k, from: x[k] === undefined ? '(absent)' : x[k], to: y[k] === undefined ? '(absent)' : y[k] }));
+  } catch { return null; }
+}
+
+function mountPreview() {
+  const headSlot = h('div'), main = h('div'), panel = h('aside', { class: 'panel', id: 'pv-panel', 'aria-label': 'Details and Remote Config' });
+  // The side panel and the responses dock start closed so the test script is what a tester reads first.
+  let panelOpen = store.get('pv-panel', 'closed') === 'open', dockOpen = store.get('pv-dock', 'closed') === 'open';
+  const dockHead = h('button', { class: 'pv-dock-head', 'aria-controls': 'pv-dock-body' }), dockBody = h('div', { class: 'pv-dock-body', id: 'pv-dock-body', style: 'height:0' });
+  const grip = h('div', { class: 'pv-grip', role: 'separator', tabindex: '0', 'aria-orientation': 'horizontal', 'aria-label': 'Resize the responses', 'aria-controls': 'pv-dock-body' });
+  const dock = h('section', { class: 'pv-dock', 'aria-label': 'Responses it will serve', hidden: '' }, grip, dockHead, dockBody);
+  main.classList.add('pv-main');
+  const col = h('div', { class: 'col' }, headSlot, main, dock);
+  const el = h('div', { class: 'page tg pv' }, col, panel);
+  // The dock keeps the height it was dragged to; until then it takes a bit under half the column.
+  let dockH = Number(store.get('pv-dock-h', '0')) || 0;
+  const maxH = () => Math.max(160, col.clientHeight - headSlot.offsetHeight - 96);
+  const fitH = (px) => Math.min(Math.max(px, 140), maxH());
+  const setDock = (open) => { dockOpen = open; store.set('pv-dock', open ? 'open' : 'closed'); drawDock(); };
+  dockHead.addEventListener('click', () => setDock(!dockOpen));
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    const startY = e.clientY, startH = dockOpen ? dockBody.offsetHeight : 0;
+    let moved = false;
+    dock.classList.add('dragging');
+    const move = (ev) => {
+      if (!moved && Math.abs(ev.clientY - startY) < 3) return;
+      moved = true;
+      if (!dockOpen) { dockOpen = true; dock.classList.add('open'); }
+      dockBody.style.height = Math.min(Math.max(startH + startY - ev.clientY, 0), maxH()) + 'px';
+    };
+    const end = () => {
+      grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', end); grip.removeEventListener('pointercancel', end);
+      dock.classList.remove('dragging');
+      if (!moved) { setDock(!dockOpen); return; }
+      // Dragged nearly shut closes it, and the last real height is kept for the next open.
+      const hh = dockBody.offsetHeight;
+      if (hh < 90) { setDock(false); return; }
+      dockH = fitH(hh); store.set('pv-dock-h', String(dockH)); setDock(true);
+    };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', end); grip.addEventListener('pointercancel', end);
+  });
+  grip.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowUp' ? 40 : e.key === 'ArrowDown' ? -40 : 0;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDock(!dockOpen); return; }
+    if (!step) return;
+    e.preventDefault();
+    const hh = (dockOpen ? dockBody.offsetHeight : 0) + step;
+    if (hh < 90) { setDock(false); return; }
+    dockH = fitH(hh); store.set('pv-dock-h', String(dockH)); setDock(true);
+  });
+  const showPanel = () => { panel.hidden = !panelOpen; el.classList.toggle('nopanel', !panelOpen); };
+  showPanel();
+  const it = items.find((i) => previewTarget && i.kind === previewTarget.kind && i.ref === previewTarget.ref);
+  let pv = null, failed = '', draft = null;
+  const customDraft = new Map(), details = new Map(), expanded = new Set();
+  let filterText = '';
+  if (!it) { setTimeout(() => go('tests')); return { el, update() {} }; }
+
+  const keyOf = (st) => st.method + ' ' + st.path + (st.scenario && st.state ? ' [' + st.scenario + ': ' + st.state + ']' : '');
+  const changedFbrc = () => pv && draft && !sameValues(draft, pv.fbrc);
+  function drawHead() {
+    const changed = changedFbrc() || customDraft.size > 0;
+    const label = (serving() ? 'Switch to this' : 'Start') + (changed ? ' with your changes' : '');
+    const hd = head(it.title, null, pv ? pv.description || [KIND_LABEL[it.kind], it.profile ? 'Profile ' + it.profile : null].filter(Boolean).join(' · ') : 'Reading it…',
+      [h('button', { class: 'btn', 'aria-pressed': String(panelOpen), 'aria-controls': 'pv-panel', title: (panelOpen ? 'Hide' : 'Show') + ' details and Remote Config',
+          onclick: () => { panelOpen = !panelOpen; store.set('pv-panel', panelOpen ? 'open' : 'closed'); showPanel(); drawHead(); } },
+         icon('panel'), 'Details', changedFbrc() ? h('span', { class: 'dot warn', title: 'Remote Config changed' }) : null),
+       h('button', { class: 'btn primary', ...(!pv || busy() ? { disabled: '' } : {}), onclick: () => start(it, changedFbrc() ? draft : undefined, customDraft.size ? [...customDraft.values()] : undefined) }, icon('play'), label)]);
+    hd.prepend(h('button', { class: 'back', onclick: () => go(pageOf(it.kind)) }, icon('left'), TITLES[pageOf(it.kind)]));
+    fill(headSlot, hd);
+  }
+
+  async function detailOf(name) {
+    if (!details.has(name)) details.set(name, await api('/api/stub?name=' + encodeURIComponent(name)));
+    return details.get(name);
+  }
+  async function editStub(st) {
+    let d;
+    try { d = await detailOf(st.name); } catch (e) { flash(e.message); return; }
+    const mine = customDraft.get(keyOf(st)) || {};
+    openEditor({ method: d.method, path: d.path, ...(st.scenario && st.state ? { scenario: st.scenario, state: st.state } : {}), status: mine.status || d.status, headers: mine.headers || d.headers, body: mine.body !== undefined ? mine.body : d.body, delayMs: mine.delayMs !== undefined ? mine.delayMs : d.delayMs },
+      '', { onApply: (payload) => { customDraft.set(keyOf(st), payload); drawHead(); drawStubs(); },
+            info: st.scenario && st.state ? 'This answer is used ' + lowerFirst(stateWord(st)) + '. Your edit keeps the test\'s steps, so the other answers still change as before.' : '',
+            note: [d.scenario && !d.state ? 'This call is part of a scenario but has no state of its own, so a response set here replaces it for every state and it will stop changing.' : '', d.template ? 'This response uses {{templates}} that WireMock fills in for each request. Editing replaces it with the fixed text below.' : '', d.truncated ? 'The body is longer than what is shown here. Editing replaces it with the text below.' : ''].filter(Boolean).join(' ') });
+  }
+  function detailBox(st, noEdit) {
+    const mine = customDraft.get(keyOf(st)), d = details.get(st.name);
+    if (!d) return h('div', { class: 'pv-detail pv-meta' }, 'Loading…');
+    const show = mine || d;
+    const hdrs = Object.entries(show.headers || {}).map(([k, v]) => k + ': ' + v).join('\n');
+    const body = show.body ? show.body + (!mine && d.truncated ? '\n… (cut off)' : '') : '';
+    return h('div', { class: 'pv-detail' },
+      noEdit ? h('p', { class: 'hint', style: 'margin:0 0 6px' }, noEdit) : null,
+      h('div', { class: 'pv-meta' }, [mine ? 'Your edited response' : 'Response', 'status ' + show.status, show.delayMs ? show.delayMs + ' ms delay' : null, !mine && d.template ? 'uses templates' : null, 'stub ' + st.name].filter(Boolean).join(' · ')),
+      hdrs ? h('pre', {}, hdrs) : null,
+      body ? h('div', { class: 'pv-code' }, h('pre', {}, body), h('button', { class: 'btn sm pv-copy', onclick: (e) => copyText(show.body, e.currentTarget) }, 'Copy')) : h('div', { class: 'pv-meta', style: 'margin-top:6px' }, 'No body.'));
+  }
+  function stubRow(st, label) {
+    const mine = customDraft.get(keyOf(st)), open = expanded.has(st.name);
+    const noEdit = st.next ? 'This call moves the test on, so it can\'t be edited here. Edit the answers it leads to instead.' : !st.editable ? 'This stub answers several URLs, so it can\'t be edited here. Once the app calls it, edit it from Requests.' : st.replaced ? 'The stub above answers this call instead. Edit that one.' : '';
+    // A row opens to show the response; editing is offered there, once the tester has seen what it is.
+    const toggle = async () => { if (open) expanded.delete(st.name); else { expanded.add(st.name); drawStubs(); try { await detailOf(st.name); } catch (e) { flash(e.message); expanded.delete(st.name); } } drawStubs(); };
+    const meta = [st.checked ? 'checked by this test' : null, st.next ? 'moves the test on to "' + st.next + '"' : (!label && st.scenario ? 'changes as the test runs' : null), st.replaced ? 'replaced by the stub above' : null].filter(Boolean).join(' · ');
+    const row = h('div', { class: 'row click pv-row' + (open ? ' open' : '') + (st.replaced ? ' pv-dim' : ''), role: 'button', tabindex: '0', 'aria-expanded': String(open), onclick: toggle,
+        onkeydown: (e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } } },
+      icon('right'),
+      h('div', { class: 'grow' }, label ? h('div', { class: 'rt' }, label) : h('div', { class: 'rt mono' }, st.method ? st.method + ' ' + st.path : st.name), meta ? h('div', { class: 'rm' }, meta) : null),
+      mine ? badge('warn', 'edited') : null,
+      st.status ? h('span', { class: 'chip' }, String(mine ? mine.status : st.status)) : null,
+      // Editing is offered once the row is open, so the list itself stays quiet.
+      open && mine ? h('button', { class: 'btn sm ghost', onclick: (e) => { e.stopPropagation(); customDraft.delete(keyOf(st)); drawHead(); drawStubs(); } }, 'Undo my edit') : null,
+      open ? h('button', { class: 'btn sm', ...(noEdit ? { disabled: '', title: noEdit } : {}), onclick: (e) => { e.stopPropagation(); editStub(st); } }, mine ? 'Edit again' : 'Edit') : null);
+    return h('div', {}, row, open ? detailBox(st, noEdit) : null);
+  }
+  const asked = new Set();
+  function routeBlock(states) {
+    const sorted = [...states].sort((a, b) => (b.state === 'Started') - (a.state === 'Started'));
+    for (const st of sorted) if (!asked.has(st.name)) { asked.add(st.name); detailOf(st.name).then(drawStubs).catch(() => {}); }
+    const bodyOf = (st) => { const mine = customDraft.get(keyOf(st)), d = details.get(st.name); return mine ? mine.body : d ? d.body : null; };
+    const changes = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const a = bodyOf(sorted[i - 1]), b = bodyOf(sorted[i]);
+      if (a === null || b === null) continue;
+      const diff = bodyDiff(a, b);
+      if (diff === null) continue;
+      changes.push(h('div', { class: 'pv-detail' }, h('div', { class: 'pv-meta' }, (diff.length ? 'What changes ' + lowerFirst(stateWord(sorted[i])) : 'The answers at the start and ' + lowerFirst(stateWord(sorted[i])) + ' are the same')),
+        diff.length ? h('pre', {}, diff.slice(0, 12).map((c) => c.key + ': ' + c.from + ' → ' + c.to).join('\n') + (diff.length > 12 ? '\n… and ' + (diff.length - 12) + ' more' : '')) : null));
+    }
+    return h('div', { class: 'pv-route' },
+      h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'rt mono' }, sorted[0].method + ' ' + sorted[0].path),
+        h('div', { class: 'rm' }, sorted.length + ' answers, one for each step of the test (scenario ' + sorted[0].scenario + ')'))),
+      changes, sorted.map((st) => h('div', { class: 'pv-state' }, stubRow(st, stateWord(st)))));
+  }
+  // Stubs that answer one call in different steps of the same scenario read as one call, in order.
+  function blocksOf(rows) {
+    const out = [], seen = new Map();
+    for (const st of rows) {
+      const k = st.scenario && st.state ? st.method + ' ' + st.path + ' ' + st.scenario : '';
+      if (k && seen.has(k)) seen.get(k).push(st); else { const b = [st]; out.push(b); if (k) seen.set(k, b); }
+    }
+    return out.map((b) => b.length > 1 ? routeBlock(b) : stubRow(b[0]));
+  }
+  const stubsEl = h('div');
+  const filterInput = h('input', { class: 'input', type: 'search', placeholder: 'Filter by path or stub name', 'aria-label': 'Filter responses', oninput: (e) => { filterText = e.target.value; drawStubs(); } });
+  function drawDock() {
+    const edits = customDraft.size;
+    fill(dockHead, icon('up'), h('span', { class: 'fname' }, 'Responses it will serve'), h('span', { class: 'fcount' }, pv.stubs.length + ' API calls'),
+      edits ? badge('warn', edits + ' edited') : null, h('span', { class: 'grow' }), h('span', { class: 'pv-dock-hint' }, dockOpen ? 'Hide' : 'Show'));
+    dockHead.setAttribute('aria-expanded', String(dockOpen));
+    const hh = dockOpen ? fitH(dockH || Math.round(col.clientHeight * 0.45)) : 0;
+    dockBody.style.height = hh + 'px';
+    grip.setAttribute('aria-valuenow', String(hh)); grip.setAttribute('aria-valuemin', '0'); grip.setAttribute('aria-valuemax', String(maxH()));
+    dock.classList.toggle('open', dockOpen);
+  }
+  function drawStubs() {
+    if (!dock.hidden) drawDock();
+    const q = filterText.trim().toLowerCase();
+    const shown = pv.stubs.filter((st) => !q || [st.path, st.name, st.method].join(' ').toLowerCase().includes(q));
+    const who = pv.kind === 'profile' ? it.ref : pv.profile;
+    const groups = [['test', 'Added by this ' + (pv.kind === 'flow' ? 'test' : 'mock')], ['customer', 'Profile' + (who ? ': ' + who : '')], ['shared', 'Shared defaults']];
+    fill(stubsEl, groups.map(([g, title]) => {
+      const rows = shown.filter((st) => st.group === g);
+      if (!rows.length) return null;
+      return fold('pv:' + g, g === 'test', !!q, '', [h('span', { class: 'fname' }, title), h('span', { class: 'fcount' }, String(rows.length)), h('span', { class: 'grow' }),
+        rows.some((st) => customDraft.has(keyOf(st))) ? badge('warn', 'edited') : null], blocksOf(rows));
+    }), shown.length ? null : h('div', { class: 'note' }, pv.stubs.length ? 'Nothing matches that.' : 'This mock answers no extra calls.'));
+  }
+
+  function drawBody() {
+    if (failed) { fill(main, h('div', { class: 'note' }, failed)); fill(panel); return; }
+    if (!pv) { fill(main, h('div', { class: 'note' }, 'Reading it…')); return; }
+    const platforms = guidePlatforms(pv.steps);
+    let pick = guidePlatform(platforms);
+    const pad = (...kids) => h('div', { style: 'padding:6px 28px 8px' }, ...kids);
+    // With a script the responses dock at the bottom; without one they are the page.
+    const docked = !!(pv.steps && pv.steps.length);
+    const responsesHint = h('p', { class: 'hintp', style: 'margin:0' }, 'Open a response to see exactly what the app gets, or edit it. Edits are applied the moment you start.');
+    const drawMain = () => {
+      fill(main,
+        docked ? h('div', { class: 'pv-script' }, h('div', { class: 'ph' }, 'Test script', h('span', {}, doCount(pv.steps, pick) + ' steps')),
+          stepsPanel(pv, platforms, pick, (p) => { store.set('platform', p); pick = p; drawMain(); }, 'What you will do and see once it is running.')) : null,
+        pv.checks && pv.checks.length ? pad(h('div', { class: 'ph' }, 'Checked while it runs'), h('div', { class: 'tg-checks' }, pv.checks.map((c) => h('div', { class: 'tg-chk' },
+          h('span', { class: 'ic' }, '…'), h('div', {}, h('div', { class: 'ct' }, c.label), h('div', { class: 'cd' }, 'Expected ' + c.expect + ' once you start')))))) : null,
+        docked ? null : [pad(h('div', { class: 'ph' }, 'Responses it will serve', h('span', {}, pv.stubs.length + ' API calls')), responsesHint), h('div', { class: 'pv-filter' }, filterInput), stubsEl]);
+    };
+    drawMain();
+    dock.hidden = !docked;
+    if (docked) fill(dockBody, responsesHint, h('div', { class: 'pv-filter' }, filterInput), stubsEl);
+    drawStubs();
+    fill(panel, h('div', { class: 'ph' }, 'Details'),
+      kvList([['Type', KIND[pv.kind] || pv.kind], ['Profile', pv.profile || 'none'], ['API calls', String(pv.stubs.length)]]),
+      h('div', { class: 'ph' }, 'Remote Config', h('span', {}, Object.keys(pv.fbrc).length + ' set')),
+      fbrcEditor({ name: pv.ref, fbrc: pv.fbrc, defaultFbrc: pv.fbrc }, { draftOnly: true, onChange: (d) => { draft = d; drawHead(); } }));
+  }
+  api('/api/preview?kind=' + encodeURIComponent(it.kind) + '&ref=' + encodeURIComponent(it.ref))
+    .then((r) => { pv = r; draft = { ...r.fbrc }; drawHead(); drawBody(); })
+    .catch((e) => { failed = e.message; drawHead(); drawBody(); });
+  drawHead(); drawBody();
+  return { el, update() { drawHead(); } };
+}
+
+// ---------- test script: a served flow's steps and live checks
+const PLATFORM_NAME = { android: 'Android', ios: 'iOS' };
+
+// Each check is counted from the journal the page already polls: how often its stub answered.
+function checkStates(checks) {
+  return (checks || []).map((c) => {
+    const got = rows.filter((r) => r.stub === c.stub).length;
+    const over = c.max != null && got > c.max;
+    const ok = got >= c.min && !over;
+    return { ...c, got, over, ok, status: over ? 'fail' : ok ? 'ok' : 'info' };
+  });
+}
+function guidePlatforms(steps) {
+  const found = new Set();
+  const walk = (list) => (list || []).forEach((st) => { if (st.platform) found.add(st.platform); walk(st.steps); });
+  walk(steps);
+  return [...found].sort();
+}
+// The tester's last choice, else the project's own platform, else the first the flow mentions.
+function guidePlatform(platforms) {
+  const saved = store.get('platform', ''), own = (proj.platform || '').toLowerCase();
+  return platforms.includes(saved) ? saved : platforms.includes(own) ? own : platforms[0] || '';
+}
+function stepsPanel(s, platforms, pick, onPick, hint) {
+  const counter = { n: 0 };
+  const forPick = (list) => (list || []).filter((st) => !st.platform || st.platform === pick);
+  const stepRows = (list) => forPick(list).map((st) => {
+    if (st.kind === 'if') {
+      return h('div', { class: 'tg-if' }, h('div', { class: 'tg-ifh' }, st.text + (st.note ? ' — ' + st.note : '') + ':'), stepRows(st.steps));
+    }
+    const opt = st.optional ? h('small', {}, 'if it appears') : null;
+    const text = h('div', { class: 'grow' }, h('div', { class: 'tg-t' }, st.text, opt), st.note ? h('div', { class: 'tg-note' }, st.note) : null);
+    if (st.kind === 'do') return h('div', { class: 'tg-step tg-do' }, h('span', { class: 'tg-n' }, String(++counter.n)), text);
+    return h('div', { class: 'tg-step tg-' + st.kind }, h('span', { class: 'tg-mark', 'aria-hidden': 'true' }, st.kind === 'gone' ? '–' : '✓'), text);
+  });
+  return h('div', {},
+    platforms.length > 1 ? h('div', { class: 'tg-pick' }, h('span', { class: 'hint' }, 'Steps for'),
+      ...platforms.map((p) => h('button', { class: 'seg', 'aria-pressed': String(p === pick), onclick: () => onPick(p) }, PLATFORM_NAME[p] || p))) : null,
+    h('p', { class: 'hintp', style: 'margin:0 0 8px' }, hint || 'To run it again, stop the mock and start it again.'),
+    stepRows(s.steps));
+}
+
+// How many things the tester does on the platform being shown, for the fold's heading.
+const doCount = (steps, pick) => (steps || []).filter((st) => !st.platform || st.platform === pick).reduce((n, st) => n + (st.kind === 'do' ? 1 : 0) + doCount(st.steps, pick), 0);
+
+// The checks sit in the side panel so they stay in view on every tab while the tester follows the steps.
+function checkPanel(checks) {
+  const states = checkStates(checks);
+  if (!states.length) return [];
+  return [h('div', { class: 'ph' }, 'Live checks', h('span', {}, states.filter((c) => c.ok).length + ' of ' + states.length)),
+    h('div', { class: 'tg-checks' }, states.map((c) => h('div', { class: 'tg-chk' },
+      h('span', { class: 'ic ' + c.status, role: 'img', 'aria-label': c.over ? 'Too many' : c.ok ? 'Done' : 'Waiting' }, c.over ? '✕' : c.ok ? '✓' : '…'),
+      h('div', {}, h('div', { class: 'ct' }, c.label), h('div', { class: 'cd' }, (c.got ? 'Served ' + c.got + (c.got === 1 ? ' time' : ' times') : 'Not requested yet') + ' · expected ' + c.expect)))))];
+}
+
 function mountSession() {
   let tab = store.get('tab', 'requests'), onlyUnmatched = false;
   const headSlot = h('div'), slot = h('div'), tabsEl = h('div', { class: 'tabs', role: 'tablist' }), body = h('div'), panel = h('aside', { class: 'panel' });
+  // The steps are rebuilt only when they change and the folded details keep their open state, so neither jumps on the 1 s refresh.
+  const checksSlot = h('div'), stepsSum = h('summary', {}), stepsSlot = h('div'), stepsEl = h('details', { class: 'tg-more', ...(store.get('steps-fold', 'open') === 'open' ? { open: '' } : {}) }, stepsSum, stepsSlot), moreBody = h('div'), moreEl = h('details', { class: 'tg-more' }, h('summary', {}, 'Details and saved responses'), moreBody);
+  stepsEl.addEventListener('toggle', () => store.set('steps-fold', stepsEl.open ? 'open' : 'closed'));
+  const fbrcSum = h('summary', {}), fbrcSlot = h('div'), fbrcEl = h('details', { class: 'tg-more' }, fbrcSum, fbrcSlot);
   const el = h('div', { class: 'page' }, h('div', { class: 'col' }, headSlot, slot, tabsEl, body), panel);
 
+  // The last few things run in this project, each one click from starting again.
+  function recentRows() {
+    const known = recents().map((r) => ({ r, it: items.find((i) => i.kind === r.kind && i.ref === r.ref) })).filter((x) => x.it);
+    if (!known.length) return null;
+    const dis = busy() ? { disabled: '' } : {};
+    return [h('div', { class: 'gh' }, 'Recent'), ...known.map(({ r, it }, i) => h('div', { class: 'row' },
+      h('div', { class: 'grow' }, h('div', { class: 'rt' }, it.title), h('div', { class: 'rm' }, [KIND_LABEL[it.kind], r.fbrc || r.custom ? 'with your changes' : null].filter(Boolean).join(' · '))),
+      h('button', { class: 'btn sm ghost', onclick: () => openPreview(it) }, 'Preview'),
+      h('button', { class: 'btn sm' + (i === 0 ? ' primary' : ''), ...dis, onclick: () => start(it, r.fbrc, r.custom) }, i === 0 ? 'Start again' : 'Start')))];
+  }
+
   function idle() {
+    el.classList.remove('tg');
     const starting = state.state === 'starting', stopping = state.state === 'stopping';
     fill(headSlot, head('Session', badge(starting || stopping ? 'warn' : '', starting ? 'Starting' : stopping ? 'Stopping' : 'Idle'), starting ? 'Starting the mock server. This can take a few seconds.' : 'Nothing is running.'));
     fill(tabsEl);
     fill(body, h('div', { class: 'empty' }, h('div', { class: 'ring' }, icon('play')), h('h2', {}, starting ? 'Starting…' : 'Nothing is running'),
-      h('p', {}, 'Pick a scenario or a profile, press Start, then use the app. Every request it makes shows up here.'),
-      starting || stopping ? null : h('button', { class: 'btn primary', onclick: () => go('library') }, 'Browse mocks')));
+      h('p', {}, 'Pick a test or a profile, press Start, then use the app. Every request it makes shows up here.'),
+      starting || stopping ? null : h('button', { class: 'btn primary', onclick: () => go('tests') }, 'Browse tests')),
+      recentRows());
     const kv = [['Project', proj.name], ['Platform', proj.platform || 'unknown']];
     if (git && git.repo) { kv.push(['Branch', git.branch]); if (git.commit) kv.push(['Latest change', git.commit.subject + ' · ' + git.commit.when]); }
     fill(panel, h('div', { class: 'ph' }, 'Details'), kvList(kv),
@@ -570,10 +991,13 @@ function mountSession() {
   function live() {
     const s = state.serving, custom = state.custom || [], fbrc = Object.entries(s.fbrc || {});
     fill(headSlot, head(s.name, badge('ok', 'Serving'), [KIND[s.kind], s.profile ? 'Profile ' + s.profile : null, 'port ' + s.port].filter(Boolean).join(' · ') + (s.description ? '. ' + s.description : ''),
-      [h('button', { class: 'btn', onclick: () => go('library') }, 'Choose another'),
+      [h('button', { class: 'btn', onclick: () => go(pageOf(s.kind)) }, 'Choose another'),
        h('button', { class: 'btn danger', ...(busy() ? { disabled: '' } : {}), onclick: stopMock }, icon('stop'), 'Stop mock')]));
     const unmatched = rows.filter((r) => r.unmatched).length;
-    const tabs = [['requests', 'Requests', rows.length], ['custom', 'Custom responses', custom.length], ['fbrc', 'Remote Config', fbrc.length, JSON.stringify(s.fbrc) !== JSON.stringify(s.defaultFbrc) ? h('small', { style: 'color:var(--warn);margin-left:6px' }, 'edited') : null], ['activity', 'Activity', null]];
+    const guide = (s.steps && s.steps.length) || (s.checks && s.checks.length);
+    updateFetchStatus(s);
+    // A flow with a test script keeps Remote Config in the side panel, beside its steps and the requests.
+    const tabs = [['requests', 'Requests', rows.length], ['custom', 'Custom responses', custom.length], ['fbrc', 'Remote Config', fbrc.length, JSON.stringify(s.fbrc) !== JSON.stringify(s.defaultFbrc) ? h('small', { style: 'color:var(--warn);margin-left:6px' }, 'edited') : null], ['activity', 'Activity', null]].filter((t) => !(guide && t[0] === 'fbrc'));
     if (!tabs.some((t) => t[0] === tab)) tab = 'requests';
     fill(tabsEl, ...tabs.map(([id, label, n]) => h('button', { class: 'tab', role: 'tab', 'aria-selected': String(tab === id), onclick: () => { tab = id; store.set('tab', id); update(); } }, label, n != null ? h('small', {}, String(n)) : null)));
 
@@ -591,7 +1015,7 @@ function mountSession() {
           : h('div', { class: 'empty' }, h('p', {}, onlyUnmatched ? 'Every request so far had a stub.' : 'No requests yet. Open the app and use it; each call it makes appears here.')));
     } else if (tab === 'custom') {
       fill(body, custom.length ? custom.map((c) => h('div', { class: 'row' },
-        h('div', { class: 'grow' }, h('div', { class: 'rt mono' }, c.method + ' ' + c.path), h('div', { class: 'rm' }, 'Status ' + c.status + (c.delayMs ? ' · ' + c.delayMs + ' ms delay' : ''))),
+        h('div', { class: 'grow' }, h('div', { class: 'rt mono' }, c.method + ' ' + c.path), h('div', { class: 'rm' }, (c.scenario ? (c.state === 'Started' ? 'At the start' : 'When ' + c.scenario + ' is ' + c.state) + ' · ' : '') + 'Status ' + c.status + (c.delayMs ? ' · ' + c.delayMs + ' ms delay' : ''))),
         h('button', { class: 'btn sm', onclick: () => openEditor(c) }, 'Edit'), h('button', { class: 'btn sm danger', onclick: () => removeCustom(c.id) }, 'Remove')))
         : h('div', { class: 'empty' }, h('p', {}, 'No custom responses. Open a request on the Requests tab and choose Edit response. They last until you switch or stop.')));
     } else if (tab === 'fbrc') {
@@ -603,7 +1027,7 @@ function mountSession() {
       fill(body, log.length ? log.map((l) => h('div', { class: 'logline ' + l.level }, h('span', { class: 't' }, fmtTime(Date.parse(l.time))), h('span', {}, l.text))) : h('div', { class: 'empty' }, h('p', {}, 'Nothing has been logged yet.')));
     }
 
-    fill(panel, 
+    const details = [
       h('div', { class: 'ph' }, 'Details'),
       kvList([['Type', KIND[s.kind]], ['Profile', s.profile || 'none'], ['Port', String(s.port)], ['Extra stubs', s.overrides && s.overrides.length ? s.overrides.join(', ') : 'none'], ['Platform', proj.platform || 'unknown']]),
       h('div', { class: 'ph' }, 'Saved responses', h('span', {}, saved.length + (saved.length === 1 ? ' response' : ' responses'))),
@@ -611,7 +1035,23 @@ function mountSession() {
         h('span', { class: 'fico', style: 'background:color-mix(in srgb, ' + tint(c.name) + ' 18%, transparent);color:' + tint(c.name) }, icon('bookmark')),
         h('span', { class: 'grow' }, h('span', { class: 'tt' }, c.title), h('small', {}, c.method + ' ' + c.path + ' → ' + c.status)), icon('right')))
         : [h('p', { class: 'hintp' }, 'Edit a response and choose Save for later to reuse it here.')]),
-      saved.length ? h('p', { class: 'hintp' }, h('a', { href: '#/saved' }, 'Manage saved responses')) : null);
+      saved.length ? h('p', { class: 'hintp' }, h('a', { href: '#/saved' }, 'Manage saved responses')) : null];
+    el.classList.toggle('tg', !!guide);
+    if (!guide) { fill(panel, details); return; }
+    fill(checksSlot, checkPanel(s.checks));
+    const platforms = guidePlatforms(s.steps), pick = guidePlatform(platforms);
+    const sig = JSON.stringify([s.name, pick, s.steps]);
+    if (stepsSlot.dataset.k !== sig) {
+      fill(stepsSlot, s.steps && s.steps.length ? stepsPanel(s, platforms, pick, (p) => { store.set('platform', p); delete stepsSlot.dataset.k; update(); }) : null);
+      stepsSlot.dataset.k = sig;
+    }
+    const edited = JSON.stringify(s.fbrc) !== JSON.stringify(s.defaultFbrc);
+    fill(fbrcSum, 'Remote Config', h('small', { style: 'color:var(--faint);margin-left:6px;font-weight:400' }, String(Object.keys(s.fbrc || {}).length)), edited ? h('small', { style: 'color:var(--warn);margin-left:6px' }, 'edited') : null);
+    const fsig = 'fbrc:' + JSON.stringify([s.name, s.fbrc, s.defaultFbrc]);
+    if (fbrcSlot.dataset.k !== fsig) { fill(fbrcSlot, fbrcEditor(s)); fbrcSlot.dataset.k = fsig; }
+    fill(moreBody, details);
+    fill(stepsSum, 'Test script', h('small', { style: 'color:var(--faint);margin-left:6px;font-weight:400' }, doCount(s.steps, pick) + ' steps'));
+    fill(panel, checksSlot, s.steps && s.steps.length ? stepsEl : null, fbrcEl, moreEl);
   }
 
   function update() {
@@ -677,8 +1117,17 @@ async function copyText(text, btn) {
 }
 
 // ---------- actions
-async function start(it) {
-  try { await api('/api/serve', { kind: it.kind, ref: it.ref }); notice = ''; go('session'); } catch (e) { flash(e.message); }
+// What the tester ran last in this project, so a stopped mock is one click away instead of a new search.
+const recentKey = () => 'recent:' + (proj.path || '');
+function recents() { try { return JSON.parse(store.get(recentKey(), '[]')); } catch { return []; } }
+function remember(it, fbrc, custom) {
+  const keep = recents().filter((r) => !(r.kind === it.kind && r.ref === it.ref));
+  keep.unshift({ kind: it.kind, ref: it.ref, title: it.title, ...(fbrc ? { fbrc } : {}), ...(custom ? { custom } : {}) });
+  store.set(recentKey(), JSON.stringify(keep.slice(0, 5)));
+}
+// fbrc and custom are what the tester set up in the preview: Remote Config values and edited responses. Leave them out to serve the mock as it is.
+async function start(it, fbrc, custom) {
+  try { await api('/api/serve', { kind: it.kind, ref: it.ref, ...(fbrc ? { fbrc } : {}), ...(custom ? { custom } : {}) }); remember(it, fbrc, custom); notice = ''; go('session'); } catch (e) { flash(e.message); }
   refresh();
 }
 async function stopMock() { try { await api('/api/stop', {}); } catch (e) { flash(e.message); } refresh(); }
@@ -782,7 +1231,7 @@ async function openDetail(id) {
   showDialog();
 }
 
-function openEditor(c, savedTitle) {
+function openEditor(c, savedTitle, opts = {}) {
   const drop = ['content-length', 'transfer-encoding', 'connection', 'matched-stub-id', 'matched-stub-name'];
   const keep = Object.fromEntries(Object.entries(c.headers || {}).filter(([k]) => !drop.includes(k.toLowerCase())));
   const status = h('input', { class: 'input', type: 'number', min: '100', max: '599', value: String(c.status) });
@@ -790,10 +1239,12 @@ function openEditor(c, savedTitle) {
   const headers = h('textarea', { class: 'input', rows: '4', spellcheck: 'false' }); headers.value = headersToText(keep);
   const body = h('textarea', { class: 'input', rows: '12', spellcheck: 'false' }); body.value = c.body || '';
   const msg = h('p', { class: 'hint', role: 'status', 'aria-live': 'polite' });
-  const apply = h('button', { class: 'btn primary' }, 'Apply response');
+  const apply = h('button', { class: 'btn primary' }, opts.onApply ? 'Use this response' : 'Apply response');
   const title = h('input', { class: 'input', type: 'text', placeholder: 'Name to save it as, e.g. Splash maintenance 503', maxlength: '80', 'aria-label': 'Name for saving' }); title.value = savedTitle || '';
   const save = h('button', { class: 'btn' }, 'Save for later');
-  const payload = () => ({ method: c.method, path: c.path, status: Number(status.value), delayMs: Number(delay.value) || 0, headers: textToHeaders(headers.value), body: body.value });
+  const plain = () => ({ method: c.method, path: c.path, status: Number(status.value), delayMs: Number(delay.value) || 0, headers: textToHeaders(headers.value), body: body.value });
+  // A response that belongs to one scenario state keeps it, so the other states still change as the test runs.
+  const payload = () => ({ ...plain(), ...(c.scenario ? { scenario: c.scenario, state: c.state } : {}) });
   const check = () => {
     const bad = jsonProblem(body.value, headers.value);
     msg.className = 'hint ' + (bad ? 'bad' : 'good');
@@ -802,20 +1253,23 @@ function openEditor(c, savedTitle) {
   };
   body.addEventListener('input', check); headers.addEventListener('input', check);
   apply.addEventListener('click', async () => {
+    if (opts.onApply) { opts.onApply(payload()); closeDialog(); return; }
     try { await api('/api/custom', payload()); closeDialog(); refresh(); } catch (e) { msg.className = 'hint bad'; msg.textContent = e.message; }
   });
   save.addEventListener('click', async () => {
     if (!title.value.trim()) { msg.className = 'hint bad'; msg.textContent = 'Type a name first so you can find it later.'; title.focus(); return; }
-    try { const r = await api('/api/saved', { title: title.value, ...payload() }); msg.className = 'hint good'; msg.textContent = 'Saved as ' + r.name + '.'; loadSaved(); }
+    try { const r = await api('/api/saved', { title: title.value, ...plain() }); msg.className = 'hint good'; msg.textContent = 'Saved as ' + r.name + '.'; loadSaved(); }
     catch (e) { msg.className = 'hint bad'; msg.textContent = e.message; }
   });
   fill(dlgBody, 
     h('h2', { id: 'dlg-title' }, 'Respond to ' + c.method + ' ' + c.path),
-    h('p', { class: 'hint' }, 'The app gets this instead, straight away. It lasts until you switch or stop the mock.'),
+    h('p', { class: 'hint' }, opts.onApply ? 'The app gets this instead of the stub\'s own answer. It is applied when you start.' : 'The app gets this instead, straight away. It lasts until you switch or stop the mock.'),
+    opts.info ? h('p', { class: 'hint' }, opts.info) : null,
+    opts.note ? h('p', { class: 'hint bad' }, opts.note) : null,
     h('div', { class: 'fields' }, field('Status', status), field('Delay (ms)', delay)),
     field('Headers, one per line', headers),
     field('Body', body, msg),
-    h('div', { style: 'display:flex;gap:8px' }, h('div', { class: 'grow' }, title), save),
+    opts.onApply ? null : h('div', { style: 'display:flex;gap:8px' }, h('div', { class: 'grow' }, title), save),
     h('div', { class: 'row2' },
       h('button', { class: 'btn', onclick: () => { try { body.value = JSON.stringify(JSON.parse(body.value), null, 2); check(); } catch {} } }, 'Format JSON'),
       h('button', { class: 'btn', onclick: closeDialog }, 'Cancel'), apply));
@@ -837,7 +1291,7 @@ function projectChooser(done) {
     catch (e) { msg.className = 'hint bad'; msg.textContent = e.message; }
   }
   const recent = (proj.recent || []).map((r) => h('div', { class: 'recent' },
-    h('span', { class: 'sq', style: 'background:' + tint(r.name) }),
+    projIcon(r),
     h('span', { class: 'what' }, h('strong', {}, r.name), h('small', {}, r.exists ? r.path : r.path + ' (folder not found)')),
     h('button', { class: 'btn sm', ...(r.exists ? {} : { disabled: '' }), onclick: () => open(r.path) }, 'Open')));
   return h('div', {},

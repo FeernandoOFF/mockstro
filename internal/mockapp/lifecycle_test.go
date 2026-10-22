@@ -104,6 +104,77 @@ func TestStartupFailureReleasesAdmission(t *testing.T) {
 	}
 	m.Shutdown()
 }
+
+func TestConfigurationFailureKeepsAdmissionThroughStartupCleanup(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	cleaning, cleaned := make(chan struct{}), make(chan struct{})
+	r := &runtime{done: make(chan struct{}), onStop: func() { close(cleaning); <-cleaned }}
+	m := New(func(context.Context) (Backend, error) {
+		return &backend{start: func(_ context.Context, target *mockruntime.Target) (*mockruntime.Session, error) {
+			return mockruntime.New(r, target, 1, ""), nil
+		}}, nil
+	})
+	if err := m.ServeWith("one", func(context.Context, *mockruntime.Session) error {
+		close(entered)
+		<-release
+		return errors.New("preview failed")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	await(t, entered)
+	if v := m.View(); !v.Busy || v.State != Starting || v.Session != nil {
+		t.Fatalf("configuration published success early: %+v", v)
+	}
+	if !errors.Is(m.Stop(), ErrBusy) {
+		t.Fatal("stop admitted during configuration")
+	}
+	close(release)
+	await(t, cleaning)
+	if m.Idle() || !errors.Is(m.Serve("two"), ErrBusy) {
+		t.Fatal("startup failure released admission before cleanup")
+	}
+	close(cleaned)
+	m.Wait()
+	if v := m.View(); !m.Idle() || v.Session != nil || v.Error != "preview failed" {
+		t.Fatalf("failed preview session was published: %+v", v)
+	}
+	m.Shutdown()
+}
+
+func TestShutdownCancelsConfigurationAndWaitsForCleanup(t *testing.T) {
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	r := &runtime{done: make(chan struct{})}
+	m := New(func(context.Context) (Backend, error) {
+		return &backend{start: func(_ context.Context, target *mockruntime.Target) (*mockruntime.Session, error) {
+			return mockruntime.New(r, target, 1, ""), nil
+		}}, nil
+	})
+	if err := m.ServeWith("one", func(ctx context.Context, _ *mockruntime.Session) error {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	await(t, entered)
+	done := make(chan struct{})
+	go func() { m.Shutdown(); close(done) }()
+	await(t, cancelled)
+	select {
+	case <-done:
+		t.Fatal("shutdown returned during configuration")
+	default:
+	}
+	close(release)
+	await(t, done)
+	await(t, r.done)
+	if !m.Idle() || m.View().Session != nil {
+		t.Fatal("cancelled preview session was published")
+	}
+}
+
 func TestStopKeepsBusyThroughCleanupAndAllowsReentrantSnapshots(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	var m *Lifecycle
