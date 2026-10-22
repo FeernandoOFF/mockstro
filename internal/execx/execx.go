@@ -32,7 +32,23 @@ type Runner interface {
 	Output(ctx context.Context, c Cmd) (string, error)
 	Run(ctx context.Context, c Cmd) error
 	LookPath(name string) (string, error)
+	Start(c Cmd, detach bool) (Process, error)
 }
+
+// Process is an owned child. Its caller waits exactly once and controls its lifetime.
+type Process interface {
+	Wait() error
+	Signal(os.Signal) error
+	Kill() error
+	PID() int
+}
+
+type process struct{ cmd *exec.Cmd }
+
+func (p *process) Wait() error                { return p.cmd.Wait() }
+func (p *process) Signal(sig os.Signal) error { return p.cmd.Process.Signal(sig) }
+func (p *process) Kill() error                { return p.cmd.Process.Kill() }
+func (p *process) PID() int                   { return p.cmd.Process.Pid }
 
 // Real runs commands on the host. Every child gets its own process group so a cancel kills
 // the whole tree (maestro and gradle both fork JVMs).
@@ -89,12 +105,13 @@ func (Real) Run(ctx context.Context, c Cmd) error {
 func (Real) LookPath(name string) (string, error) { return exec.LookPath(name) }
 
 // Start launches a long-lived child (WireMock, an emulator) and returns it unwaited.
-func Start(c Cmd, detach bool) (*exec.Cmd, error) {
+func (Real) Start(c Cmd, detach bool) (Process, error) {
 	cmd := exec.Command(c.Name, c.Args...)
 	cmd.Dir = c.Dir
 	if len(c.Env) > 0 {
 		cmd.Env = append(os.Environ(), c.Env...)
 	}
+	cmd.Stdin = c.Stdin
 	cmd.Stdout = c.Stdout
 	cmd.Stderr = c.Stderr
 	if detach {
@@ -102,7 +119,10 @@ func Start(c Cmd, detach bool) (*exec.Cmd, error) {
 	} else {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
-	return cmd, cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &process{cmd: cmd}, nil
 }
 
 type Error struct {

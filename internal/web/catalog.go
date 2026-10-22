@@ -24,56 +24,38 @@ import (
 
 // CatalogItem is one thing QA can start. Ref is what ResolveMockTarget accepts.
 type CatalogItem struct {
-	Kind        string            `json:"kind"` // scenario | profile | flow
-	Ref         string            `json:"ref"`
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	Group       string            `json:"group,omitempty"`
-	Customer    string            `json:"customer"` // Elec only | Gas only | Dual fuel | Other
-	Profile     string            `json:"profile,omitempty"`
-	Tags        []string          `json:"tags,omitempty"`
-	FBRC        map[string]string `json:"fbrc,omitempty"`
+	Kind         string            `json:"kind"` // scenario | profile | flow
+	Ref          string            `json:"ref"`
+	Title        string            `json:"title"`
+	Description  string            `json:"description"`
+	Group        string            `json:"group,omitempty"`
+	ProfileGroup string            `json:"profileGroup"`
+	Profile      string            `json:"profile,omitempty"`
+	Tags         []string          `json:"tags,omitempty"`
+	FBRC         map[string]string `json:"fbrc,omitempty"`
 }
 
-// Customer groups the library is organised by, in display order.
-const (
-	CustomerElec  = "Elec only"
-	CustomerGas   = "Gas only"
-	CustomerDual  = "Dual fuel"
-	CustomerOther = "Other"
-)
-
-// customerType says which kind of customer a profile is, from its name (elec-…, gas-…, dual-fuel…).
-// Anything else, including an item with no profile, is "Other" so it is never hidden.
-func customerType(profile string) string {
-	p := strings.ToLower(profile)
-	switch {
-	case strings.Contains(p, "dual"):
-		return CustomerDual
-	case strings.HasPrefix(p, "gas"):
-		return CustomerGas
-	case strings.HasPrefix(p, "elec"):
-		return CustomerElec
+// Unmapped profiles keep their own group; items without a profile remain visible too.
+func profileGroup(profile string, labels map[string]string) string {
+	if label := labels[profile]; label != "" {
+		return label
 	}
-	return CustomerOther
+	if profile != "" {
+		return profile
+	}
+	return "Other"
 }
 
-// featureTags are the header's tags plus any feature the Remote Config keys name, so a scenario can
-// be found by feature too. Keys follow Config_<Area>_…, and an area counts only when the team has
-// already used it as a tag (vocabulary), which keeps compound key names from becoming noise.
-func featureTags(tags []string, fbrc map[string]string, vocabulary map[string]bool) []string {
+// featureTags combines explicit fixture tags with exact key mappings supplied by the project.
+func featureTags(tags []string, fbrc map[string]string, keyTags map[string]string) []string {
 	out := slices.Clone(tags)
 	for key := range fbrc {
-		parts := strings.Split(key, "_")
-		if len(parts) < 3 || parts[0] != "Config" {
-			continue
-		}
-		if area := strings.ToLower(parts[1]); vocabulary[area] && !slices.Contains(out, area) {
-			out = append(out, area)
+		if tag := keyTags[key]; tag != "" {
+			out = append(out, tag)
 		}
 	}
 	sort.Strings(out)
-	return out
+	return slices.Compact(out)
 }
 
 // Catalog reads the project's fixtures fresh each time, so edits show up on reload.
@@ -89,24 +71,13 @@ func Catalog(p *project.Project) ([]CatalogItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	vocabulary := map[string]bool{}
-	for _, sc := range scenarios {
-		for _, t := range sc.Header.Tags {
-			vocabulary[t] = true
-		}
-	}
-	for _, f := range flows {
-		for _, t := range f.Header.Tags {
-			vocabulary[t] = true
-		}
-	}
 	for _, sc := range scenarios {
 		title := sc.Header.Name
 		if title == "" {
 			title = sc.Name
 		}
 		items = append(items, CatalogItem{Kind: "scenario", Ref: sc.Name, Title: title, Description: sc.Header.Description,
-			Profile: sc.Header.Profile, Customer: customerType(sc.Header.Profile), Tags: featureTags(sc.Header.Tags, sc.Header.FBRC, vocabulary), FBRC: sc.Header.FBRC})
+			Profile: sc.Header.Profile, ProfileGroup: profileGroup(sc.Header.Profile, p.Catalog.ProfileGroups), Tags: featureTags(sc.Header.Tags, sc.Header.FBRC, p.Catalog.FeatureTags), FBRC: sc.Header.FBRC})
 	}
 
 	profiles, err := s.ProfileNames()
@@ -118,8 +89,8 @@ func Catalog(p *project.Project) ([]CatalogItem, error) {
 			continue
 		}
 		stubs, _ := s.ProfileMappings(name)
-		items = append(items, CatalogItem{Kind: "profile", Ref: name, Title: name, Customer: customerType(name),
-			Description: fmt.Sprintf("Customer profile with %d stubs on top of the shared defaults.", len(stubs))})
+		items = append(items, CatalogItem{Kind: "profile", Ref: name, Title: name, ProfileGroup: profileGroup(name, p.Catalog.ProfileGroups),
+			Description: fmt.Sprintf("Profile with %d stubs on top of the shared defaults.", len(stubs))})
 	}
 
 	for _, f := range flows {
@@ -128,10 +99,23 @@ func Catalog(p *project.Project) ([]CatalogItem, error) {
 			title = f.Rel
 		}
 		items = append(items, CatalogItem{Kind: "flow", Ref: f.Path, Title: title, Description: f.Header.Description,
-			Group: f.Feature, Profile: f.Header.Profile, Customer: customerType(f.Header.Profile), Tags: featureTags(f.Header.Tags, f.Header.FBRC, vocabulary), FBRC: f.Header.FBRC})
+			Group: f.Feature, Profile: f.Header.Profile, ProfileGroup: profileGroup(f.Header.Profile, p.Catalog.ProfileGroups), Tags: featureTags(f.Header.Tags, f.Header.FBRC, p.Catalog.FeatureTags), FBRC: f.Header.FBRC})
 	}
 
+	// The page derives its folds in catalog order, including groups absent from groupOrder.
+	rank := func(group string) int {
+		if i := slices.Index(p.Catalog.GroupOrder, group); i >= 0 {
+			return i
+		}
+		return len(p.Catalog.GroupOrder)
+	}
 	sort.SliceStable(items, func(i, j int) bool {
+		if a, b := items[i].ProfileGroup, items[j].ProfileGroup; a != b {
+			if rank(a) != rank(b) {
+				return rank(a) < rank(b)
+			}
+			return a < b
+		}
 		if items[i].Kind != items[j].Kind {
 			return items[i].Kind < items[j].Kind
 		}
@@ -478,23 +462,23 @@ type StubInfo struct {
 
 // Preview is what a mock would do, read from its files without starting it.
 type Preview struct {
-	Kind        string            `json:"kind"`
-	Ref         string            `json:"ref"`
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	Profile     string            `json:"profile,omitempty"`
-	Customer    string            `json:"customer"`
-	FBRC        map[string]string `json:"fbrc"`
-	Stubs       []StubInfo        `json:"stubs"` // everything it will answer, highest priority first
-	Steps       []Step            `json:"steps,omitempty"`
-	Checks      []LiveCheck       `json:"checks,omitempty"`
+	Kind         string            `json:"kind"`
+	Ref          string            `json:"ref"`
+	Title        string            `json:"title"`
+	Description  string            `json:"description"`
+	Profile      string            `json:"profile,omitempty"`
+	ProfileGroup string            `json:"profileGroup"`
+	FBRC         map[string]string `json:"fbrc"`
+	Stubs        []StubInfo        `json:"stubs"` // everything it will answer, highest priority first
+	Steps        []Step            `json:"steps,omitempty"`
+	Checks       []LiveCheck       `json:"checks,omitempty"`
 }
 
 // PreviewOf reads one catalog item's steps, checks, stubs and Remote Config.
 func PreviewOf(p *project.Project, it CatalogItem) (Preview, error) {
 	s := fixtures.New(p)
 	pv := Preview{Kind: it.Kind, Ref: it.Ref, Title: it.Title, Description: it.Description, Profile: it.Profile,
-		Customer: it.Customer, FBRC: maps.Clone(it.FBRC), Stubs: []StubInfo{}}
+		ProfileGroup: it.ProfileGroup, FBRC: maps.Clone(it.FBRC), Stubs: []StubInfo{}}
 	if pv.FBRC == nil {
 		pv.FBRC = map[string]string{}
 	}

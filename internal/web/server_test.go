@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/mockapp"
 	"github.com/feernandooff/mockstro/internal/project"
 )
 
@@ -36,18 +38,19 @@ func testServer(t *testing.T) (*Server, *project.Project) {
 	write(t, m, "wiremock/stubs/ping.json", `{"name":"ping","request":{"method":"GET","urlPath":"/ping"},"response":{"status":200}}`)
 	write(t, m, "wiremock/__files/ping.json", `{}`)
 	write(t, m, "wiremock/profiles/shared.json", `{"mappings": []}`)
-	write(t, m, "wiremock/profiles/gas-only.json", `{"mappings": []}`)
-	write(t, m, "scenarios/gas-survey.yaml", "name: \"Gas customer with survey\"\ndescription: \"Survey at 100%.\"\nproperties:\n  apiProfile: gas-only\n  fbrcOverrides:\n    Config_Survey_Enabled: \"true\"\n")
-	write(t, m, "flows/survey/shown.yaml", "appId: com.example\nname: \"Survey shown\"\ntags:\n  - regression\n  - survey\nproperties:\n  apiProfile: gas-only\n---\n- launchApp\n")
+	write(t, m, "wiremock/profiles/member.json", `{"mappings": []}`)
+	write(t, m, "scenarios/member-survey.yaml", "name: \"Member with survey\"\ndescription: \"Survey at 100%.\"\nproperties:\n  apiProfile: member\n  fbrcOverrides:\n    survey.enabled: \"true\"\n")
+	write(t, m, "flows/survey/shown.yaml", "appId: com.example\nname: \"Survey shown\"\ntags:\n  - regression\n  - survey\nproperties:\n  apiProfile: member\n---\n- launchApp\n")
 	p := &project.Project{
 		Root: root, MaestroRoot: m, Env: map[string]string{}, Platform: "ios", AppID: "com.example", Integration: "lite",
 		ProxyBaseURL: "https://api.example.test", FBRCURL: project.DefaultFBRCURL,
 		OverrideKey: project.DefaultOverrideKy, AcceptKey: project.DefaultAcceptKey,
+		Catalog: project.CatalogConfig{ProfileGroups: map[string]string{"member": "Membership"}, FeatureTags: map[string]string{"survey.enabled": "feedback"}},
 	}
 	o := engine.DefaultOptions()
-	ws := NewWorkspace(nil, "")
+	ws := NewWorkspace(nil, "", &execx.Fake{})
 	ws.Use(p, o)
-	s, err := NewServer(ws, &execx.Fake{}, testPort)
+	s, err := NewServer(ws, testPort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,17 +133,17 @@ func TestCatalogListsScenariosProfilesAndFlows(t *testing.T) {
 	for _, it := range out.Items {
 		byKind[it.Kind] = append(byKind[it.Kind], it)
 	}
-	if len(byKind["scenario"]) != 1 || byKind["scenario"][0].Title != "Gas customer with survey" || byKind["scenario"][0].FBRC["Config_Survey_Enabled"] != "true" {
+	if len(byKind["scenario"]) != 1 || byKind["scenario"][0].Title != "Member with survey" || byKind["scenario"][0].FBRC["survey.enabled"] != "true" {
 		t.Errorf("scenarios = %+v", byKind["scenario"])
 	}
-	if len(byKind["profile"]) != 1 || byKind["profile"][0].Ref != "gas-only" {
+	if len(byKind["profile"]) != 1 || byKind["profile"][0].Ref != "member" {
 		t.Errorf("profiles (shared must be hidden) = %+v", byKind["profile"])
 	}
-	if sc := byKind["scenario"][0]; sc.Customer != CustomerGas || len(sc.Tags) != 1 || sc.Tags[0] != "survey" {
-		t.Errorf("scenario customer/tags = %q %v, want Gas only [survey] (from Config_Survey_Enabled)", sc.Customer, sc.Tags)
+	if sc := byKind["scenario"][0]; sc.ProfileGroup != "Membership" || len(sc.Tags) != 1 || sc.Tags[0] != "feedback" {
+		t.Errorf("scenario group/tags = %q %v, want Membership [feedback]", sc.ProfileGroup, sc.Tags)
 	}
-	if byKind["profile"][0].Customer != CustomerGas || byKind["flow"][0].Customer != CustomerGas {
-		t.Errorf("customer groups: profile %q flow %q", byKind["profile"][0].Customer, byKind["flow"][0].Customer)
+	if byKind["profile"][0].ProfileGroup != "Membership" || byKind["flow"][0].ProfileGroup != "Membership" {
+		t.Errorf("profile groups: profile %q flow %q", byKind["profile"][0].ProfileGroup, byKind["flow"][0].ProfileGroup)
 	}
 	if len(byKind["flow"]) != 1 || byKind["flow"][0].Group != "survey" || byKind["flow"][0].Tags[0] != "regression" {
 		t.Errorf("flows = %+v", byKind["flow"])
@@ -339,31 +342,37 @@ func TestGuideIsReadOncePerServedTarget(t *testing.T) {
 	s, p := testServer(t)
 	m := mgr(s)
 	flow := filepath.Join(p.MaestroRoot, "flows", "survey", "shown.yaml")
-	write(t, p.MaestroRoot, "flows/survey/shown.yaml", "appId: com.example\nproperties:\n  apiProfile: gas-only\n  apiVerifications:\n    - stub: ping\n      atLeast: 1\n---\n- tapOn: \"Go\"\n")
-	h, err := fixtures.ParseHeader(flow)
-	if err != nil {
-		t.Fatal(err)
+	write(t, p.MaestroRoot, "flows/survey/shown.yaml", "appId: com.example\nproperties:\n  apiProfile: member\n  apiVerifications:\n    - stub: ping\n      atLeast: 1\n---\n- tapOn: \"Go\"\n")
+	r := &managerRuntime{done: make(chan struct{}), event: func() {}}
+	b := &managerBackend{runtime: r, kind: "flow"}
+	m.life = mockapp.New(func(context.Context) (mockapp.Backend, error) { return b, nil })
+	t.Cleanup(m.Shutdown)
+	serve := func(ref string) *Serving {
+		t.Helper()
+		if err := m.Serve(ref, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		m.life.Wait()
+		return m.State().Serving
 	}
-	target := &engine.MockTarget{Kind: "flow", Name: "survey/shown.yaml", Header: h}
-
-	steps, checks := m.guideFor(target)
-	if len(steps) != 1 || steps[0].Text != "Tap “Go”" || len(checks) != 1 || checks[0].Stub != "ping" {
-		t.Fatalf("steps %v checks %v", steps, checks)
+	ref := p.Rel(flow)
+	got := serve(ref)
+	if got == nil || len(got.Steps) != 1 || got.Steps[0].Text != "Tap “Go”" || len(got.Checks) != 1 || got.Checks[0].Stub != "ping" {
+		t.Fatalf("guide: %+v", got)
 	}
 
-	// Editing the file mid-session changes nothing until a target is served again.
+	// Polling keeps the guide stable, even though Target returns a fresh copy each time.
 	write(t, p.MaestroRoot, "flows/survey/shown.yaml", "appId: com.example\n---\n- tapOn: \"Stop\"\n")
-	if steps, _ := m.guideFor(target); steps[0].Text != "Tap “Go”" {
-		t.Errorf("same target was read again: %v", steps)
+	if got := m.State().Serving; got.Steps[0].Text != "Tap “Go”" {
+		t.Errorf("same target was read again: %v", got.Steps)
 	}
-	again := &engine.MockTarget{Kind: "flow", Name: "survey/shown.yaml", Header: h}
-	if steps, _ := m.guideFor(again); steps[0].Text != "Tap “Stop”" {
-		t.Errorf("a newly served target must be read fresh: %v", steps)
+	if got := serve(ref); got.Steps[0].Text != "Tap “Stop”" || len(got.Checks) != 0 {
+		t.Errorf("a newly served target must be read fresh: %+v", got)
 	}
-
-	for _, other := range []*engine.MockTarget{{Kind: "scenario"}, {Kind: "profile"}, {Kind: "flow"}} {
-		if steps, checks := m.guideFor(other); steps != nil || checks != nil {
-			t.Errorf("%s without a flow header has no guide, got %v %v", other.Kind, steps, checks)
+	for _, kind := range []string{"scenario", "profile", "flow"} {
+		b.kind = kind
+		if got := serve("missing"); len(got.Steps) != 0 || len(got.Checks) != 0 {
+			t.Errorf("%s without a flow file has no guide: %+v", kind, got)
 		}
 	}
 }
@@ -373,7 +382,7 @@ func TestPreviewDescribesAMockWithoutServingIt(t *testing.T) {
 	write(t, p.MaestroRoot, "flows/pay/pay.yaml", `appId: com.example
 name: "Pay it"
 properties:
-  apiProfile: gas-only
+  apiProfile: member
   apiOverrides:
     - ping
   fbrcOverrides:
@@ -396,7 +405,7 @@ properties:
 	if err := json.Unmarshal(rec.Body.Bytes(), &pv); err != nil {
 		t.Fatal(err)
 	}
-	if pv.Title != "Pay it" || pv.FBRC["Config_Survey_Enabled"] != "false" {
+	if pv.Title != "Pay it" || pv.ProfileGroup != "Membership" || pv.FBRC["Config_Survey_Enabled"] != "false" {
 		t.Errorf("title or Remote Config: %+v", pv)
 	}
 	if got := render(pv.Steps, ""); got != "do: Tap “Pay now” -- Open the app first.\nsee: You should see “Thanks”\n" {
@@ -412,8 +421,8 @@ properties:
 		t.Errorf("previewing must not start anything: %+v", st)
 	}
 
-	rec = do(s, "GET", "/api/preview?kind=scenario&ref=gas-survey", goodHost, nil, "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Config_Survey_Enabled") {
+	rec = do(s, "GET", "/api/preview?kind=scenario&ref=member-survey", goodHost, nil, "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "survey.enabled") {
 		t.Errorf("scenario preview: %d %s", rec.Code, rec.Body)
 	}
 	if rec := do(s, "GET", "/api/preview?kind=flow&ref=/etc/passwd", goodHost, nil, ""); rec.Code != http.StatusNotFound {
@@ -424,7 +433,7 @@ properties:
 func TestServeChecksTheRemoteConfigDraftBeforeStarting(t *testing.T) {
 	s, _ := testServer(t)
 	h := map[string]string{tokenHeader: s.token, "Content-Type": "application/json"}
-	bad := do(s, "POST", "/api/serve", goodHost, h, `{"kind":"scenario","ref":"gas-survey","fbrc":{"not a key":"x"}}`)
+	bad := do(s, "POST", "/api/serve", goodHost, h, `{"kind":"scenario","ref":"member-survey","fbrc":{"not a key":"x"}}`)
 	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "not a valid Remote Config key") {
 		t.Errorf("invalid draft: %d %s", bad.Code, bad.Body)
 	}
@@ -444,8 +453,8 @@ func TestPreviewListsEveryStubByPriorityAndMarksReplacedOnes(t *testing.T) {
 	write(t, m, "wiremock/stubs/any-api.json", `{"name":"any-api","request":{"method":"ANY","urlPathPattern":"^/api/.*$"},"response":{"status":404}}`)
 	write(t, m, "wiremock/stubs/down.json", `{"name":"down","request":{"method":"GET","urlPath":"/health"},"response":{"status":503}}`)
 	write(t, m, "wiremock/profiles/shared.json", `{"mappings": ["shared-health", "any-api"]}`)
-	write(t, m, "wiremock/profiles/gas-only.json", `{"mappings": ["customer-who"]}`)
-	write(t, m, "flows/h/down.yaml", "appId: x\nproperties:\n  apiProfile: gas-only\n  apiOverrides:\n    - down\n---\n- tapOn: \"Go\"\n")
+	write(t, m, "wiremock/profiles/member.json", `{"mappings": ["customer-who"]}`)
+	write(t, m, "flows/h/down.yaml", "appId: x\nproperties:\n  apiProfile: member\n  apiOverrides:\n    - down\n---\n- tapOn: \"Go\"\n")
 
 	rec := do(s, "GET", "/api/preview?kind=flow&ref="+filepath.Join(m, "flows", "h", "down.yaml"), goodHost, nil, "")
 	var pv Preview
@@ -515,11 +524,11 @@ func TestServeChecksEditedResponsesBeforeStarting(t *testing.T) {
 	s, _ := testServer(t)
 	h := map[string]string{tokenHeader: s.token, "Content-Type": "application/json"}
 	for name, body := range map[string]string{
-		"bad method":               `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"BREW","path":"/a","status":200}]}`,
-		"bad path":                 `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"GET","path":"a","status":200}]}`,
-		"bad JSON":                 `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"GET","path":"/a","status":200,"body":"{","headers":{"Content-Type":"application/json"}}]}`,
-		"bad status":               `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"GET","path":"/a","status":99}]}`,
-		"scenario without a state": `{"kind":"scenario","ref":"gas-survey","custom":[{"method":"GET","path":"/a","status":200,"scenario":"balance"}]}`,
+		"bad method":               `{"kind":"scenario","ref":"member-survey","custom":[{"method":"BREW","path":"/a","status":200}]}`,
+		"bad path":                 `{"kind":"scenario","ref":"member-survey","custom":[{"method":"GET","path":"a","status":200}]}`,
+		"bad JSON":                 `{"kind":"scenario","ref":"member-survey","custom":[{"method":"GET","path":"/a","status":200,"body":"{","headers":{"Content-Type":"application/json"}}]}`,
+		"bad status":               `{"kind":"scenario","ref":"member-survey","custom":[{"method":"GET","path":"/a","status":99}]}`,
+		"scenario without a state": `{"kind":"scenario","ref":"member-survey","custom":[{"method":"GET","path":"/a","status":200,"scenario":"balance"}]}`,
 	} {
 		rec := do(s, "POST", "/api/serve", goodHost, h, body)
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "response for") {
@@ -537,7 +546,7 @@ func TestPreviewTellsStatesOfOneCallApartAndNamesWhatMovesThem(t *testing.T) {
 	write(t, m, "wiremock/stubs/bal-before.json", `{"name":"bal-before","scenarioName":"balance","requiredScenarioState":"Started","request":{"method":"GET","urlPath":"/bal"},"response":{"status":200,"jsonBody":{"overdue":50}}}`)
 	write(t, m, "wiremock/stubs/bal-after.json", `{"name":"bal-after","scenarioName":"balance","requiredScenarioState":"paid","request":{"method":"GET","urlPath":"/bal"},"response":{"status":200,"jsonBody":{"overdue":0}}}`)
 	write(t, m, "wiremock/stubs/pay.json", `{"name":"pay","scenarioName":"balance","newScenarioState":"paid","request":{"method":"POST","urlPath":"/pay"},"response":{"status":200}}`)
-	write(t, m, "flows/b/pay.yaml", "appId: x\nproperties:\n  apiProfile: gas-only\n  apiOverrides:\n    - bal-before\n    - bal-after\n    - pay\n---\n- tapOn: \"Go\"\n")
+	write(t, m, "flows/b/pay.yaml", "appId: x\nproperties:\n  apiProfile: member\n  apiOverrides:\n    - bal-before\n    - bal-after\n    - pay\n---\n- tapOn: \"Go\"\n")
 
 	rec := do(s, "GET", "/api/preview?kind=flow&ref="+filepath.Join(m, "flows", "b", "pay.yaml"), goodHost, nil, "")
 	var pv Preview

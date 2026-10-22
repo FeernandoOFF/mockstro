@@ -14,6 +14,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/ojson"
 	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/remoteconfig"
 )
 
 // Verification asserts how often a named stub was matched during one flow.
@@ -207,6 +208,9 @@ func (h *Header) validateProperties(rel string) error {
 			if _, ok := val.(string); !ok || k == "" {
 				return fmt.Errorf("properties.fbrcOverrides must contain non-empty keys and string values in %s (values are always strings; quote %q)", rel, k)
 			}
+		}
+		if _, err := remoteconfig.Validate(h.FBRC); err != nil {
+			return fmt.Errorf("properties.fbrcOverrides in %s: %w", rel, err)
 		}
 	}
 	return nil

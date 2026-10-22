@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -117,7 +118,7 @@ func Plan(p *project.Project, o Options) ([]TargetRun, bool, error) {
 func RunSuite(ctx context.Context, p *project.Project, o Options, ex execx.Runner, sink Sink) *Summary {
 	var jarMu sync.Mutex
 	jars := map[string]string{}
-	return runSuite(ctx, p, o, ex, sink, func(e *Engine) *Summary {
+	return runSuite(ctx, p, o, ex, sink, func(e *Engine, flows []*fixtures.Flow) *Summary {
 		if err := e.CheckEnvironment("run"); err != nil {
 			return &Summary{Err: err}
 		}
@@ -134,12 +135,12 @@ func RunSuite(ctx context.Context, p *project.Project, o Options, ex execx.Runne
 		}
 		jarMu.Unlock()
 		e.jar = jar
-		return e.Run(ctx)
+		return e.runPlanned(ctx, flows)
 	})
 }
 
 // runSuite keeps target scheduling independent from native build/device execution.
-func runSuite(ctx context.Context, p *project.Project, o Options, ex execx.Runner, sink Sink, execute func(*Engine) *Summary) *Summary {
+func runSuite(ctx context.Context, p *project.Project, o Options, ex execx.Runner, sink Sink, execute func(*Engine, []*fixtures.Flow) *Summary) *Summary {
 	if sink == nil {
 		sink = func(Event) {}
 	}
@@ -184,9 +185,14 @@ func runSuite(ctx context.Context, p *project.Project, o Options, ex execx.Runne
 			mu.Lock()
 			defer mu.Unlock()
 			if ev.Result != nil {
-				ev.Result.Platform = target.Platform
-				ev.Result.Worker = ev.Worker
-				completed[ev.Result.Key()] = ev.Result
+				// Progress and observers own a snapshot; the child may finalize its result later.
+				result := *ev.Result
+				result.Platform, result.Worker = target.Platform, ev.Worker
+				result.Shots = slices.Clone(result.Shots)
+				result.Verifs = slices.Clone(result.Verifs)
+				result.Unmatched = slices.Clone(result.Unmatched)
+				ev.Result = &result
+				completed[result.Key()] = ev.Result
 				writeSuiteProgress(dir, plans, completed)
 			}
 			if ev.Kind == EvWorker {
@@ -199,12 +205,12 @@ func runSuite(ctx context.Context, p *project.Project, o Options, ex execx.Runne
 		if ctx.Err() != nil {
 			sums[i] = &Summary{Err: ctx.Err()}
 		} else {
-			sums[i] = execute(e)
+			sums[i] = execute(e, plan.Flows)
 		}
 		s := sums[i]
 		seen := map[string]bool{}
 		for _, r := range s.Results {
-			r.Platform = target.Platform
+			r.Platform, r.Worker = target.Platform, i*100+r.Worker+1
 			seen[r.Path] = true
 		}
 		for _, f := range plan.Flows {

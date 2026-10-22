@@ -11,6 +11,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/project"
 )
 
 func TestIOSWorkerAllocationCountsOnlyBootedSimulators(t *testing.T) {
@@ -27,7 +28,8 @@ func TestIOSWorkerAllocationCountsOnlyBootedSimulators(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := testProject(t)
-			p.Platform, p.IOSProject, p.IOSScheme = "ios", "App.xcodeproj", "App"
+			p.Platform = "ios"
+			p.Build = project.BuildConfig{System: project.BuildXcode, Project: "App.xcodeproj", Scheme: "App"}
 			p.IOSSimNames = []string{"iPhone A", "iPhone B"}
 			states := slices.Clone(tc.states)
 			var booted []string

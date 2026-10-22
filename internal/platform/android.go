@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,9 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/feernandooff/mockstro/internal/build"
 	"github.com/feernandooff/mockstro/internal/execx"
-	"github.com/feernandooff/mockstro/internal/fsx"
 	"github.com/feernandooff/mockstro/internal/ojson"
 	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/internal/registry"
@@ -192,11 +189,11 @@ func (a *Android) Boot(ctx context.Context, avd string, headless bool, progress 
 	if a.Cores > 0 || a.MemoryMB > 0 {
 		progress(fmt.Sprintf("Booting %s with cores=%d memory=%dMB (0 = AVD default).", avd, a.Cores, a.MemoryMB))
 	}
-	cmd, err := execx.Start(execx.Cmd{Name: bin, Args: args}, true)
+	process, err := a.Exec.Start(execx.Cmd{Name: bin, Args: args}, true)
 	if err != nil {
 		return "", fmt.Errorf("start emulator: %w", err)
 	}
-	go func() { _ = cmd.Wait() }()
+	go func() { _ = process.Wait() }()
 	start := time.Now()
 	for i := 0; time.Since(start) < 300*time.Second; i++ {
 		if i > 0 && i%15 == 0 {
@@ -307,18 +304,6 @@ func (a *Android) cpuTimes(ctx context.Context, serial string) (busy, total uint
 
 func (a *Android) EnsureBooted(context.Context, string, bool, func(string)) error { return nil }
 
-// Build runs the incremental gradle task and snapshots the single matching APK into the run.
-func (a *Android) Build(ctx context.Context, artifactDir string, out io.Writer) (string, string, error) {
-	return build.Build(ctx, a.P, "android", a.Exec, artifactDir, out)
-}
-
-func (a *Android) ArtifactSHA(path string) (string, error) { return fsx.SHA256(path) }
-
-func (a *Android) ArtifactExists(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && !st.IsDir()
-}
-
 func (a *Android) Install(ctx context.Context, serial, path string) error {
 	// -t is required for envtest builds.
 	if _, err := a.adb(ctx, serial, "install", "-r", "-t", path); err != nil {
@@ -345,12 +330,12 @@ var (
 	reLastUpdate  = regexp.MustCompile(`lastUpdateTime=(.*)`)
 )
 
-func (a *Android) InstalledProvenance(ctx context.Context, serial string) (*registry.APK, error) {
+func (a *Android) InstalledProvenance(ctx context.Context, serial string) (*registry.Artifact, error) {
 	dump, _ := a.adb(ctx, serial, "shell", "dumpsys", "package", a.P.AppID)
 	if strings.TrimSpace(dump) == "" || !strings.Contains(dump, "versionCode=") {
 		return nil, notInstalled(a.P, serial)
 	}
-	apk := &registry.APK{Source: "preinstalled"}
+	apk := &registry.Artifact{Source: "preinstalled"}
 	if m := reVersionName.FindStringSubmatch(dump); m != nil {
 		apk.VersionName = m[1]
 	}

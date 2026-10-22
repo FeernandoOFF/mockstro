@@ -1,4 +1,4 @@
-package engine
+package mockruntime
 
 import (
 	"encoding/json"
@@ -16,13 +16,15 @@ import (
 )
 
 type fakeWireMock struct {
-	mu       sync.Mutex
-	next     int
-	puts     int
-	mappings map[string]map[string]any
+	mu         sync.Mutex
+	next       int
+	puts       int
+	failPut    bool
+	failDelete bool
+	mappings   map[string]map[string]any
 }
 
-func newFakeSession(t *testing.T) (*MockSession, *fakeWireMock) {
+func newFakeSession(t *testing.T) (*Session, *fakeWireMock) {
 	t.Helper()
 	f := &fakeWireMock{mappings: map[string]map[string]any{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,11 +41,19 @@ func newFakeSession(t *testing.T) (*MockSession, *fakeWireMock) {
 			f.mappings[id] = m
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/__admin/mappings/"):
+			if f.failPut {
+				http.Error(w, "delivery failed", 500)
+				return
+			}
 			var m map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&m)
 			f.mappings[strings.TrimPrefix(r.URL.Path, "/__admin/mappings/")] = m
 			f.puts++
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/__admin/mappings/"):
+			if f.failDelete {
+				http.Error(w, "remove failed", 500)
+				return
+			}
 			delete(f.mappings, strings.TrimPrefix(r.URL.Path, "/__admin/mappings/"))
 		default:
 			http.NotFound(w, r)
@@ -52,7 +62,7 @@ func newFakeSession(t *testing.T) (*MockSession, *fakeWireMock) {
 	t.Cleanup(srv.Close)
 	u, _ := url.Parse(srv.URL)
 	port, _ := strconv.Atoi(u.Port())
-	return &MockSession{Run: &Run{Port: port, WM: wiremock.Connect(port, "run1")}, target: &MockTarget{Name: "t"}}, f
+	return New(&testRuntime{wm: wiremock.Connect(port, "run1")}, &Target{Name: "t"}, port, ""), f
 }
 
 func TestCustomResponseValidate(t *testing.T) {
@@ -190,5 +200,22 @@ func TestCustomResponseCanBelongToOneScenarioState(t *testing.T) {
 	}
 	if got := len(sess.CustomResponses()); got != 3 {
 		t.Errorf("a response for every state sits beside the per-state ones: %d", got)
+	}
+}
+
+func TestFailedCustomRemovalKeepsPublishedResponse(t *testing.T) {
+	s, f := newFakeSession(t)
+	custom, err := s.SetCustomResponse(CustomResponse{Method: "GET", Path: "/x", Status: 503})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.failDelete = true
+	f.mu.Unlock()
+	if err := s.RemoveCustomResponse(custom.ID); err == nil {
+		t.Fatal("failed removal accepted")
+	}
+	if got := s.CustomResponses(); len(got) != 1 || got[0].ID != custom.ID {
+		t.Fatalf("failed removal changed state: %+v", got)
 	}
 }

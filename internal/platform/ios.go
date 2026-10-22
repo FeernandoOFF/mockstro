@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/feernandooff/mockstro/internal/build"
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/ojson"
 	"github.com/feernandooff/mockstro/internal/project"
@@ -189,17 +187,6 @@ func (i *IOS) showSimulator(ctx context.Context, progress func(string)) {
 	}
 }
 
-func (i *IOS) Build(ctx context.Context, artifactDir string, out io.Writer) (string, string, error) {
-	return build.Build(ctx, i.P, "ios", i.Exec, artifactDir, out)
-}
-
-func (i *IOS) ArtifactSHA(path string) (string, error) { return build.BundleSHA(path) }
-
-func (i *IOS) ArtifactExists(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && st.IsDir()
-}
-
 func (i *IOS) Install(ctx context.Context, serial, path string) error {
 	if _, err := i.simctl(ctx, "install", serial, path); err != nil {
 		return fmt.Errorf("could not install %s on %s: %w", path, serial, err)
@@ -218,7 +205,7 @@ func (i *IOS) container(ctx context.Context, serial, kind string) string {
 	return ""
 }
 
-func (i *IOS) InstalledProvenance(ctx context.Context, serial string) (*registry.APK, error) {
+func (i *IOS) InstalledProvenance(ctx context.Context, serial string) (*registry.Artifact, error) {
 	app := i.container(ctx, serial, "app")
 	if app == "" {
 		return nil, notInstalled(i.P, serial)
@@ -228,11 +215,11 @@ func (i *IOS) InstalledProvenance(ctx context.Context, serial string) (*registry
 		out, _ := i.Exec.Output(ctx, execx.Cmd{Name: "/usr/libexec/PlistBuddy", Args: []string{"-c", "Print :" + key, plist}})
 		return out
 	}
-	apk := &registry.APK{Source: "preinstalled", VersionName: read("CFBundleShortVersionString"), VersionCode: read("CFBundleVersion")}
+	artifact := &registry.Artifact{Source: "preinstalled", VersionName: read("CFBundleShortVersionString"), VersionCode: read("CFBundleVersion")}
 	if st, err := os.Stat(app); err == nil {
-		apk.InstalledAt = st.ModTime().Format(time.RFC3339)
+		artifact.InstalledAt = st.ModTime().Format(time.RFC3339)
 	}
-	return apk, nil
+	return artifact, nil
 }
 
 func (i *IOS) AssertNoProxy(context.Context, string) error { return nil }

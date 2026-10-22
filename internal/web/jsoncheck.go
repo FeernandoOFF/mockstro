@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/mockruntime"
 )
 
 // checkBodyMatchesContentType makes a JSON response valid JSON and fills in the Content-Type
 // when the tester left it out, so the app never receives a half-typed body.
-func checkBodyMatchesContentType(c *engine.CustomResponse) error {
+func checkBodyMatchesContentType(c *mockruntime.CustomResponse) error {
 	var contentType string
 	for k, v := range c.Headers {
 		if strings.EqualFold(k, "Content-Type") {

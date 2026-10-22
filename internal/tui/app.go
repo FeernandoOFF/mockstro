@@ -365,7 +365,7 @@ func (a *app) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *app) requestQuit() (tea.Model, tea.Cmd) {
-	if a.runv.running() || a.mock.session != nil {
+	if a.runv.running() || (a.mock.life != nil && !a.mock.life.Idle()) {
 		a.confirmQ = true
 		return a, nil
 	}
@@ -383,11 +383,11 @@ func (a *app) quit() (tea.Model, tea.Cmd) {
 		a.runv.cancel()
 	}
 	done := a.runv.done
-	sess := a.mock.session
+	life := a.mock.life
 	a.mock.session = nil
 	return a, func() tea.Msg {
-		if sess != nil {
-			sess.Stop()
+		if life != nil {
+			life.Shutdown()
 		}
 		if done != nil {
 			select {

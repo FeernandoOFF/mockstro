@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,25 +9,27 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/mockapp"
+	"github.com/feernandooff/mockstro/internal/mockruntime"
 	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
 // State is what the page shows in its status pill.
-type State string
+type State = mockapp.State
 
 const (
-	StateIdle     State = "idle"
-	StateStarting State = "starting"
-	StateServing  State = "serving"
-	StateStopping State = "stopping"
+	StateIdle     = mockapp.Idle
+	StateStarting = mockapp.Starting
+	StateServing  = mockapp.Serving
+	StateStopping = mockapp.Stopping
 )
-
 const maxLogLines = 200
 
 var (
-	errBusy       = errors.New("another start, switch or stop is still in progress")
-	errNotServing = errors.New("no mock is running; start one first")
+	errBusy       = mockapp.ErrBusy
+	errNotServing = mockapp.ErrNotServing
 )
 
 // LogLine is one activity message from the engine, kept for the page's activity panel.
@@ -48,18 +49,18 @@ type Serving struct {
 	FBRC        map[string]string `json:"fbrc"`        // what the app is served now
 	DefaultFBRC map[string]string `json:"defaultFbrc"` // what the target itself defines
 	Port        int               `json:"port"`
-	Steps       []Step            `json:"steps,omitempty"`  // a flow's commands as a tester would follow them
-	Checks      []LiveCheck       `json:"checks,omitempty"` // a flow's apiVerifications, counted by the page
+	Steps       []Step            `json:"steps,omitempty"`
+	Checks      []LiveCheck       `json:"checks,omitempty"`
 }
 
 // StateView is the JSON the page polls.
 type StateView struct {
-	State     State                   `json:"state"`
-	Error     string                  `json:"error,omitempty"`
-	Serving   *Serving                `json:"serving,omitempty"`
-	Custom    []engine.CustomResponse `json:"custom"`
-	NoProject bool                    `json:"noProject,omitempty"`
-	Log       []LogLine               `json:"log"`
+	State     State                        `json:"state"`
+	Error     string                       `json:"error,omitempty"`
+	Serving   *Serving                     `json:"serving,omitempty"`
+	Custom    []mockruntime.CustomResponse `json:"custom"`
+	NoProject bool                         `json:"noProject,omitempty"`
+	Log       []LogLine                    `json:"log"`
 }
 
 // JournalRow is one request WireMock received.
@@ -74,26 +75,36 @@ type JournalRow struct {
 
 // Manager owns at most one mock session for the project, the same way the TUI's Mock tab does.
 type Manager struct {
-	p    *project.Project
-	opts engine.Options
+	p      *project.Project
+	opts   engine.Options
+	runner execx.Runner
+	life   *mockapp.Lifecycle
+	mu     sync.Mutex
+	log    []LogLine
 
-	mu    sync.Mutex
-	state State
-	err   string
-	busy  bool
-	since time.Time // when the current session started serving
-	eng   *engine.Engine
-	sess  *engine.MockSession
-	log   []LogLine
-
-	// guide is the served flow's steps and checks, read once per served target rather than on every poll.
-	guideOf     *engine.MockTarget
-	guideSteps  []Step
-	guideChecks []LiveCheck
+	// The guide is read once when a target is served, never on state polls.
+	guideSession *mockruntime.Session
+	guideName    string
+	guideSteps   []Step
+	guideChecks  []LiveCheck
 }
 
-func NewManager(p *project.Project, opts engine.Options) *Manager {
-	return &Manager{p: p, opts: opts, state: StateIdle}
+func NewManager(p *project.Project, opts engine.Options, runner execx.Runner) *Manager {
+	m := &Manager{p: p, opts: opts, runner: runner}
+	m.life = mockapp.New(func(ctx context.Context) (mockapp.Backend, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		e := m.newEngine()
+		if err := e.CheckEnvironment("mock"); err != nil {
+			return nil, err
+		}
+		if _, err := e.Store.ValidateAll(false); err != nil {
+			return nil, err
+		}
+		return e, nil
+	})
+	return m
 }
 
 func (m *Manager) addLog(level, text string) {
@@ -106,7 +117,7 @@ func (m *Manager) addLog(level, text string) {
 }
 
 func (m *Manager) newEngine() *engine.Engine {
-	return engine.New(m.p, m.opts, execx.Real{}, func(ev engine.Event) {
+	return engine.New(m.p, m.opts, m.runner, func(ev engine.Event) {
 		if ev.Kind == engine.EvLog {
 			m.addLog(ev.Level, ev.Text)
 		}
@@ -115,105 +126,44 @@ func (m *Manager) newEngine() *engine.Engine {
 
 // State returns a copy safe to marshal while the session changes.
 func (m *Manager) State() StateView {
+	state := m.life.View()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	v := StateView{State: m.state, Error: m.err, Custom: []engine.CustomResponse{}, Log: append([]LogLine(nil), m.log...)}
-	if m.sess != nil {
-		v.Custom = m.sess.CustomResponses()
-		snap := m.sess.Snapshot()
-		s := &Serving{Kind: snap.Kind, Name: snap.Name, Profile: snap.Profile, Overrides: snap.Overrides, FBRC: snap.FBRC, DefaultFBRC: snap.Defaults, Port: snap.Port}
-		t := m.sess.Target()
-		if t.Header != nil {
-			s.Description = t.Header.Description
+	logs := append([]LogLine(nil), m.log...)
+	m.mu.Unlock()
+	v := StateView{State: state.State, Error: state.Error, Custom: []mockruntime.CustomResponse{}, Log: logs}
+	if sess := state.Session; sess != nil {
+		v.Custom = sess.CustomResponses()
+		snap := sess.Snapshot()
+		v.Serving = &Serving{Kind: snap.Kind, Name: snap.Name, Description: snap.Description, Profile: snap.Profile, Overrides: snap.Overrides, FBRC: snap.FBRC, DefaultFBRC: snap.Defaults, Port: snap.Port}
+		m.mu.Lock()
+		if m.guideSession == sess && m.guideName == snap.Name {
+			v.Serving.Steps, v.Serving.Checks = m.guideSteps, m.guideChecks
 		}
-		s.Steps, s.Checks = m.guideFor(t)
-		v.Serving = s
+		m.mu.Unlock()
 	}
 	return v
 }
 
-// guideFor returns the served flow's steps and checks, reading the flow once per served target.
-// The caller holds m.mu.
-func (m *Manager) guideFor(t *engine.MockTarget) ([]Step, []LiveCheck) {
-	if t.Kind != "flow" || t.Header == nil {
-		return nil, nil
-	}
-	if m.guideOf != t {
-		m.guideOf, m.guideSteps, m.guideChecks = t, FlowSteps(t.Header.Path), ChecksFor(t.Header.Verifications)
-	}
-	return m.guideSteps, m.guideChecks
-}
-
-// Serve starts the mock on ref, or switches the running server to it. It returns once the work
-// is under way; callers poll State for the outcome.
-func (m *Manager) Serve(ref string, fbrc map[string]string, custom []engine.CustomResponse) error {
-	m.mu.Lock()
-	if m.busy {
-		m.mu.Unlock()
-		return errBusy
-	}
-	m.busy, m.err = true, ""
-	sess, eng := m.sess, m.eng
-	if sess == nil {
-		m.state = StateStarting
-	}
-	m.mu.Unlock()
-
-	go func() {
-		var err error
-		if sess == nil {
-			err = m.start(ref, fbrc, custom)
-		} else {
-			err = m.switchTo(sess, eng, ref, fbrc, custom)
-		}
-		m.mu.Lock()
-		m.busy = false
-		if err != nil {
-			m.err = err.Error()
-			if m.sess == nil {
-				m.state = StateIdle
+// Serve applies preview edits within the lifecycle's reserved start or switch operation.
+func (m *Manager) Serve(ref string, fbrc map[string]string, custom []mockruntime.CustomResponse) error {
+	return m.life.ServeWith(ref, func(ctx context.Context, sess *mockruntime.Session) error {
+		target := sess.Target()
+		var steps []Step
+		var checks []LiveCheck
+		if target.Kind == "flow" {
+			if flow, err := fixtures.New(m.selectedProject()).Flow(target.Name); err == nil {
+				steps, checks = FlowSteps(flow.Path), ChecksFor(flow.Header.Verifications)
 			}
 		}
+		m.mu.Lock()
+		m.guideSession, m.guideName, m.guideSteps, m.guideChecks = sess, target.Name, steps, checks
 		m.mu.Unlock()
-		if err != nil {
-			m.addLog("error", err.Error())
-		}
-	}()
-	return nil
+		return applyPreview(ctx, sess, fbrc, custom)
+	})
 }
 
-// start serves ref. A non-nil fbrc is the Remote Config the tester chose in the preview, served from the first fetch.
-func (m *Manager) start(ref string, fbrc map[string]string, custom []engine.CustomResponse) error {
-	e := m.newEngine()
-	if err := e.CheckEnvironment("mock"); err != nil {
-		return err
-	}
-	if _, err := e.Store.ValidateAll(false); err != nil {
-		return err
-	}
-	target, err := e.ResolveMockTarget([]string{ref})
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	sess, err := e.StartMock(ctx, target)
-	if err != nil {
-		return err
-	}
-	if err := applyPreview(ctx, sess, fbrc, custom); err != nil {
-		sess.Stop()
-		return err
-	}
-	m.mu.Lock()
-	m.sess, m.eng, m.state, m.since = sess, e, StateServing, time.Now()
-	m.mu.Unlock()
-	go m.watch(sess)
-	return nil
-}
-
-// applyPreview layers what the tester set up in the preview over a freshly served target.
-func applyPreview(ctx context.Context, sess *engine.MockSession, fbrc map[string]string, custom []engine.CustomResponse) error {
+// applyPreview layers the tester's edits over the freshly served target.
+func applyPreview(ctx context.Context, sess *mockruntime.Session, fbrc map[string]string, custom []mockruntime.CustomResponse) error {
 	if fbrc != nil {
 		if err := sess.SetFBRC(ctx, fbrc); err != nil {
 			return err
@@ -226,81 +176,13 @@ func applyPreview(ctx context.Context, sess *engine.MockSession, fbrc map[string
 	}
 	return nil
 }
-
-func (m *Manager) switchTo(sess *engine.MockSession, e *engine.Engine, ref string, fbrc map[string]string, custom []engine.CustomResponse) error {
-	target, err := e.ResolveMockTarget([]string{ref})
-	if err != nil {
-		return err
-	}
-	if err := sess.Switch(context.Background(), target); err != nil {
-		return err
-	}
-	return applyPreview(context.Background(), sess, fbrc, custom)
-}
-
-// watch notices WireMock dying on its own (killed, crashed) and returns the page to idle.
-func (m *Manager) watch(sess *engine.MockSession) {
-	<-sess.Done()
-	m.mu.Lock()
-	if m.sess != sess {
-		m.mu.Unlock()
-		return
-	}
-	m.sess, m.eng, m.state = nil, nil, StateIdle
-	m.err = "The mock server stopped unexpectedly. See the activity log."
-	m.mu.Unlock()
-	sess.Stop()
-}
-
-// Stop shuts the mock down; it returns once the shutdown is under way.
-func (m *Manager) Stop() error {
-	m.mu.Lock()
-	if m.busy {
-		m.mu.Unlock()
-		return errBusy
-	}
-	sess := m.sess
-	if sess == nil {
-		m.mu.Unlock()
-		return nil
-	}
-	m.busy, m.state, m.err = true, StateStopping, ""
-	m.sess, m.eng = nil, nil
-	m.mu.Unlock()
-
-	go func() {
-		sess.Stop()
-		m.mu.Lock()
-		m.busy, m.state = false, StateIdle
-		m.mu.Unlock()
-		m.addLog("info", "mock stopped")
-	}()
-	return nil
-}
-
-// Shutdown stops the mock and waits for it, for use when the UI process exits.
-func (m *Manager) Shutdown() {
-	m.mu.Lock()
-	sess := m.sess
-	m.sess, m.eng, m.state = nil, nil, StateIdle
-	m.mu.Unlock()
-	if sess != nil {
-		sess.Stop()
-	}
-}
-
-// Idle reports whether nothing is running and nothing is starting, switching or stopping.
-func (m *Manager) Idle() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.state == StateIdle && !m.busy && m.sess == nil
-}
+func (m *Manager) Stop() error { return m.life.Stop() }
+func (m *Manager) Shutdown()   { m.life.Shutdown() }
+func (m *Manager) Idle() bool  { return m.life.Idle() }
 
 // Journal returns the request journal, newest first.
 func (m *Manager) Journal() ([]JournalRow, error) {
-	m.mu.Lock()
-	sess := m.sess
-	m.mu.Unlock()
+	sess, _ := m.life.Session()
 	if sess == nil {
 		return []JournalRow{}, nil
 	}
@@ -318,11 +200,22 @@ func (m *Manager) Journal() ([]JournalRow, error) {
 	return rows, nil
 }
 
-func (m *Manager) platform() string { return m.newEngine().P.Platform }
+func (m *Manager) selectedProject() *project.Project {
+	filter := m.opts.Platform
+	if filter == "" {
+		filter = m.p.Platform
+	}
+	selected, err := m.p.Selected(filter)
+	if err == nil && len(selected) > 0 {
+		return selected[0]
+	}
+	return m.p
+}
+func (m *Manager) platform() string { return m.selectedProject().Platform }
 
 // Proxy describes the Map Remote rules a lite project needs; full projects need none.
 func (m *Manager) Proxy() ProxyView {
-	p := m.newEngine().P
+	p := m.selectedProject()
 	v := ProxyView{Needed: p.Lite(), Rules: []ProxyRule{}, Notes: []string{}}
 	if !v.Needed {
 		return v
@@ -393,9 +286,7 @@ func clip(s string) (string, bool) {
 
 // Request returns one journal entry in full.
 func (m *Manager) Request(id string) (*RequestDetail, error) {
-	m.mu.Lock()
-	sess := m.sess
-	m.mu.Unlock()
+	sess, _ := m.life.Session()
 	if sess == nil {
 		return nil, errNotServing
 	}
@@ -416,10 +307,8 @@ func (m *Manager) Request(id string) (*RequestDetail, error) {
 }
 
 // SetCustom layers a custom response over the served target.
-func (m *Manager) SetCustom(c engine.CustomResponse) (engine.CustomResponse, error) {
-	m.mu.Lock()
-	sess := m.sess
-	m.mu.Unlock()
+func (m *Manager) SetCustom(c mockruntime.CustomResponse) (mockruntime.CustomResponse, error) {
+	sess, _ := m.life.Session()
 	if sess == nil {
 		return c, errNotServing
 	}
@@ -428,9 +317,7 @@ func (m *Manager) SetCustom(c engine.CustomResponse) (engine.CustomResponse, err
 
 // RemoveCustom puts the target's own answer back for that route.
 func (m *Manager) RemoveCustom(id string) error {
-	m.mu.Lock()
-	sess := m.sess
-	m.mu.Unlock()
+	sess, _ := m.life.Session()
 	if sess == nil {
 		return errNotServing
 	}
@@ -445,16 +332,14 @@ type proxyTargets struct {
 }
 
 func (m *Manager) proxyTargets() proxyTargets {
-	p := m.newEngine().P
+	p := m.selectedProject()
 	return proxyTargets{api: p.ProxyBaseURL, fbrc: p.FBRCURL, port: m.opts.ServerPort, lite: p.Lite()}
 }
 
 // trafficSummary counts the app's requests so far, how many found no stub, and how long the
 // current session has been serving.
 func (m *Manager) trafficSummary() (count, unmatched int, age time.Duration) {
-	m.mu.Lock()
-	since := m.since
-	m.mu.Unlock()
+	since := m.life.View().Since
 	rows, err := m.Journal()
 	if err != nil {
 		return 0, 0, 0
@@ -470,9 +355,7 @@ func (m *Manager) trafficSummary() (count, unmatched int, age time.Duration) {
 
 // SetFBRC changes the Remote Config the app is served, without touching anything else.
 func (m *Manager) SetFBRC(values map[string]string) error {
-	m.mu.Lock()
-	sess := m.sess
-	m.mu.Unlock()
+	sess, _ := m.life.Session()
 	if sess == nil {
 		return errNotServing
 	}
@@ -481,9 +364,7 @@ func (m *Manager) SetFBRC(values map[string]string) error {
 
 // ResetFBRC puts back the Remote Config the running target defines.
 func (m *Manager) ResetFBRC() error {
-	m.mu.Lock()
-	sess := m.sess
-	m.mu.Unlock()
+	sess, _ := m.life.Session()
 	if sess == nil {
 		return errNotServing
 	}

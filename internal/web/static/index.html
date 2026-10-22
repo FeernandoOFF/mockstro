@@ -149,7 +149,7 @@ details.fold { border-bottom: 1px solid var(--line); } details.fold > summary { 
 details.fold .inner { padding: 0 28px 16px; }
 table.rules { width: 100%; border-collapse: collapse; } table.rules td, table.rules th { text-align: left; padding: 8px 10px 8px 0; border-bottom: 1px solid var(--line); font: 12.5px var(--mono); word-break: break-all; vertical-align: top; } table.rules th { color: var(--muted); font-weight: 500; }
 
-/* library: customer-type folds */
+/* library: profile group folds */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 28px 16px; }
 .pillbtn { border: 1px solid var(--line-strong); background: none; border-radius: 999px; padding: 3px 11px; color: var(--muted); cursor: pointer; font-size: 12.5px; }
 .pillbtn:hover { background: var(--bg-hover); } .pillbtn[aria-pressed="true"] { background: var(--primary); color: var(--primary-text); border-color: var(--primary); } .pillbtn small { margin-left: 5px; opacity: .7; }
@@ -337,7 +337,7 @@ function tint(name) {
 let proj = { open: false, recent: [] }, items = [], saved = [], savedDir = '', git = null, health = null, rows = [];
 let state = { state: 'idle', custom: [], log: [] }, notice = '', dismissedErr = '', current = null, stateSig = '', rowsSig = '', gitBusy = false;
 
-const KIND = { scenario: 'Scenario', profile: 'Customer', flow: 'Test flow' };
+const KIND = { scenario: 'Scenario', profile: 'Profile', flow: 'Test flow' };
 const VIEWS = ['session', 'library', 'preview', 'saved', 'setup'];
 const TITLES = { session: 'Session', library: 'Mocks', preview: 'Preview', saved: 'Saved responses', setup: 'Setup check' };
 const viewName = () => {
@@ -432,11 +432,8 @@ function head(title, badge, lede, actions) {
 }
 const badge = (cls, text) => h('span', { class: 'badge ' + cls }, text);
 
-// Library: everything that can be started, grouped by the customer it is for
-const GROUPS = ['Elec only', 'Gas only', 'Dual fuel', 'Other'];
-// Not features: test-suite markers, and customer types, which the folds already show.
-const HIDDEN_TAGS = ['regression', 'smoke', 'electricity-only', 'elec-only', 'gas-only', 'dual-fuel'];
-const KIND_LABEL = { scenario: 'Scenario', profile: 'Customer only', flow: 'Automated test' };
+// Library: groups and their display order come from the project's catalog.
+const KIND_LABEL = { scenario: 'Scenario', profile: 'Profile only', flow: 'Automated test' };
 const foldState = (() => { try { return JSON.parse(store.get('folds', '{}')); } catch { return {}; } })();
 // A fold's saved state wins; otherwise it starts open only if it holds the running mock. Filtering opens everything.
 function fold(id, defaultOpen, forceOpen, cls, summary, children) {
@@ -462,17 +459,17 @@ function mountLibrary() {
 
   const matches = (it) => {
     const q = lib.query.trim().toLowerCase();
-    if (q && ![it.title, it.description, it.profile, ...(it.tags || [])].join(' ').toLowerCase().includes(q)) return false;
+    if (q && ![it.title, it.description, it.profileGroup, it.profile, ...(it.tags || [])].join(' ').toLowerCase().includes(q)) return false;
     return !lib.feature || (it.tags || []).includes(lib.feature);
   };
 
   function libRow(it) {
     const active = isActive(it);
     const meta = [KIND_LABEL[it.kind]];
-    if (it.profile && it.kind !== 'profile') meta.push('Customer ' + it.profile);
+    if (it.profile && it.kind !== 'profile') meta.push('Profile ' + it.profile);
     const nf = Object.keys(it.fbrc || {}).length;
     if (nf) meta.push(nf + ' Remote Config ' + (nf > 1 ? 'values' : 'value'));
-    const tags = (it.tags || []).filter((t) => !HIDDEN_TAGS.includes(t));
+    const tags = it.tags || [];
     if (tags.length) meta.push(tags.join(', '));
     const act = active ? h('button', { class: 'btn sm', onclick: () => go('session') }, 'Open session')
       : h('button', { class: 'btn sm' + (serving() ? '' : ' primary'), ...(busy() ? { disabled: '' } : {}), onclick: () => start(it) }, serving() ? 'Switch to this' : 'Start');
@@ -484,7 +481,7 @@ function mountLibrary() {
 
   function drawChips() {
     const counts = new Map();
-    for (const it of items) for (const t of it.tags || []) if (!HIDDEN_TAGS.includes(t)) counts.set(t, (counts.get(t) || 0) + 1);
+    for (const it of items) for (const t of it.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
     const tags = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     if (lib.feature && !counts.has(lib.feature)) lib.feature = '';
     const chip = (label, n, on, fn) => h('button', { class: 'pillbtn', 'aria-pressed': String(on), onclick: fn }, label, n != null ? h('small', {}, String(n)) : null);
@@ -498,8 +495,8 @@ function mountLibrary() {
     fill(list);
     if (!shown.length) { list.append(h('div', { class: 'note' }, items.length ? 'Nothing matches that.' : 'There is nothing to mock in this project yet.')); return; }
     const order = { scenario: 0, profile: 1 };
-    for (const g of GROUPS) {
-      const inGroup = shown.filter((it) => it.customer === g);
+    for (const g of new Set(shown.map((it) => it.profileGroup || 'Other'))) {
+      const inGroup = shown.filter((it) => (it.profileGroup || 'Other') === g);
       if (!inGroup.length) continue;
       const mocks = inGroup.filter((it) => it.kind !== 'flow').sort((a, b) => order[a.kind] - order[b.kind] || a.title.localeCompare(b.title));
       const tests = inGroup.filter((it) => it.kind === 'flow').sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.title.localeCompare(b.title));
@@ -516,7 +513,7 @@ function mountLibrary() {
   return {
     el,
     update() {
-      const lede = 'Choose a customer type, then a ready-made setup or the data an automated test uses. ' + items.length + ' in this project.';
+      const lede = 'Choose a profile group, then a ready-made setup or the data an automated test uses. ' + items.length + ' in this project.';
       if (!headSlot.firstChild) fill(headSlot, head('Mocks', null, lede, search)); else headSlot.querySelector('.lede').textContent = lede;
       const b = banner(); fill(slot, b ? [b] : []);
       drawChips(); draw();
@@ -592,7 +589,7 @@ function fbrcEditor(s, opts = {}) {
       h('button', { class: 'btn', ...(n ? {} : { disabled: '' }), onclick: () => { draft = { ...current }; clearNote(); redraw(); } }, 'Discard'),
       h('button', { class: 'btn primary', ...(n ? {} : { disabled: '' }), onclick: apply }, 'Apply changes'));
   }
-  const addKey = h('input', { class: 'input', list: 'fbrc-keys', placeholder: 'Add a key, e.g. Config_Survey_PasswordReset_Enabled', 'aria-label': 'New key', spellcheck: 'false' });
+  const addKey = h('input', { class: 'input', list: 'fbrc-keys', placeholder: 'Add a Remote Config key', 'aria-label': 'New key', spellcheck: 'false' });
   const addVal = h('input', { class: 'input', placeholder: 'Value', 'aria-label': 'New value', spellcheck: 'false', style: 'max-width:240px' });
   addKey.addEventListener('change', () => { const kk = (knownKeys || []).find((x) => x.key === addKey.value.trim()); if (kk && !addVal.value) addVal.value = kk.values[0]; });
   const add = () => {
@@ -644,7 +641,7 @@ function mountPreview() {
   function drawHead() {
     const changed = changedFbrc() || customDraft.size > 0;
     const label = (serving() ? 'Switch to this' : 'Start') + (changed ? ' with your changes' : '');
-    fill(headSlot, head(it.title, badge('', 'Preview'), pv ? pv.description || [KIND_LABEL[it.kind], it.profile ? 'Customer ' + it.profile : null].filter(Boolean).join(' · ') : 'Reading it…',
+    fill(headSlot, head(it.title, badge('', 'Preview'), pv ? pv.description || [KIND_LABEL[it.kind], it.profile ? 'Profile ' + it.profile : null].filter(Boolean).join(' · ') : 'Reading it…',
       [h('button', { class: 'btn', onclick: () => go('library') }, 'Back to mocks'),
        h('button', { class: 'btn primary', ...(!pv || busy() ? { disabled: '' } : {}), onclick: () => start(it, changedFbrc() ? draft : undefined, customDraft.size ? [...customDraft.values()] : undefined) }, icon('play'), label)]));
   }
@@ -718,7 +715,7 @@ function mountPreview() {
     const q = filterText.trim().toLowerCase();
     const shown = pv.stubs.filter((st) => !q || [st.path, st.name, st.method].join(' ').toLowerCase().includes(q));
     const who = pv.kind === 'profile' ? it.ref : pv.profile;
-    const groups = [['test', 'Added by this ' + (pv.kind === 'flow' ? 'test' : 'mock')], ['customer', 'Customer' + (who ? ': ' + who : '')], ['shared', 'Shared defaults']];
+    const groups = [['test', 'Added by this ' + (pv.kind === 'flow' ? 'test' : 'mock')], ['customer', 'Profile' + (who ? ': ' + who : '')], ['shared', 'Shared defaults']];
     fill(stubsEl, groups.map(([g, title]) => {
       const rows = shown.filter((st) => st.group === g);
       if (!rows.length) return null;
@@ -748,7 +745,7 @@ function mountPreview() {
     fill(panel, h('div', { class: 'ph' }, 'Remote Config', h('span', {}, Object.keys(pv.fbrc).length + ' set')),
       fbrcEditor({ name: pv.ref, fbrc: pv.fbrc, defaultFbrc: pv.fbrc }, { draftOnly: true, onChange: (d) => { draft = d; drawHead(); } }),
       h('div', { class: 'ph', style: 'margin-top:22px' }, 'Details'),
-      kvList([['Type', KIND[pv.kind] || pv.kind], ['Customer', pv.profile || 'none'], ['API calls', String(pv.stubs.length)]]));
+      kvList([['Type', KIND[pv.kind] || pv.kind], ['Profile', pv.profile || 'none'], ['API calls', String(pv.stubs.length)]]));
   }
   api('/api/preview?kind=' + encodeURIComponent(it.kind) + '&ref=' + encodeURIComponent(it.ref))
     .then((r) => { pv = r; draft = { ...r.fbrc }; drawHead(); drawBody(); })
@@ -838,7 +835,7 @@ function mountSession() {
     fill(headSlot, head('Session', badge(starting || stopping ? 'warn' : '', starting ? 'Starting' : stopping ? 'Stopping' : 'Idle'), starting ? 'Starting the mock server. This can take a few seconds.' : 'Nothing is running.'));
     fill(tabsEl);
     fill(body, h('div', { class: 'empty' }, h('div', { class: 'ring' }, icon('play')), h('h2', {}, starting ? 'Starting…' : 'Nothing is running'),
-      h('p', {}, 'Pick a scenario or a customer, press Start, then use the app. Every request it makes shows up here.'),
+      h('p', {}, 'Pick a scenario or a profile, press Start, then use the app. Every request it makes shows up here.'),
       starting || stopping ? null : h('button', { class: 'btn primary', onclick: () => go('library') }, 'Browse mocks')),
       recentRows());
     const kv = [['Project', proj.name], ['Platform', proj.platform || 'unknown']];
@@ -850,7 +847,7 @@ function mountSession() {
 
   function live() {
     const s = state.serving, custom = state.custom || [], fbrc = Object.entries(s.fbrc || {});
-    fill(headSlot, head(s.name, badge('ok', 'Serving'), [KIND[s.kind], s.profile ? 'Customer ' + s.profile : null, 'port ' + s.port].filter(Boolean).join(' · ') + (s.description ? '. ' + s.description : ''),
+    fill(headSlot, head(s.name, badge('ok', 'Serving'), [KIND[s.kind], s.profile ? 'Profile ' + s.profile : null, 'port ' + s.port].filter(Boolean).join(' · ') + (s.description ? '. ' + s.description : ''),
       [h('button', { class: 'btn', onclick: () => go('library') }, 'Choose another'),
        h('button', { class: 'btn danger', ...(busy() ? { disabled: '' } : {}), onclick: stopMock }, icon('stop'), 'Stop mock')]));
     const unmatched = rows.filter((r) => r.unmatched).length;
@@ -889,7 +886,7 @@ function mountSession() {
 
     const details = [
       h('div', { class: 'ph' }, 'Details'),
-      kvList([['Type', KIND[s.kind]], ['Customer', s.profile || 'none'], ['Port', String(s.port)], ['Extra stubs', s.overrides && s.overrides.length ? s.overrides.join(', ') : 'none'], ['Platform', proj.platform || 'unknown']]),
+      kvList([['Type', KIND[s.kind]], ['Profile', s.profile || 'none'], ['Port', String(s.port)], ['Extra stubs', s.overrides && s.overrides.length ? s.overrides.join(', ') : 'none'], ['Platform', proj.platform || 'unknown']]),
       h('div', { class: 'ph' }, 'Saved responses', h('span', {}, saved.length + (saved.length === 1 ? ' response' : ' responses'))),
       h('div', { class: 'frows' }, saved.length ? saved.slice(0, 6).map((c) => h('button', { class: 'frow', onclick: () => applySaved(c.name), title: 'Apply to the running mock' },
         h('span', { class: 'fico', style: 'background:color-mix(in srgb, ' + tint(c.name) + ' 18%, transparent);color:' + tint(c.name) }, icon('bookmark')),

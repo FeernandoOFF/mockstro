@@ -1,6 +1,6 @@
 # Browser UI
 
-`mockstro ui` serves a page on `http://127.0.0.1:18090` for choosing a scenario, customer or flow
+`mockstro ui` serves a page on `http://127.0.0.1:18090` for choosing a scenario, profile or flow
 and starting the mock on port 18080, without remembering command names. It does what the TUI's
 Mock tab does, for people who do not use a terminal.
 
@@ -36,11 +36,10 @@ system's light or dark setting.
   opens the **Version** dialog: the branch, its latest commit and whether it is up to date, with
   **Check for updates**, **Update to latest** and a branch list to **Switch** to. The page fetches
   once when a project opens; pulling and switching are always the tester's click.
-- **Mocks:** everything that can be started, in one list grouped by the customer it is for:
-  **Elec only**, **Gas only** and **Dual fuel**, plus **Other** for anything that fits none. Each
+- **Mocks:** everything that can be started, in one list grouped by profile. Each
   group folds, and starts open only when it holds the running mock. Inside a group are the
-  scenarios, then the bare customer profiles, then a folded **Automated tests** section holding the
-  Maestro flows, split by feature folder. **Feature chips** (`survey`, `ces`, `usage`…) filter
+  scenarios, then the bare profiles, then a folded **Automated tests** section holding the
+  Maestro flows, split by feature folder. **Tag chips** filter
   across every group, and search does too; filtering opens the groups that match. Starting an item
   serves it on port 18080 and opens the Session; choosing another while one is running switches
   without a restart. Which folds you left open is remembered in the browser, and so are the search
@@ -48,7 +47,7 @@ system's light or dark setting.
   searching again.
   - **Preview** on any item opens what it would do without starting it: for a flow, its test
     script and the checks it runs; **Responses it will serve**, every API call the mock answers,
-    grouped as added by the test, the customer's own, and the shared defaults; and its Remote
+    grouped as added by the test, the profile's own, and the shared defaults; and its Remote
     Config. **View** shows a response exactly as the app would get it (status, headers, body,
     resolved from the stub file and whatever it extends). A call another stub already answers is
     dimmed, and a call the flow's `apiVerifications` count is marked.
@@ -63,6 +62,13 @@ system's light or dark setting.
     several URLs can't either; edit those from Requests once the app has made them. The edits are
     the same as the Session's custom responses: they show in that tab, with the step they apply
     to, and last until the mock is switched or stopped.
+  - Groups use profile names by default; items without a profile appear under **Other**.
+    Set `catalog.profileGroups` in the shared config to label or combine profiles and
+    `catalog.groupOrder` to order labels. Unmapped profiles and new groups remain visible.
+  - Chips use all explicit scenario and flow header `tags`, including suite tags such as
+    `regression` and `smoke`. Optional `catalog.featureTags` maps exact Remote Config keys
+    to additional tags when an item sets those keys. No key or profile naming convention
+    is required. See [catalog metadata](configuration.md#web-catalog-metadata) for an example.
 - **Session:** when nothing is running, it lists the last few things run in this project, each
   with **Preview** and **Start again**; an entry keeps the Remote Config values and edited responses it was
   started with. Otherwise it shows the running mock, with tabs for **Requests**, **Custom responses**, **Remote

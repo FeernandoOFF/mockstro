@@ -4,39 +4,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/maestro"
 )
 
 const javaInstallHint = "install Java 17+ with `brew install --cask temurin@17` on macOS (Linux/Homebrew: `brew install openjdk@17`), then check JAVA_HOME and rerun check"
 
 var javaVersion = regexp.MustCompile(`(?:openjdk|java)\s+(?:version\s+)?"?(\d+)(?:\.(\d+))?`)
-
-// maestroCommand also finds the official install before its bin directory is on PATH.
-func (e *Engine) maestroCommand() (string, error) {
-	if _, err := e.Exec.LookPath("maestro"); err == nil {
-		return "maestro", nil
-	}
-	dir := os.Getenv("MAESTRO_DIR")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "maestro", err
-		}
-		dir = filepath.Join(home, ".maestro")
-	}
-	path, err := e.Exec.LookPath(filepath.Join(dir, "bin", "maestro"))
-	if err != nil {
-		return "maestro", err
-	}
-	return path, nil
-}
 
 // EnsureMaestro installs Maestro only when confirm agrees; existing installs are left alone.
 func (e *Engine) EnsureMaestro(ctx context.Context, confirm func() bool) error {
@@ -59,7 +38,7 @@ func (e *Engine) EnsureMaestro(ctx context.Context, confirm func() bool) error {
 	if major < 17 {
 		return fmt.Errorf("Java 17+ is required (java -version: %s); %s", strings.TrimSpace(version.String()), javaInstallHint)
 	}
-	if command, err := e.maestroCommand(); err == nil {
+	if command, err := maestro.Command(e.Exec); err == nil {
 		e.Logf("Maestro is ready at %s (existing installation).", command)
 		return nil
 	}
@@ -93,7 +72,7 @@ func (e *Engine) EnsureMaestro(ctx context.Context, confirm func() bool) error {
 			return fmt.Errorf("install Maestro: %w", err)
 		}
 	}
-	command, err := e.maestroCommand()
+	command, err := maestro.Command(e.Exec)
 	if err != nil {
 		return fmt.Errorf("Maestro installer finished but the executable was not found; check PATH or MAESTRO_DIR and rerun check")
 	}

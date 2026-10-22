@@ -31,8 +31,7 @@ func testProject(t *testing.T) *project.Project {
 	root := t.TempDir()
 	return &project.Project{
 		Root: root, MaestroRoot: filepath.Join(root, ".maestro"), Env: map[string]string{},
-		Platform: "android", AppID: "ie.example.envtest", GradleTask: "assembleDebugEnvTest",
-		APKGlob:     "app/build/outputs/apk/debugEnvTest/*.apk",
+		Platform: "android", AppID: "ie.example.envtest", Build: project.BuildConfig{System: project.BuildGradle, Task: "assembleDebugEnvTest", Artifact: "app/build/outputs/apk/debugEnvTest/*.apk"},
 		OverrideKey: project.DefaultOverrideKy, AcceptKey: project.DefaultAcceptKey,
 	}
 }
@@ -206,7 +205,7 @@ func TestOverrideAcceptance(t *testing.T) {
 	}
 }
 
-func TestBuildProvenanceAndSessionAPK(t *testing.T) {
+func TestBuildProvenanceAndSessionArtifact(t *testing.T) {
 	var build string
 	installs := 0
 	var e *Engine
@@ -237,12 +236,12 @@ func TestBuildProvenanceAndSessionAPK(t *testing.T) {
 		if err := r.ensureApp(ctx); err != nil {
 			t.Fatal(err)
 		}
-		b, _ := os.ReadFile(r.apkPath)
-		if string(b) != v || r.apkSHA == prev {
+		b, _ := os.ReadFile(r.artifact.Path)
+		if string(b) != v || r.artifact.SHA256 == prev {
 			t.Fatalf("stale artifact for build %s", v)
 		}
-		prev = r.apkSHA
-		if r.info.APK == nil || r.info.APK.SHA256 != r.apkSHA {
+		prev = r.artifact.SHA256
+		if r.info.Artifact == nil || r.info.Artifact.SHA256 != r.artifact.SHA256 {
 			t.Fatal("provenance not recorded")
 		}
 		r.Cleanup()
@@ -255,9 +254,10 @@ func TestBuildProvenanceAndSessionAPK(t *testing.T) {
 	r := e.newRun("run", 1)
 	r.Device = "emulator-fake"
 	_ = r.initDir()
-	r.apkPath, r.apkSHA = filepath.Join(r.Dir, "parent.apk"), "deadbeef"
-	os.WriteFile(r.apkPath, []byte("tampered"), 0o644)
-	if err := r.ensureApp(ctx); err == nil || !strings.Contains(err.Error(), "parent-built APK changed") {
+	r.artifact.Path, r.artifact.SHA256 = filepath.Join(r.Dir, "parent.apk"), "deadbeef"
+	r.artifact.Platform, r.artifact.AppID = e.Opts.Platform, e.P.AppID
+	os.WriteFile(r.artifact.Path, []byte("tampered"), 0o644)
+	if err := r.ensureApp(ctx); err == nil || !strings.Contains(err.Error(), "artifact changed") {
 		t.Fatalf("tampered artifact accepted: %v", err)
 	}
 	r.Cleanup()
@@ -290,7 +290,7 @@ func TestSkipBuildRecordsInstalledBuild(t *testing.T) {
 	if err := r.ensureApp(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if a := r.info.APK; a.Source != "preinstalled" || a.VersionName != "4.50" || a.VersionCode != "4050003" {
+	if a := r.info.Artifact; a.Source != "preinstalled" || a.VersionName != "4.50" || a.VersionCode != "4050003" {
 		t.Fatalf("provenance %+v", a)
 	}
 	if !strings.Contains(strings.Join(calls, "\n"), "pm grant "+e.P.AppID+" android.permission.WRITE_SECURE_SETTINGS") {
@@ -340,26 +340,6 @@ type bootSpy struct {
 func (b *bootSpy) Boot(_ context.Context, name string, _ bool, _ func(string)) (string, error) {
 	b.boot(name)
 	return "", nil
-}
-
-func TestQueueReportsIncompleteWork(t *testing.T) {
-	mk := func(n string) *fixtures.Flow { return &fixtures.Flow{Feature: "account", File: n} }
-	q := &queue{flows: []*fixtures.Flow{mk("done.yaml"), mk("interrupted.yaml"), mk("unstarted.yaml")}, claimed: make([]bool, 3), results: make([]*Result, 3)}
-	i, _, _ := q.claim()
-	q.put(i, &Result{Feature: "account", File: "done.yaml", Stage: "PASS"})
-	q.claim()
-	q.halt()
-	if _, _, ok := q.claim(); ok {
-		t.Fatal("claimed after halt")
-	}
-	res := q.collect()
-	got := []string{res[0].Stage, res[1].Stage, res[2].Stage}
-	if strings.Join(got, ",") != "PASS,INTERRUPTED,UNSTARTED" {
-		t.Fatalf("stages %v", got)
-	}
-	if s := NewSummary(res, 0, ""); s.Failed != 2 {
-		t.Fatal("incomplete work must fail the session")
-	}
 }
 
 func TestOptionRules(t *testing.T) {
@@ -442,7 +422,7 @@ func TestPruneKeepsNewestAndStripsAPKs(t *testing.T) {
 		}
 	}
 	if _, err := os.Stat(filepath.Join(root, "run-4", "artifacts")); err == nil {
-		t.Fatal("kept run still has its APK snapshot")
+		t.Fatal("kept run still has its artifact snapshot")
 	}
 	if err := e.DeleteRunDir(context.Background(), filepath.Join(root, "fresh")); err == nil {
 		t.Fatal("deleted an in-progress run dir")
@@ -504,13 +484,14 @@ func TestNewArtifactsFindsThisFlowsScreenshots(t *testing.T) {
 	r.Dir = t.TempDir()
 	old := filepath.Join(r.Dir, "results", "2026-09-23_100000", "Earlier flow")
 	os.MkdirAll(filepath.Join(old, "screenshots"), 0o755)
-	before := r.resultDirs()
+	before := r.maestro().Workspace.ResultDirs()
 	cur := filepath.Join(r.Dir, "results", "2026-09-23_100100", "Account home")
 	os.MkdirAll(filepath.Join(cur, "screenshots"), 0o755)
 	for _, n := range []string{"step-009-assert.png", "step-003-runFlow.png"} {
 		os.WriteFile(filepath.Join(cur, "screenshots", n), []byte("png"), 0o644)
 	}
-	dir, shots := r.newArtifacts(before)
+	artifacts := r.maestro().Workspace.NewArtifacts(before)
+	dir, shots := artifacts.Dir, artifacts.Shots
 	if dir != cur || len(shots) != 2 || !strings.HasSuffix(shots[1], "step-009-assert.png") {
 		t.Fatalf("artifacts %q %v", dir, shots)
 	}
@@ -720,9 +701,9 @@ func TestLiteTakesAppIDFromFlows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	New(p, DefaultOptions(), &execx.Fake{}, nil)
-	if p.AppID != "com.b" {
-		t.Fatalf("app id %q", p.AppID)
+	e := New(p, DefaultOptions(), &execx.Fake{}, nil)
+	if e.P.AppID != "com.b" || p.AppID != "" {
+		t.Fatalf("resolved app id %q, original %q", e.P.AppID, p.AppID)
 	}
 }
 

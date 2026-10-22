@@ -39,7 +39,7 @@ func testApp(t *testing.T) *app {
 	write(t, filepath.Join(m, "flows/account/account-smart.yaml"), "appId: x\nname: Account\ntags: [smoke, smart]\nproperties:\n  apiProfile: smart\n---\n- back\n")
 	write(t, filepath.Join(m, "flows/top-up/top-up-smart.yaml"), "appId: x\nname: Top up\ntags: [regression, smart]\nproperties:\n  apiProfile: smart\n---\n- back\n")
 	write(t, filepath.Join(m, "scenarios/usage.yaml"), "name: Usage\ndescription: flat usage\nproperties:\n  apiProfile: smart\n")
-	p := &project.Project{Root: root, MaestroRoot: m, Env: map[string]string{}, Platform: "android", AppID: "x", GradleTask: "assemble"}
+	p := &project.Project{Root: root, MaestroRoot: m, Env: map[string]string{}, Platform: "android", AppID: "x", Build: project.BuildConfig{System: project.BuildGradle, Task: "assemble"}}
 
 	fake := &execx.Fake{Handler: func(c execx.Cmd) (string, error) { return "", nil }}
 	o := engine.DefaultOptions()
@@ -244,6 +244,9 @@ func TestResultJumpsToItsOutput(t *testing.T) {
 		a.Update(evMsg{Kind: engine.EvOutput, Text: "tail"})
 	}
 	a.Update(evMsg{Kind: engine.EvFlowResult, Result: second})
+	// The suite publishes snapshots during execution and separately allocated final results.
+	firstCopy, secondCopy := *first, *second
+	a.Update(runDoneMsg{engine.NewSummary([]*engine.Result{&firstCopy, &secondCopy}, 0, "")})
 	key(a, "3")
 	if strings.Contains(a.View(), "ONE-OUTPUT") {
 		t.Fatal("tail view should not show the first flow")
@@ -259,6 +262,29 @@ func TestResultJumpsToItsOutput(t *testing.T) {
 	key(a, "G")
 	if strings.Contains(a.View(), "ONE-OUTPUT") {
 		t.Fatal("G should follow the tail again")
+	}
+}
+
+func TestCompletedOutputMarksDistinguishPlatformsForTheSameFlow(t *testing.T) {
+	a := testApp(t)
+	a.runv.start2ForTest()
+	var results []*engine.Result
+	for i, platform := range []string{"android", "ios"} {
+		worker := i + 1
+		res := &engine.Result{Platform: platform, Feature: "home", File: "same.yaml", Stage: "PASS", Worker: worker}
+		a.Update(evMsg{Kind: engine.EvFlowStart, Platform: platform, Worker: worker, RunID: platform, Flow: "home/same.yaml"})
+		a.Update(evMsg{Kind: engine.EvOutput, Platform: platform, Worker: worker, RunID: platform, Text: platform + " OUTPUT"})
+		a.Update(evMsg{Kind: engine.EvFlowResult, Platform: platform, Worker: worker, RunID: platform, Result: res})
+		copy := *res
+		results = append(results, &copy)
+	}
+	a.Update(runDoneMsg{engine.NewSummary(results, 0, "")})
+	for i := range results {
+		a.runv.resCursor = i
+		a.runv.jumpToResult()
+		if got := a.runv.selWorker; got != i+1 {
+			t.Fatalf("platform %s selected worker %d", results[i].Platform, got)
+		}
 	}
 }
 
@@ -337,7 +363,7 @@ func TestHistoryFlowsScrollToCursor(t *testing.T) {
 
 // start2ForTest puts the model into a running state without an engine.
 func (r *runModel) start2ForTest() {
-	*r = runModel{a: r.a, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[*engine.Result]outputMark{}}
+	*r = runModel{a: r.a, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[string]outputMark{}}
 }
 
 func TestDashboardKeysFollowSelection(t *testing.T) {

@@ -2,71 +2,80 @@ package engine
 
 import (
 	"context"
-	"fmt"
-	"maps"
-	"regexp"
+	"sync"
 
+	"github.com/feernandooff/mockstro/internal/remoteconfig"
 	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
-const (
-	maxFBRCKeys   = 500
-	maxFBRCValue  = 64 << 10
-	maxFBRCKeyLen = 200
-)
-
-var fbrcKey = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
-
-// ValidateFBRC checks a set of Remote Config values a tester typed and returns a copy of it.
-func ValidateFBRC(values map[string]string) (map[string]string, error) {
-	if len(values) > maxFBRCKeys {
-		return nil, fmt.Errorf("at most %d Remote Config values are supported", maxFBRCKeys)
-	}
-	for k, v := range values {
-		if k == "" || len(k) > maxFBRCKeyLen || !fbrcKey.MatchString(k) {
-			return nil, fmt.Errorf("%q is not a valid Remote Config key; use letters, digits, _ . and -", k)
-		}
-		if len(v) > maxFBRCValue {
-			return nil, fmt.Errorf("the value of %s is larger than %d KB", k, maxFBRCValue>>10)
-		}
-	}
-	return maps.Clone(values), nil
-}
-
-// FBRC is the Remote Config the app is being served now, which may differ from the target's own.
-func (m *MockSession) FBRC() map[string]string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return maps.Clone(m.fbrc)
-}
-
-// SetFBRC serves values as the app's Remote Config from the next fetch on. Only the Remote Config
-// answer changes: the request journal, custom responses and every other stub stay as they are.
-// A key left out is absent, so the app falls back to its built-in default for it.
-func (m *MockSession) SetFBRC(ctx context.Context, values map[string]string) error {
-	clean, err := ValidateFBRC(values)
-	if err != nil {
-		return err
-	}
-	m.ovMu.Lock()
-	defer m.ovMu.Unlock()
-	r := m.Run
+// RemoteConfigDelivery is the single transport decision for full activation and live edits.
+// Call Mappings when constructing the complete mapping set; call Deliver after replacement
+// only when UsesDeviceOverride is true (HTTP values are already in the complete set).
+func (r *Run) RemoteConfigDelivery() remoteconfig.Delivery {
 	if r.Device != "" && r.overrideAuto {
-		// Attached device: Remote Config rides in the override the app reads.
-		if err := m.e.Plat.WriteOverride(ctx, r.Device, r.override(clean)); err != nil {
-			return err
-		}
-		r.overrideApplied = true
-	} else if err := r.WM.ReplaceMapping(wiremock.FBRCFetchID, wiremock.FBRCFetchMapping(clean)); err != nil {
-		return err
+		return remoteconfig.Device{Write: func(ctx context.Context, values map[string]string) error {
+			if err := r.e.Plat.WriteOverride(ctx, r.Device, r.override(values)); err != nil {
+				return err
+			}
+			r.overrideApplied = true
+			return nil
+		}}
 	}
-	m.mu.Lock()
-	m.fbrc = clean
-	m.mu.Unlock()
-	return nil
+	return remoteconfig.HTTP{Writer: r.WM}
 }
 
-// ResetFBRC puts back the Remote Config the target defines.
-func (m *MockSession) ResetFBRC(ctx context.Context) error {
-	return m.SetFBRC(ctx, m.Target().FBRC)
+type mockRuntime struct {
+	run  *Run
+	mu   sync.Mutex
+	done chan struct{}
+	once sync.Once
 }
+
+func newMockRuntime(run *Run) *mockRuntime {
+	r := &mockRuntime{run: run, done: make(chan struct{})}
+	r.watch(run.WM)
+	return r
+}
+func (r *mockRuntime) watch(wm *wiremock.Server) {
+	if wm == nil {
+		return
+	}
+	go func() {
+		<-wm.Done()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.run.WM == wm {
+			r.once.Do(func() { close(r.done) })
+		}
+	}()
+}
+
+func (r *mockRuntime) Activate(ctx context.Context, p string, v map[string]string, o []string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	old := r.run.WM
+	reset, err := r.run.activate(ctx, p, v, o)
+	if r.run.WM == nil {
+		r.once.Do(func() { close(r.done) })
+	}
+	if r.run.WM != old {
+		r.watch(r.run.WM)
+	}
+	return reset, err
+}
+func (r *mockRuntime) DeliverFBRC(ctx context.Context, v map[string]string) error {
+	return r.run.RemoteConfigDelivery().Deliver(ctx, v)
+}
+func (r *mockRuntime) AddMapping(v map[string]any) (string, error) { return r.run.WM.AddMapping(v) }
+func (r *mockRuntime) RemoveMapping(id string) error               { return r.run.WM.RemoveMapping(id) }
+func (r *mockRuntime) Traffic() ([]wiremock.LoggedRequest, error)  { return r.run.WM.Traffic(false) }
+func (r *mockRuntime) Request(id string) (*wiremock.LoggedRequest, error) {
+	return r.run.WM.Request(id)
+}
+func (r *mockRuntime) Stop() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.run.Cleanup()
+	r.once.Do(func() { close(r.done) })
+}
+func (r *mockRuntime) Done() <-chan struct{} { return r.done }

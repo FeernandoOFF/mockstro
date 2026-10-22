@@ -302,12 +302,14 @@ func (d *dashModel) view(w, h int) (string, string) {
 		fmt.Fprintf(&info, "%s: %s · %s\n", target.Platform, target.AppID, target.IntegrationLabel())
 		if target.Lite() {
 			fmt.Fprintf(&info, "Build      %s\n", sMuted.Render("none: runs use the installed app"))
-		} else if target.BuildSystem == "kotlin-toolchain" {
-			fmt.Fprintf(&info, "Build      Kotlin Toolchain (%s)\n", target.KotlinVariant)
+		} else if target.Build.System == "command" {
+			fmt.Fprintf(&info, "Build      %s\n", strings.Join(target.Build.Command, " "))
+		} else if target.Build.System == "kotlin-toolchain" {
+			fmt.Fprintf(&info, "Build      Kotlin Toolchain (%s)\n", target.Build.Variant)
 		} else if target.Platform == "ios" {
-			fmt.Fprintf(&info, "Scheme     %s (%s)\n", target.IOSScheme, target.IOSConfig)
+			fmt.Fprintf(&info, "Scheme     %s (%s)\n", target.Build.Scheme, target.Build.Configuration)
 		} else {
-			fmt.Fprintf(&info, "Build      %s\n", target.GradleTask)
+			fmt.Fprintf(&info, "Build      %s\n", target.Build.Task)
 		}
 	}
 	if a.fixErr != nil {

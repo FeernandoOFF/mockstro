@@ -12,22 +12,28 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feernandooff/mockstro/internal/build"
 	"github.com/feernandooff/mockstro/internal/fixtures"
 	"github.com/feernandooff/mockstro/internal/fsx"
+	"github.com/feernandooff/mockstro/internal/scheduler"
 )
 
 // Run executes the selected flows, single-device or parallel, and always returns a summary
 // (possibly with Err set) once every owned resource has been cleaned up.
 func (e *Engine) Run(ctx context.Context) *Summary {
+	flows, err := e.DiscoverFlows()
+	if err != nil {
+		return e.done(&Summary{Err: err})
+	}
+	return e.runPlanned(ctx, flows)
+}
+
+func (e *Engine) runPlanned(ctx context.Context, flows []*fixtures.Flow) *Summary {
 	start := time.Now()
 	if !e.Opts.managed {
 		if removed, freed := e.Prune(ctx, KeepRuns()); removed > 0 || freed > 0 {
 			e.Logf("Pruned %d old run dir(s), freed %s (keeping %d; MOCKSTRO_KEEP_RUNS to change).", removed, HumanSize(freed), KeepRuns())
 		}
-	}
-	flows, err := e.DiscoverFlows()
-	if err != nil {
-		return e.done(&Summary{Err: err})
 	}
 	if e.Opts.Parallel != "" {
 		return e.done(e.runParallel(ctx, flows, start))
@@ -52,132 +58,102 @@ func (e *Engine) runSingle(ctx context.Context, flows []*fixtures.Flow, start ti
 		s.Err = err
 		return s
 	}
-	var results []*Result
-	done := make([]*Result, len(flows))
-	writeProgress(run.Dir, flows, done)
-	if e.batched() {
-		run.RunBatch(ctx, flows, nil, func(i int, res *Result) {
-			done[i] = res
-			writeProgress(run.Dir, flows, done)
-		})
-		for _, res := range done {
-			if res != nil {
-				results = append(results, res)
-			}
-		}
-	} else {
-		for i, f := range flows {
-			res := run.RunFlow(ctx, f)
-			results = append(results, res)
-			done[i] = res
-			writeProgress(run.Dir, flows, done)
-			if res.Stage == "CANCELLED" {
-				break
-			}
-			if !res.Passed() && e.Opts.FailFast {
-				e.Logf("Stopping after %s/%s failed.", f.Feature, f.File)
-				break
-			}
-		}
-	}
+	results, failures := e.executeFlows(ctx, flows, 1, run.Dir, func(context.Context, int) (*Run, error) { return run, nil })
 	if ctx.Err() == nil && e.Opts.Record && e.Opts.Optimize {
 		e.OptimizeRecordings(ctx, results)
 	}
 	s := NewSummary(results, time.Since(start), run.Dir)
+	if len(failures) > 0 {
+		s.Err = fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
 	e.persist(s, run.Dir)
 	return s
 }
 
-// Parallel: workers are goroutines, each a full Run with its own device, port and WireMock.
-// Flows are claimed one at a time because durations vary a lot, in `order` (nil = as listed).
-type queue struct {
-	mu      sync.Mutex
+// flowWorker adapts an owned run to the scheduler. Scheduling knows job indexes;
+// only this adapter knows Maestro flows, mock activation and result persistence.
+type flowWorker struct {
+	run     *Run
 	flows   []*fixtures.Flow
-	order   []int
-	next    int
-	claimed []bool
-	results []*Result
-	stop    bool
-	dir     string // session dir that progress.tsv is written to
-	workers int
+	publish func(int, *Result)
 }
 
-func (q *queue) claim() (int, *fixtures.Flow, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.stop || q.next >= len(q.flows) {
-		return 0, nil, false
-	}
-	i := q.next
-	if q.order != nil {
-		i = q.order[q.next]
-	}
-	q.next++
-	q.claimed[i] = true
-	return i, q.flows[i], true
-}
-
-// claimBatch claims up to half a worker's fair share of what is left, so each Maestro
-// startup is shared by several flows while workers still finish close together.
-func (q *queue) claimBatch(workers int) []int {
-	q.mu.Lock()
-	left := len(q.flows) - q.next
-	q.mu.Unlock()
-	n := max(1, (left+2*workers-1)/(2*workers))
-	var out []int
-	for range n {
-		i, _, ok := q.claim()
-		if !ok {
-			break
+func (w *flowWorker) Close() { w.run.Cleanup() }
+func (w *flowWorker) Execute(ctx context.Context, jobs []int, stopped func() bool, done func(int, bool)) bool {
+	if w.run.e.batched() {
+		cancelled := false
+		chunk := make([]*fixtures.Flow, len(jobs))
+		for j, i := range jobs {
+			chunk[j] = w.flows[i]
 		}
-		out = append(out, i)
+		halted := w.run.RunBatch(ctx, chunk, stopped, func(j int, res *Result) {
+			i := jobs[j]
+			w.publish(i, res)
+			done(i, !res.Passed() && res.Stage != "CANCELLED")
+			cancelled = cancelled || res.Stage == "CANCELLED"
+		})
+		return halted || cancelled
 	}
-	return out
-}
-
-func (q *queue) put(i int, r *Result) {
-	q.mu.Lock()
-	q.results[i] = r
-	writeProgress(q.dir, q.flows, q.results)
-	q.mu.Unlock()
-}
-
-// collect walks the queue's items, not its results: missing work is reported, never hidden.
-func (q *queue) collect() []*Result {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	var results []*Result
-	for i, f := range q.flows {
-		r := q.results[i]
-		if r == nil {
-			stage := "UNSTARTED"
-			if q.claimed[i] {
-				stage = "INTERRUPTED"
-			}
-			r = &Result{Feature: f.Feature, File: f.File, Path: f.Path, Stage: stage, Exit: 1}
+	for _, i := range jobs {
+		if ctx.Err() != nil || stopped() {
+			return true
 		}
-		results = append(results, r)
+		res := w.run.RunFlow(ctx, w.flows[i])
+		w.publish(i, res)
+		done(i, !res.Passed() && res.Stage != "CANCELLED")
+		if res.Stage == "CANCELLED" {
+			return true
+		}
 	}
-	return results
+	return false
 }
 
-func (q *queue) halted() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.stop
-}
-
-// unclaim marks a claimed flow as never started, so it is reported UNSTARTED.
-func (q *queue) unclaim(i int) {
-	q.mu.Lock()
-	q.claimed[i] = false
-	q.mu.Unlock()
-}
-
-func (q *queue) halt() {
-	q.mu.Lock()
-	q.stop = true
-	q.mu.Unlock()
+func (e *Engine) executeFlows(ctx context.Context, flows []*fixtures.Flow, workers int, dir string, open func(context.Context, int) (*Run, error)) ([]*Result, []string) {
+	plan := scheduler.Plan{Jobs: len(flows), Workers: workers, Batched: e.batched(), FailFast: e.Opts.FailFast}
+	if workers > 1 {
+		order, known := longestFirst(flows, e.FlowEstimates(ctx))
+		if known > 0 {
+			plan.Order = order
+			e.Logf("Scheduling longest flows first (%d/%d with past durations).", known, len(flows))
+		}
+	}
+	var mu sync.Mutex
+	results := make([]*Result, len(flows))
+	writeProgress(dir, flows, results)
+	report, err := scheduler.Run(ctx, plan, func(ctx context.Context, w int) (scheduler.Worker, error) {
+		run, err := open(ctx, w)
+		if err != nil {
+			return nil, err
+		}
+		return &flowWorker{run: run, flows: flows, publish: func(i int, res *Result) {
+			mu.Lock()
+			defer mu.Unlock()
+			results[i] = res
+			writeProgress(dir, flows, results)
+		}}, nil
+	})
+	var failures []string
+	if err != nil {
+		failures = append(failures, err.Error())
+	}
+	for _, failure := range report.Errors {
+		failures = append(failures, failure.Error())
+		e.emit(Event{Kind: EvLog, Level: "error", Worker: failure.Worker, Text: failure.Err.Error()})
+	}
+	for i, f := range flows {
+		if results[i] != nil {
+			continue
+		}
+		stage := "UNSTARTED"
+		if ctx.Err() != nil {
+			stage = "CANCELLED"
+		} else if len(report.States) > i && report.States[i] == scheduler.Claimed {
+			stage = "INTERRUPTED"
+		}
+		results[i] = &Result{Platform: e.Opts.Platform, Feature: f.Feature, File: f.File, Path: f.Path, Stage: stage, Exit: 1}
+		e.emit(Event{Kind: EvFlowResult, Flow: f.Rel, Result: results[i]})
+	}
+	return results, failures
 }
 
 func (e *Engine) runParallel(ctx context.Context, flows []*fixtures.Flow, start time.Time) *Summary {
@@ -208,46 +184,27 @@ func (e *Engine) runParallel(ctx context.Context, flows []*fixtures.Flow, start 
 
 	writeProgress(sessionDir, flows, make([]*Result, len(flows)))
 	// One build for the whole session; each worker re-hashes it before installing.
-	if !e.Opts.SkipBuild && e.Opts.SessionAPK == "" {
-		path, sha, err := e.Plat.Build(ctx, sessionDir, e.outputWriter(0, ""))
+	if !e.Opts.SkipBuild && e.Opts.SessionArtifact.Path == "" {
+		artifact, err := build.Build(ctx, e.P, e.Exec, sessionDir, e.outputWriter(0, ""))
 		if err != nil {
 			return &Summary{Err: err, Dir: sessionDir}
 		}
-		e.Opts.SessionAPK, e.Opts.SessionAPKSHA = path, sha
+		e.Opts.SessionArtifact = artifact
 	}
 
-	q := &queue{flows: flows, claimed: make([]bool, len(flows)), results: make([]*Result, len(flows)), dir: sessionDir, workers: workers}
-	if workers > 1 {
-		order, known := longestFirst(flows, e.FlowEstimates(ctx))
-		if known > 0 {
-			q.order = order
-			e.Logf("Scheduling longest flows first (%d/%d with past durations).", known, len(flows))
+	results, workerFailures := e.executeFlows(ctx, flows, workers, sessionDir, func(ctx context.Context, w int) (*Run, error) {
+		run := e.newRun("run", w)
+		if err := run.Setup(ctx, true); err != nil {
+			writeRunError(run.Dir, err)
+			run.Cleanup()
+			return nil, err
 		}
-	}
-	var wg sync.WaitGroup
-	var failMu sync.Mutex
-	var workerFailures []string
-	for w := 1; w <= workers; w++ {
-		wg.Add(1)
-		go func(w int) {
-			defer wg.Done()
-			if err := e.worker(ctx, w, q, sessionDir); err != nil {
-				failMu.Lock()
-				workerFailures = append(workerFailures, fmt.Sprintf("worker %d: %v", w, err))
-				failMu.Unlock()
-				e.emit(Event{Kind: EvLog, Level: "error", Worker: w, Text: err.Error()})
-			}
-		}(w)
-		// Stagger slightly so workers do not race for the same device on the same tick.
-		select {
-		case <-ctx.Done():
-		case <-time.After(time.Second):
-		}
-	}
-	wg.Wait()
+		_ = os.Symlink(run.Dir, filepath.Join(sessionDir, fmt.Sprintf("worker-%d", w)))
+		return run, nil
+	})
 	stripArtifacts(sessionDir)
 
-	s := NewSummary(q.collect(), time.Since(start), sessionDir)
+	s := NewSummary(results, time.Since(start), sessionDir)
 	if len(workerFailures) > 0 {
 		_ = os.WriteFile(filepath.Join(sessionDir, "worker-failures.txt"), []byte(strings.Join(workerFailures, "\n")+"\n"), 0o644)
 	}
@@ -258,57 +215,6 @@ func (e *Engine) runParallel(ctx context.Context, flows []*fixtures.Flow, start 
 	_ = os.WriteFile(filepath.Join(sessionDir, "status.txt"), []byte(status), 0o644)
 	e.persist(s, sessionDir)
 	return s
-}
-
-func (e *Engine) worker(ctx context.Context, w int, q *queue, sessionDir string) error {
-	run := e.newRun("run", w)
-	defer run.Cleanup()
-	if err := run.Setup(ctx, true); err != nil {
-		writeRunError(run.Dir, err)
-		return err
-	}
-	_ = os.Symlink(run.Dir, filepath.Join(sessionDir, fmt.Sprintf("worker-%d", w)))
-	for ctx.Err() == nil && e.batched() {
-		idx := q.claimBatch(q.workers)
-		if len(idx) == 0 {
-			return nil
-		}
-		chunk := make([]*fixtures.Flow, len(idx))
-		for j, i := range idx {
-			chunk[j] = q.flows[i]
-		}
-		got := make([]bool, len(idx))
-		halted := run.RunBatch(ctx, chunk, q.halted, func(j int, res *Result) {
-			got[j] = true
-			q.put(idx[j], res)
-		})
-		for j, i := range idx {
-			if !got[j] {
-				q.unclaim(i)
-			}
-		}
-		if halted {
-			q.halt()
-			return nil
-		}
-	}
-	for ctx.Err() == nil && !e.batched() {
-		i, f, ok := q.claim()
-		if !ok {
-			return nil
-		}
-		res := run.RunFlow(ctx, f)
-		q.put(i, res)
-		if res.Stage == "CANCELLED" {
-			return nil
-		}
-		if !res.Passed() && e.Opts.FailFast {
-			q.halt()
-			run.logf("Stopping after %s/%s failed.", f.Feature, f.File)
-			return nil
-		}
-	}
-	return nil
 }
 
 // persist writes result.tsv, last-run and junit.xml.

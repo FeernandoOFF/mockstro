@@ -88,7 +88,7 @@ func TestSuiteConcurrentTargetsAndIsolatedPorts(t *testing.T) {
 	var events []Event
 	result := make(chan *Summary, 1)
 	go func() {
-		result <- runSuite(ctx, p, o, fake, func(ev Event) { events = append(events, ev) }, func(e *Engine) *Summary {
+		result <- runSuite(ctx, p, o, fake, func(ev Event) { events = append(events, ev) }, func(e *Engine, planned []*fixtures.Flow) *Summary {
 			if e.Opts.Parallel != "2" || !e.Opts.managed || !strings.Contains(e.P.RunsRoot(), "session-") {
 				return &Summary{Err: fmt.Errorf("incorrect child options")}
 			}
@@ -107,7 +107,7 @@ func TestSuiteConcurrentTargetsAndIsolatedPorts(t *testing.T) {
 			case <-ctx.Done():
 				return &Summary{Err: ctx.Err()}
 			}
-			flows, _ := e.DiscoverFlows()
+			flows := planned
 			f := flows[0]
 			dir := filepath.Join(e.P.RunsRoot(), "worker")
 			os.MkdirAll(dir, 0755)
@@ -185,12 +185,12 @@ func TestSuiteLiteSerializesAndSetupFailureDoesNotHideOtherTarget(t *testing.T) 
 	p.Targets["ios"].Integration = "lite"
 	fake := &execx.Fake{Handler: func(c execx.Cmd) (string, error) { return "", nil }}
 	var order []string
-	s := runSuite(context.Background(), p, DefaultOptions(), fake, nil, func(e *Engine) *Summary {
+	s := runSuite(context.Background(), p, DefaultOptions(), fake, nil, func(e *Engine, planned []*fixtures.Flow) *Summary {
 		order = append(order, e.Opts.Platform)
 		if e.Opts.Platform == "android" {
 			return &Summary{Err: fmt.Errorf("build failed")}
 		}
-		flows, _ := e.DiscoverFlows()
+		flows := planned
 		f := flows[0]
 		return NewSummary([]*Result{{Path: f.Path, Feature: f.Feature, File: f.File, Stage: "PASS", Platform: "ios"}}, 0, "")
 	})
@@ -245,7 +245,7 @@ func TestCancellationStopsBothTargetsAndProducesResults(t *testing.T) {
 	cleaned := make(chan struct{}, 2)
 	done := make(chan *Summary, 1)
 	go func() {
-		done <- runSuite(ctx, p, DefaultOptions(), fake, nil, func(e *Engine) *Summary {
+		done <- runSuite(ctx, p, DefaultOptions(), fake, nil, func(e *Engine, planned []*fixtures.Flow) *Summary {
 			defer func() { cleaned <- struct{}{} }()
 			started <- struct{}{}
 			<-ctx.Done()
@@ -271,5 +271,41 @@ func TestCancellationStopsBothTargetsAndProducesResults(t *testing.T) {
 	}
 	if len(cleaned) != 2 {
 		t.Fatal("returned before both target executors cleaned up")
+	}
+}
+
+func TestSuitePublishesIndependentResultSnapshots(t *testing.T) {
+	p := suiteProject(t)
+	var published []*Result
+	summary := runSuite(context.Background(), p, DefaultOptions(), &execx.Fake{Handler: func(execx.Cmd) (string, error) { return "", nil }}, func(ev Event) {
+		if ev.Result != nil {
+			published = append(published, ev.Result)
+		}
+	}, func(e *Engine, flows []*fixtures.Flow) *Summary {
+		f := flows[0]
+		result := &Result{Feature: f.Feature, File: f.File, Path: f.Path, Stage: "PASS", Worker: 2, Shots: []string{"captured.png"}, Verifs: []VerificationResult{{Stub: "original"}}, Unmatched: []string{"original"}}
+		e.emit(Event{Kind: EvFlowResult, Worker: 2, Result: result})
+		result.Message = "finalized"
+		result.Shots[0] = "changed.png"
+		result.Verifs[0].Stub = "changed"
+		result.Unmatched[0] = "changed"
+		return NewSummary([]*Result{result}, 0, "")
+	})
+	if summary.Failed != 0 || len(published) != 2 {
+		t.Fatalf("summary %+v, published %d", summary, len(published))
+	}
+	for _, result := range published {
+		if result.Message != "" || result.Shots[0] != "captured.png" || result.Verifs[0].Stub != "original" || result.Unmatched[0] != "original" {
+			t.Fatalf("published result was changed by child: %+v", result)
+		}
+	}
+	for _, result := range summary.Results {
+		worker := 3
+		if result.Platform == "ios" {
+			worker = 103
+		}
+		if result.Worker != worker {
+			t.Fatalf("summary worker %d for %s", result.Worker, result.Platform)
+		}
 	}
 }

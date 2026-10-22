@@ -169,7 +169,7 @@ func Execute(version string) int {
 	proxy.Flags().BoolVar(&proxyClear, "clear", false, "remove the proxy settings and verify they are gone")
 
 	var keep int
-	prune := &cobra.Command{Use: "prune", Short: "Delete old run dirs of this project and strip APK snapshots from the rest", Args: cobra.NoArgs,
+	prune := &cobra.Command{Use: "prune", Short: "Delete old run dirs of this project and strip build artifacts from the rest", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return pruneCmd(cmd.Context(), g, keep) }}
 	prune.Flags().IntVar(&keep, "keep", engine.KeepRuns(), "finished run dirs to keep")
 

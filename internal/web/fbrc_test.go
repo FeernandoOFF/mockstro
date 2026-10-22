@@ -29,7 +29,7 @@ func TestFBRCKeysEndpointUsesTheProjectsScenarios(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("%d %v %s", rec.Code, err, rec.Body)
 	}
-	if len(out.Keys) != 1 || out.Keys[0].Key != "Config_Survey_Enabled" || out.Keys[0].Values[0] != "true" {
+	if len(out.Keys) != 1 || out.Keys[0].Key != "survey.enabled" || out.Keys[0].Values[0] != "true" {
 		t.Fatalf("keys = %+v", out.Keys)
 	}
 }

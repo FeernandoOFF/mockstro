@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/feernandooff/mockstro/internal/build"
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/project"
 )
@@ -15,7 +16,12 @@ func TestBuildersUseTargetCheckoutInsteadOfSuite(t *testing.T) {
 	for _, name := range []string{"android", "ios"} {
 		t.Run(name, func(t *testing.T) {
 			suite, source, artifacts := t.TempDir(), t.TempDir(), t.TempDir()
-			p := &project.Project{Root: suite, BuildRoot: source, GradleTask: "assembleDebug", APKGlob: "build/*.apk", IOSProject: "App.xcworkspace", IOSScheme: "App", IOSConfig: "Debug"}
+			p := &project.Project{Root: suite, BuildRoot: source, Platform: name}
+			if name == "ios" {
+				p.Build = project.BuildConfig{Project: "App.xcworkspace", Scheme: "App"}
+			} else {
+				p.Build = project.BuildConfig{Artifact: "build/*.apk"}
+			}
 			called := false
 			ex := &execx.Fake{Handler: func(c execx.Cmd) (string, error) {
 				called = true
@@ -39,9 +45,9 @@ func TestBuildersUseTargetCheckoutInsteadOfSuite(t *testing.T) {
 				}
 				return "", nil
 			}}
-			path, sha, err := New(p, name, ex).Build(context.Background(), artifacts, nil)
-			if err != nil || !called || path == "" || sha == "" {
-				t.Fatal(path, sha, err)
+			artifact, err := build.Build(context.Background(), p, ex, artifacts, nil)
+			if err != nil || !called || artifact.Path == "" || artifact.SHA256 == "" {
+				t.Fatal(artifact, err)
 			}
 			if _, err := os.Stat(filepath.Join(suite, "build")); !os.IsNotExist(err) {
 				t.Fatal("build wrote into the owning suite")

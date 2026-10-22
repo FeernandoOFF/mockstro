@@ -78,7 +78,7 @@ type runModel struct {
 	selWorker int
 	scroll    int // lines up from the bottom (following the tail)
 	anchor    int // absolute line shown at the top; -1 follows the tail
-	marks     map[*engine.Result]outputMark
+	marks     map[string]outputMark
 	confirm   bool
 	resCursor int
 	focusLog  bool // arrows scroll the output instead of picking results
@@ -101,7 +101,7 @@ func (r *runModel) worker(id int) *workerState {
 
 func (r *runModel) start(o engine.Options, total int) tea.Cmd {
 	a := r.a
-	*r = runModel{a: a, opts: o, total: total, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[*engine.Result]outputMark{}, picked: map[string]bool{}}
+	*r = runModel{a: a, opts: o, total: total, started: time.Now(), done: make(chan struct{}), anchor: -1, marks: map[string]outputMark{}, picked: map[string]bool{}}
 	r.worker(0)
 	if plans, _, err := engine.Plan(a.p, o); err == nil {
 		r.total = 0
@@ -180,7 +180,7 @@ func (r *runModel) update(msg tea.Msg) tea.Cmd {
 			res := ev.Result
 			r.results = append(r.results, res)
 			if r.marks != nil {
-				r.marks[res] = outputMark{ev.Worker, w.flowLine}
+				r.marks[resultKey(res)] = outputMark{ev.Worker, w.flowLine}
 			}
 			if res.Passed() {
 				w.passed++
@@ -315,7 +315,7 @@ func (r *runModel) jumpToResult() {
 	if r.resCursor >= len(r.results) {
 		return
 	}
-	m, ok := r.marks[r.results[r.resCursor]]
+	m, ok := r.marks[resultKey(r.results[r.resCursor])]
 	if !ok {
 		return
 	}

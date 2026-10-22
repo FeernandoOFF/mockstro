@@ -45,11 +45,103 @@ platforms:
 | `appId` | required, literal |
 | `integration` | `lite` or `full`, see [integration](integration.md) |
 | `devices` | emulator/simulator names agents may use, see [devices](devices.md) |
-| `build` | Android defaults: `assembleDebug`, `app/build/outputs/apk/debug/*.apk`. iOS needs `project` and `scheme`. Kotlin: `system: kotlin-toolchain`, see [the guide](kotlin-toolchain.md) |
+| `build` | Select Gradle, Xcode, Kotlin Toolchain or an explicit task command; see below |
 | `wiremockVersion` | `3.13.2` (default) or `4.0.0-beta.40` for [WebSockets](websockets.md) |
 | `proxyBaseUrl`, `fallbackUrl`, `fbrcUrl`, `overrideKey`, `acceptKey` | advanced |
 
 Unknown keys print a warning and are ignored, so newer configs still load.
+
+## Web catalog metadata
+
+The web library works without metadata: each profile name becomes a group, scenarios and
+flows use their profile's group, and items without a profile appear under **Other**.
+All scenario and flow header `tags` appear as filter chips.
+
+Optional top-level `catalog` settings in the shared `mockstro.yaml` customize this for
+the whole suite, including every platform and locally added targets:
+
+```yaml
+catalog:
+  profileGroups:
+    member: Members
+    staff: Team
+    admin: Team
+  groupOrder: [Team, Members]
+  featureTags:
+    feedback.enabled: feedback
+    feedback.rate: feedback
+```
+
+- `profileGroups` maps exact profile names to display labels; multiple profiles can share
+  a label. Unmapped profiles keep their own names, and an empty label uses that fallback.
+- `groupOrder` optionally lists group labels to show first. Remaining groups follow
+  alphabetically, so new profiles stay visible. Labels with no items are omitted.
+- `featureTags` optionally maps exact Remote Config keys to tags. A scenario or flow
+  setting that key gains the mapped tag, alongside its explicit header tags. Empty
+  mappings add no tag. Keys and tags can use any project vocabulary; no key prefix or
+  customer naming convention is interpreted.
+
+Metadata belongs in the shared file; there is no local catalog override. It controls
+presentation only and does not change fixture selection or execution.
+
+## Builds
+
+Build preparation is independent of device discovery and installation. Each build runs in
+that platform's source checkout (`platforms.<name>.project`, or the suite repository when
+omitted). Artifact globs resolve from the same directory. Builds inherit the process
+environment; YAML `env` values are Maestro inputs only.
+
+`build.system` accepts `gradle`, `xcode`, `kotlin-toolchain` or `command`. When omitted,
+Android uses Gradle and iOS uses Xcode, unless `build.command` is present. The former
+`system: native` value has been replaced by these explicit platform defaults.
+
+- **Gradle:** `task` defaults to `assembleDebug`, and `artifact` defaults to
+  `app/build/outputs/apk/debug/*.apk`. Mockstro runs `./gradlew <task> -q`.
+- **Xcode:** set `project` (`.xcodeproj` or `.xcworkspace`) and `scheme`;
+  `configuration` defaults to `Debug`. Mockstro builds for a generic iOS Simulator with
+  signing disabled and derived data in `build/maestro-derived-data`. `artifact` defaults
+  to `build/maestro-derived-data/Build/Products/<configuration>-iphonesimulator/*.app`.
+  Project and scheme are required when building, so configurations using an installed
+  app can omit them.
+- **Kotlin Toolchain:** set `system: kotlin-toolchain`; `module` defaults to the platform
+  name, and `variant` defaults to `debug` (`release` is also accepted). See the
+  [Kotlin Toolchain guide](kotlin-toolchain.md) for commands and artifact defaults.
+- **Command:** set `command` to a nonempty argv list and supply `artifact`. This is the
+  fallback for Make, mise, project scripts and other task runners. `system: command`
+  is optional when `command` is present; pairing a command with another system is an error.
+
+```yaml
+platforms:
+  android:
+    project: ../android-app
+    appId: com.example.android
+    integration: full
+    build:
+      command: [make, app]
+      artifact: out/android/*.apk
+  ios:
+    project: ../ios-app
+    appId: com.example.ios
+    integration: full
+    build:
+      command: [mise, run, build-ios]
+      artifact: out/simulator/*.app
+```
+
+Each command element is passed literally as one argument. Spaces, globs, `$VARIABLE`,
+`$(...)`, pipes and redirections receive no shell interpretation. Use a project script
+for multi-step builds, or explicitly invoke a shell in the argv list when required.
+No alternate command is attempted after a build fails, and existing outputs are never
+accepted after a failed command. Successful incremental builds may reuse their outputs.
+
+Exactly one installable artifact must match: a regular `.apk` file on Android, or a
+`.app` directory on iOS. Globs use Go filepath syntax (`*`, `?`, and character classes;
+`**` does not recurse). iOS bundles must identify the configured app, target the iOS
+Simulator and contain their declared executable. Each result is copied into a new
+run-owned `artifacts/build-*` directory and receives a SHA-256 hash; iOS hashes include
+resources, file modes and symlinks. Bundle symlinks must be relative and resolve within
+the bundle. Rebuilding cannot overwrite a previous snapshot.
+The snapshot directory contains `artifact.sha256` for inspection.
 
 ## mockstro.local.yaml
 
@@ -68,7 +160,10 @@ platforms:
 ```
 
 - For platforms already in `mockstro.yaml`, only `project`, `devices`, `build` and `env` can be overridden.
-- `devices` replaces the shared list; `build` and `env` merge.
+- `devices` replaces the shared list; `build` fields and `env` values merge.
+- A local `build.command` replaces the entire argv list and selects command builds. Setting
+  a local `build.system` to a native system clears an inherited command. Shared artifact
+  globs remain in effect unless overridden.
 - An added platform only runs on machines that define it.
 
 ## Variables
