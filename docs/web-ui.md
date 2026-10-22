@@ -47,19 +47,25 @@ system's light or dark setting.
   and the chip filter while the page stays open, so coming back from the Session does not mean
   searching again.
   - **Preview** on any item opens what it would do without starting it: for a flow, its test
-    script, the checks it runs, the extra API calls it answers (method, path and stub), and its
-    Remote Config. The Remote Config can be changed there. **Start with your changes** serves the
-    mock with those values from the app's first fetch; the mock's own values come back on the
-    next start from the Library.
-  - The group comes from the customer profile's name: `dual…` is Dual fuel, `gas…` is Gas only and
-    `elec…` is Elec only. A scenario or flow takes its profile's group.
-  - Chips come from the `tags` in scenario and flow headers. A scenario also gets a feature from its
-    Remote Config keys (`Config_<Feature>_…`) when a tag of that name exists somewhere in the
-    project. `regression` and `smoke` mark test suites, and `electricity-only`, `gas-only` and `dual-fuel` name
-    customer types, which the groups already show, so none of those appear as chips.
+    script and the checks it runs; **Responses it will serve**, every API call the mock answers,
+    grouped as added by the test, the customer's own, and the shared defaults; and its Remote
+    Config. **View** shows a response exactly as the app would get it (status, headers, body,
+    resolved from the stub file and whatever it extends). A call another stub already answers is
+    dimmed, and a call the flow's `apiVerifications` count is marked.
+  - A call that changes as the test runs shows as one call with an answer for each step, in order
+    ("At the start", "After POST /api/topup"), and a line says what changes between them, field
+    by field (`currentOverdueValueInEuro: 50 → 0`). The line follows any edits you make.
+  - Both a call's response (**Edit**) and the Remote Config values can be changed before anything
+    runs. **Start with your changes** serves the mock with the edited responses and values from
+    the app's first request. Editing one step's answer leaves the others to change as the test
+    runs: edit the answer at the start to 75 and the answer after the payment still arrives. A
+    call that moves the test on (the payment itself) can't be edited, and a call that matches
+    several URLs can't either; edit those from Requests once the app has made them. The edits are
+    the same as the Session's custom responses: they show in that tab, with the step they apply
+    to, and last until the mock is switched or stopped.
 - **Session:** when nothing is running, it lists the last few things run in this project, each
-  with **Preview** and **Start again**; an entry keeps the Remote Config changes it was started
-  with. Otherwise it shows the running mock, with tabs for **Requests**, **Custom responses**, **Remote
+  with **Preview** and **Start again**; an entry keeps the Remote Config values and edited responses it was
+  started with. Otherwise it shows the running mock, with tabs for **Requests**, **Custom responses**, **Remote
   Config** and **Activity**, and a side panel with its details and the saved responses.
   - A request with no stub is red. Clicking a request shows what the app sent and the response it
     received.
@@ -67,7 +73,9 @@ system's light or dark setting.
     wider and stays in view beside the Requests list. The steps are read from the flow file
     itself: taps, typed text, what to expect on screen, with the comment above each command as its
     explanation (a command's `label:` replaces the generated text). Branches for one platform get
-    an **Android** / **iOS** switch, remembered in the browser. Waits, scrolling and the launch
+    an **Android** / **iOS** switch, remembered in the browser. The script is a fold with its step
+    count in the heading, so it can be folded away to leave the checks and Remote Config in view;
+    whether it is open is remembered in the browser too. Waits, scrolling and the launch
     and utility sub-flows are left out. The **live checks** are the flow's `apiVerifications`,
     counted from the request list as the app calls the stubs. To run it again, stop the mock and
     start it again.
