@@ -103,6 +103,7 @@ func NewServer(ws *Workspace, ex execx.Runner, port int) (*Server, error) {
 	s.mux.HandleFunc("POST /api/git/switch", s.gitSwitch)
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/catalog", s.catalog)
+	s.mux.HandleFunc("GET /api/preview", s.preview)
 	s.mux.HandleFunc("GET /api/state", s.state)
 	s.mux.HandleFunc("GET /api/journal", s.journal)
 	s.mux.HandleFunc("GET /api/journal/{id}", s.requestDetail)
@@ -263,6 +264,30 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "project": p.Root, "platform": m.platform()})
+}
+
+// preview describes one catalog item without starting it: its steps, checks, stubs and Remote Config.
+func (s *Server) preview(w http.ResponseWriter, r *http.Request) {
+	p, _, ok := s.cur(w)
+	if !ok {
+		return
+	}
+	items, err := Catalog(p)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	it, ok := findItem(items, r.URL.Query().Get("kind"), r.URL.Query().Get("ref"))
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown %s %q", r.URL.Query().Get("kind"), r.URL.Query().Get("ref")))
+		return
+	}
+	pv, err := PreviewOf(p, it)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pv)
 }
 
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
@@ -507,10 +532,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Kind string `json:"kind"`
-		Ref  string `json:"ref"`
+		Kind string            `json:"kind"`
+		Ref  string            `json:"ref"`
+		FBRC map[string]string `json:"fbrc"` // Remote Config chosen in the preview; absent means the target's own
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -524,7 +550,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("unknown %s %q", req.Kind, req.Ref))
 		return
 	}
-	if err := m.Serve(req.Ref); err != nil {
+	fbrc := req.FBRC
+	if fbrc != nil {
+		var err error
+		if fbrc, err = engine.ValidateFBRC(fbrc); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	if err := m.Serve(req.Ref, fbrc); err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}

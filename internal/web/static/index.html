@@ -203,6 +203,34 @@ pre.code { background: var(--bg-side); border: 1px solid var(--line); border-rad
   .head, .banner, .tabs, .row, .bar, .gh, .check, details.fold > summary, .logline, .note { padding-left: 16px; padding-right: 16px; } .banner { margin-left: 16px; margin-right: 16px; }
   .head .top { flex-direction: column; } .search { width: 100%; }
 }
+/* Test script: a served flow's steps and live checks in a side panel, so the requests stay in view */
+.page.tg { grid-template-columns: minmax(0, 1fr) 400px; }
+.page.tg > .panel { padding-top: 18px; }
+@media (min-width: 1101px) { .page.tg > .panel { position: sticky; top: 0; align-self: start; max-height: calc(100vh - 48px); overflow-y: auto; } }
+.tg-step { display: flex; gap: 10px; padding: 7px 0; }
+.tg-n { width: 22px; height: 22px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 11.5px; font-weight: 650; background: var(--bg-active); color: var(--text); margin-top: 1px; }
+.tg-mark { width: 22px; flex: none; text-align: center; color: var(--faint); font-weight: 700; }
+.tg-see .tg-t, .tg-gone .tg-t { color: var(--muted); }
+.tg-t small { color: var(--faint); margin-left: 6px; font-weight: 400; }
+.tg-note { color: var(--faint); font-size: 12.5px; margin-top: 2px; }
+.tg-if { margin: 2px 0; padding: 0 0 0 10px; border-left: 2px solid var(--line-strong); }
+.tg-ifh { color: var(--muted); padding: 6px 0 0; }
+.tg-checks { padding-bottom: 14px; }
+.tg-chk { display: flex; gap: 10px; padding: 8px 0; }
+.tg-chk .ic { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex: none; margin-top: 1px; font-size: 11px; font-weight: 700; background: var(--bg-hover); color: var(--muted); }
+.tg-chk .ic.ok { background: var(--ok-bg); color: var(--ok); } .tg-chk .ic.fail { background: var(--bad-bg); color: var(--bad); }
+.tg-chk .ct { font-weight: 550; } .tg-chk .cd { color: var(--muted); font-size: 12.5px; }
+/* the Remote Config editor, narrowed to fit the side panel */
+.fb-status { padding: 4px 28px 0; margin: 0; } .fb-status[hidden] { display: none; } .fb-status.good { color: var(--ok); }
+.panel .fb-intro, .panel .fb-note, .panel .fb-status { padding-left: 0; padding-right: 0; }
+.panel .row { padding: 10px 0; flex-wrap: wrap; gap: 6px 10px; } .panel .row > .grow { flex-basis: 100%; overflow-wrap: anywhere; }
+.panel .gh { padding: 7px 8px; margin-top: 8px; }
+.panel .fbv { width: auto; flex: 1; min-width: 0; }
+.panel .fb-add { padding: 12px 0; flex-wrap: wrap; border-bottom: 0; } .panel .fb-add .input { flex-basis: 100%; max-width: none !important; }
+.panel .fb-bar { padding: 12px 0; flex-wrap: wrap; }
+.tg-more { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 12px; }
+.tg-more > summary { cursor: pointer; font-weight: 650; }
+.tg-more[open] > summary { margin-bottom: 12px; }
 </style>
 </head>
 <body>
@@ -301,11 +329,12 @@ let proj = { open: false, recent: [] }, items = [], saved = [], savedDir = '', g
 let state = { state: 'idle', custom: [], log: [] }, notice = '', dismissedErr = '', current = null, stateSig = '', rowsSig = '', gitBusy = false;
 
 const KIND = { scenario: 'Scenario', profile: 'Customer', flow: 'Test flow' };
-const VIEWS = ['session', 'library', 'saved', 'setup'];
-const TITLES = { session: 'Session', library: 'Mocks', saved: 'Saved responses', setup: 'Setup check' };
+const VIEWS = ['session', 'library', 'preview', 'saved', 'setup'];
+const TITLES = { session: 'Session', library: 'Mocks', preview: 'Preview', saved: 'Saved responses', setup: 'Setup check' };
 const viewName = () => {
   const v = location.hash.slice(2);
   if (['scenario', 'profile', 'flow'].includes(v)) return 'library';
+  if (v === 'preview' && !previewTarget) return 'library';
   return VIEWS.includes(v) ? v : (state.serving ? 'session' : 'library');
 };
 const go = (v) => { location.hash = '#/' + v; };
@@ -333,7 +362,7 @@ function banner() {
 // ---------- chrome
 function renderSidebar() {
   const view = viewName();
-  const link = (v, ic, label, count, lead) => h('a', { href: '#/' + v, ...(view === v ? { 'aria-current': 'page' } : {}), title: label }, icon(ic), h('span', { class: 'label' }, label), lead, count != null && count !== '' ? h('span', { class: 'count' }, String(count)) : null);
+  const link = (v, ic, label, count, lead) => h('a', { href: '#/' + v, ...(view === v || (v === 'library' && view === 'preview') ? { 'aria-current': 'page' } : {}), title: label }, icon(ic), h('span', { class: 'label' }, label), lead, count != null && count !== '' ? h('span', { class: 'count' }, String(count)) : null);
   const status = health ? (health.overall === 'ok' ? 'ok' : health.overall) : '';
   const others = (proj.recent || []).filter((r) => r.path !== proj.path);
   const tree = [];
@@ -379,7 +408,7 @@ function renderAll() { renderChrome(); if (current) current.update(); }
 function mountView() {
   if (!proj.open) return;
   const v = viewName();
-  const build = { session: mountSession, library: mountLibrary, saved: mountSaved, setup: mountSetup }[v];
+  const build = { session: mountSession, library: mountLibrary, preview: mountPreview, saved: mountSaved, setup: mountSetup }[v];
   current = build();
   fill($('content'), current.el);
   document.querySelector('.scroll').scrollTop = 0;
@@ -415,16 +444,17 @@ function fold(id, defaultOpen, forceOpen, cls, summary, children) {
   return wrap;
 }
 
+// The search and chip filter outlive the view, so coming back from the Session does not mean searching again.
+const lib = { query: '', feature: '' };
 function mountLibrary() {
-  let query = '', feature = '';
   const headSlot = h('div'), slot = h('div'), chipsEl = h('div', { class: 'chips' }), list = h('div');
-  const search = h('div', { class: 'search' }, icon('search'), h('input', { class: 'input', type: 'search', placeholder: 'Search mocks', 'aria-label': 'Search mocks', oninput: (e) => { query = e.target.value; draw(); } }));
+  const search = h('div', { class: 'search' }, icon('search'), h('input', { class: 'input', type: 'search', value: lib.query, placeholder: 'Search mocks', 'aria-label': 'Search mocks', oninput: (e) => { lib.query = e.target.value; draw(); } }));
   const el = h('div', { class: 'page single' }, h('div', { class: 'col' }, headSlot, slot, chipsEl, list));
 
   const matches = (it) => {
-    const q = query.trim().toLowerCase();
+    const q = lib.query.trim().toLowerCase();
     if (q && ![it.title, it.description, it.profile, ...(it.tags || [])].join(' ').toLowerCase().includes(q)) return false;
-    return !feature || (it.tags || []).includes(feature);
+    return !lib.feature || (it.tags || []).includes(lib.feature);
   };
 
   function libRow(it) {
@@ -439,21 +469,22 @@ function mountLibrary() {
       : h('button', { class: 'btn sm' + (serving() ? '' : ' primary'), ...(busy() ? { disabled: '' } : {}), onclick: () => start(it) }, serving() ? 'Switch to this' : 'Start');
     return h('div', { class: 'row' + (active ? ' active' : '') },
       h('div', { class: 'grow' }, h('div', { class: 'rt' }, it.title), it.description ? h('div', { class: 'rd' }, it.description) : null, h('div', { class: 'rm' }, meta.join(' · '))),
-      active ? badge('ok', 'Serving') : null, act);
+      active ? badge('ok', 'Serving') : null,
+      h('button', { class: 'btn sm ghost', title: 'See what it does and set it up before starting', onclick: () => openPreview(it) }, 'Preview'), act);
   }
 
   function drawChips() {
     const counts = new Map();
     for (const it of items) for (const t of it.tags || []) if (!HIDDEN_TAGS.includes(t)) counts.set(t, (counts.get(t) || 0) + 1);
     const tags = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-    if (feature && !counts.has(feature)) feature = '';
+    if (lib.feature && !counts.has(lib.feature)) lib.feature = '';
     const chip = (label, n, on, fn) => h('button', { class: 'pillbtn', 'aria-pressed': String(on), onclick: fn }, label, n != null ? h('small', {}, String(n)) : null);
-    fill(chipsEl, tags.length ? [chip('All', items.length, !feature, () => { feature = ''; drawChips(); draw(); }), ...tags.map(([t, n]) => chip(t, n, feature === t, () => { feature = feature === t ? '' : t; drawChips(); draw(); }))] : []);
+    fill(chipsEl, tags.length ? [chip('All', items.length, !lib.feature, () => { lib.feature = ''; drawChips(); draw(); }), ...tags.map(([t, n]) => chip(t, n, lib.feature === t, () => { lib.feature = lib.feature === t ? '' : t; drawChips(); draw(); }))] : []);
     chipsEl.hidden = !tags.length;
   }
 
   function draw() {
-    const filtering = !!(query.trim() || feature);
+    const filtering = !!(lib.query.trim() || lib.feature);
     const shown = items.filter(matches);
     fill(list);
     if (!shown.length) { list.append(h('div', { class: 'note' }, items.length ? 'Nothing matches that.' : 'There is nothing to mock in this project yet.')); return; }
@@ -486,7 +517,17 @@ function mountLibrary() {
 
 // Remote Config editor: change what the app is served without restarting the mock.
 let fbrcNote = null, knownKeys = null;
-function fbrcEditor(s) {
+// When the tester last applied Remote Config, so the page can say whether the app has fetched it since.
+let fbrcApplied = null;
+const fetchStatusEl = h('p', { class: 'hint fb-status', role: 'status', 'aria-live': 'polite', hidden: '' });
+function updateFetchStatus(s) {
+  if (!fbrcApplied || fbrcApplied.name !== s.name) { fetchStatusEl.hidden = true; return; }
+  const seen = rows.filter((r) => /namespaces\/firebase:fetch/.test(r.url) && r.time >= fbrcApplied.at);
+  fetchStatusEl.hidden = false;
+  fetchStatusEl.className = 'hint fb-status' + (seen.length ? ' good' : '');
+  fetchStatusEl.textContent = seen.length ? '✓ The app fetched the new values at ' + fmtTime(Math.max(...seen.map((r) => r.time))) + '.' : 'Waiting for the app to fetch the new values. Relaunch the app.';
+}
+function fbrcEditor(s, opts = {}) {
   const defaults = s.defaultFbrc || {}, current = s.fbrc || {};
   let draft = { ...current };
   const same = (a, b) => { const ka = Object.keys(a); return ka.length === Object.keys(b).length && ka.every((k) => k in b && a[k] === b[k]); };
@@ -519,16 +560,24 @@ function fbrcEditor(s) {
   }
   async function apply() {
     try { await api('/api/fbrc', { values: draft }); } catch (e) { setNote(e.message, 'bad'); return; }
-    fbrcNote = { text: 'Applied. The app picks the new values up the next time it fetches Remote Config, usually when you relaunch it.', cls: 'good' };
+    fbrcApplied = { name: s.name, at: Date.now() }; updateFetchStatus(s);
+    fbrcNote = { text: 'Applied.', cls: 'good' };
     setNote(fbrcNote.text, 'good'); refresh();
   }
   async function resetAll() {
     try { await api('/api/fbrc/reset', {}); } catch (e) { setNote(e.message, 'bad'); return; }
-    fbrcNote = { text: 'Back to the scenario\'s values. Relaunch the app to fetch them.', cls: 'good' };
+    fbrcApplied = { name: s.name, at: Date.now() }; updateFetchStatus(s);
+    fbrcNote = { text: 'Back to the scenario\'s values.', cls: 'good' };
     setNote(fbrcNote.text, 'good'); refresh();
   }
   function drawBar() {
     const n = nChanges();
+    if (opts.draftOnly) {
+      fill(bar, h('span', { class: 'grow muted' }, n ? 'Changed from this mock\'s own values. They apply when you start it.' : 'This mock\'s own values.'),
+        n ? h('button', { class: 'btn', onclick: () => { draft = { ...defaults }; clearNote(); redraw(); } }, 'Reset') : null);
+      if (opts.onChange) opts.onChange({ ...draft });
+      return;
+    }
     fill(bar, h('span', { class: 'grow muted' }, n ? n + (n === 1 ? ' change' : ' changes') + ' not applied yet' : 'No unapplied changes'),
       !same(current, defaults) ? h('button', { class: 'btn', onclick: resetAll }, 'Reset to scenario') : null,
       h('button', { class: 'btn', ...(n ? {} : { disabled: '' }), onclick: () => { draft = { ...current }; clearNote(); redraw(); } }, 'Discard'),
@@ -544,25 +593,140 @@ function fbrcEditor(s) {
   };
   redraw();
   return h('div', {},
-    h('p', { class: 'hint fb-intro' }, 'What the app gets from Remote Config. Change a value, remove one to test the app with that key missing, or add one, then apply. The app picks changes up on its next fetch, usually when you relaunch it.'),
-    note, list, removed,
+    h('p', { class: 'hint fb-intro' }, opts.draftOnly ? 'Set these before you start: change a value, remove one to test the app with that key missing, or add one. The app is served them from its first fetch.' : 'What the app gets from Remote Config. Change a value, remove one to test the app with that key missing, or add one, then apply. The app picks changes up on its next fetch, usually when you relaunch it.'),
+    note, opts.draftOnly ? null : fetchStatusEl, list, removed,
     h('div', { class: 'fb-add' }, addKey, addVal, h('button', { class: 'btn', onclick: add }, 'Add')),
     bar, dl);
 }
 
 // Session: what is running right now
+// ---------- preview: see and set up a mock before it runs
+let previewTarget = null;
+function openPreview(it) { previewTarget = { kind: it.kind, ref: it.ref }; go('preview'); }
+const sameValues = (a, b) => { const ka = Object.keys(a); return ka.length === Object.keys(b).length && ka.every((k) => k in b && a[k] === b[k]); };
+
+function mountPreview() {
+  const headSlot = h('div'), main = h('div'), panel = h('aside', { class: 'panel' });
+  const el = h('div', { class: 'page tg' }, h('div', { class: 'col' }, headSlot, main), panel);
+  const it = items.find((i) => previewTarget && i.kind === previewTarget.kind && i.ref === previewTarget.ref);
+  let pv = null, failed = '', draft = null;
+  if (!it) { setTimeout(() => go('library')); return { el, update() {} }; }
+
+  function drawHead() {
+    const changed = pv && draft && !sameValues(draft, pv.fbrc);
+    const label = (serving() ? 'Switch to this' : 'Start') + (changed ? ' with your changes' : '');
+    fill(headSlot, head(it.title, badge('', 'Preview'), pv ? pv.description || [KIND_LABEL[it.kind], it.profile ? 'Customer ' + it.profile : null].filter(Boolean).join(' · ') : 'Reading it…',
+      [h('button', { class: 'btn', onclick: () => go('library') }, 'Back to mocks'),
+       h('button', { class: 'btn primary', ...(!pv || busy() ? { disabled: '' } : {}), onclick: () => start(it, changed ? draft : undefined) }, icon('play'), label)]));
+  }
+  function drawBody() {
+    if (failed) { fill(main, h('div', { class: 'note' }, failed)); fill(panel); return; }
+    if (!pv) { fill(main, h('div', { class: 'note' }, 'Reading it…')); return; }
+    const platforms = guidePlatforms(pv.steps);
+    let pick = guidePlatform(platforms);
+    const pad = (...kids) => h('div', { style: 'padding:6px 28px 8px' }, ...kids);
+    const drawMain = () => fill(main,
+      pv.steps && pv.steps.length ? pad(stepsPanel(pv, platforms, pick, (p) => { store.set('platform', p); pick = p; drawMain(); }, 'What you will do and see once it is running.')) : null,
+      pv.checks && pv.checks.length ? pad(h('div', { class: 'ph' }, 'Checked while it runs'), h('div', { class: 'tg-checks' }, pv.checks.map((c) => h('div', { class: 'tg-chk' },
+        h('span', { class: 'ic' }, '…'), h('div', {}, h('div', { class: 'ct' }, c.label), h('div', { class: 'cd' }, 'Expected ' + c.expect + ' once you start')))))) : null,
+      pad(h('div', { class: 'ph' }, pv.kind === 'profile' ? 'API calls it answers' : 'Extra API calls it answers', h('span', {}, pv.kind === 'profile' ? pv.stubs.length + ' stubs' : pv.defaultStubs + ' more come from the customer and shared defaults')),
+        pv.stubs.length ? h('div', {}, pv.stubs.map((st) => h('div', { class: 'tg-step' }, h('div', { class: 'grow' },
+          h('div', { class: 'mono' }, st.method ? st.method + ' ' + st.path : st.name), st.method ? h('div', { class: 'tg-note' }, st.name) : null))))
+          : h('p', { class: 'hintp' }, 'None beyond the customer\'s own.')));
+    drawMain();
+    fill(panel, h('div', { class: 'ph' }, 'Remote Config', h('span', {}, Object.keys(pv.fbrc).length + ' set')),
+      fbrcEditor({ name: pv.ref, fbrc: pv.fbrc, defaultFbrc: pv.fbrc }, { draftOnly: true, onChange: (d) => { draft = d; drawHead(); } }),
+      h('div', { class: 'ph', style: 'margin-top:22px' }, 'Details'),
+      kvList([['Type', KIND[pv.kind] || pv.kind], ['Customer', pv.profile || 'none'], ['Extra stubs', String(pv.stubs.length)]]));
+  }
+  api('/api/preview?kind=' + encodeURIComponent(it.kind) + '&ref=' + encodeURIComponent(it.ref))
+    .then((r) => { pv = r; draft = { ...r.fbrc }; drawHead(); drawBody(); })
+    .catch((e) => { failed = e.message; drawHead(); drawBody(); });
+  drawHead(); drawBody();
+  return { el, update() { drawHead(); } };
+}
+
+// ---------- test script: a served flow's steps and live checks
+const PLATFORM_NAME = { android: 'Android', ios: 'iOS' };
+
+// Each check is counted from the journal the page already polls: how often its stub answered.
+function checkStates(checks) {
+  return (checks || []).map((c) => {
+    const got = rows.filter((r) => r.stub === c.stub).length;
+    const over = c.max != null && got > c.max;
+    const ok = got >= c.min && !over;
+    return { ...c, got, over, ok, status: over ? 'fail' : ok ? 'ok' : 'info' };
+  });
+}
+function guidePlatforms(steps) {
+  const found = new Set();
+  const walk = (list) => (list || []).forEach((st) => { if (st.platform) found.add(st.platform); walk(st.steps); });
+  walk(steps);
+  return [...found].sort();
+}
+// The tester's last choice, else the project's own platform, else the first the flow mentions.
+function guidePlatform(platforms) {
+  const saved = store.get('platform', ''), own = (proj.platform || '').toLowerCase();
+  return platforms.includes(saved) ? saved : platforms.includes(own) ? own : platforms[0] || '';
+}
+function stepsPanel(s, platforms, pick, onPick, hint) {
+  const counter = { n: 0 };
+  const forPick = (list) => (list || []).filter((st) => !st.platform || st.platform === pick);
+  const stepRows = (list) => forPick(list).map((st) => {
+    if (st.kind === 'if') {
+      return h('div', { class: 'tg-if' }, h('div', { class: 'tg-ifh' }, st.text + (st.note ? ' — ' + st.note : '') + ':'), stepRows(st.steps));
+    }
+    const opt = st.optional ? h('small', {}, 'if it appears') : null;
+    const text = h('div', { class: 'grow' }, h('div', { class: 'tg-t' }, st.text, opt), st.note ? h('div', { class: 'tg-note' }, st.note) : null);
+    if (st.kind === 'do') return h('div', { class: 'tg-step tg-do' }, h('span', { class: 'tg-n' }, String(++counter.n)), text);
+    return h('div', { class: 'tg-step tg-' + st.kind }, h('span', { class: 'tg-mark', 'aria-hidden': 'true' }, st.kind === 'gone' ? '–' : '✓'), text);
+  });
+  return h('div', {},
+    h('div', { class: 'ph' }, 'Test script', platforms.length > 1
+      ? h('span', {}, ...platforms.map((p) => h('button', { class: 'seg', 'aria-pressed': String(p === pick), onclick: () => onPick(p) }, PLATFORM_NAME[p] || p)))
+      : null),
+    h('p', { class: 'hintp', style: 'margin:0 0 8px' }, hint || 'To run it again, stop the mock and start it again.'),
+    stepRows(s.steps));
+}
+
+// The checks sit in the side panel so they stay in view on every tab while the tester follows the steps.
+function checkPanel(checks) {
+  const states = checkStates(checks);
+  if (!states.length) return [];
+  return [h('div', { class: 'ph' }, 'Live checks', h('span', {}, states.filter((c) => c.ok).length + ' of ' + states.length)),
+    h('div', { class: 'tg-checks' }, states.map((c) => h('div', { class: 'tg-chk' },
+      h('span', { class: 'ic ' + c.status, role: 'img', 'aria-label': c.over ? 'Too many' : c.ok ? 'Done' : 'Waiting' }, c.over ? '✕' : c.ok ? '✓' : '…'),
+      h('div', {}, h('div', { class: 'ct' }, c.label), h('div', { class: 'cd' }, (c.got ? 'Served ' + c.got + (c.got === 1 ? ' time' : ' times') : 'Not requested yet') + ' · expected ' + c.expect)))))];
+}
+
 function mountSession() {
   let tab = store.get('tab', 'requests'), onlyUnmatched = false;
   const headSlot = h('div'), slot = h('div'), tabsEl = h('div', { class: 'tabs', role: 'tablist' }), body = h('div'), panel = h('aside', { class: 'panel' });
+  // The steps are rebuilt only when they change and the folded details keep their open state, so neither jumps on the 1 s refresh.
+  const checksSlot = h('div'), stepsSlot = h('div'), moreBody = h('div'), moreEl = h('details', { class: 'tg-more' }, h('summary', {}, 'Details and saved responses'), moreBody);
+  const fbrcSum = h('summary', {}), fbrcSlot = h('div'), fbrcEl = h('details', { class: 'tg-more' }, fbrcSum, fbrcSlot);
   const el = h('div', { class: 'page' }, h('div', { class: 'col' }, headSlot, slot, tabsEl, body), panel);
 
+  // The last few things run in this project, each one click from starting again.
+  function recentRows() {
+    const known = recents().map((r) => ({ r, it: items.find((i) => i.kind === r.kind && i.ref === r.ref) })).filter((x) => x.it);
+    if (!known.length) return null;
+    const dis = busy() ? { disabled: '' } : {};
+    return [h('div', { class: 'gh' }, 'Recent'), ...known.map(({ r, it }, i) => h('div', { class: 'row' },
+      h('div', { class: 'grow' }, h('div', { class: 'rt' }, it.title), h('div', { class: 'rm' }, [KIND_LABEL[it.kind], r.fbrc ? 'with your Remote Config changes' : null].filter(Boolean).join(' · '))),
+      h('button', { class: 'btn sm ghost', onclick: () => openPreview(it) }, 'Preview'),
+      h('button', { class: 'btn sm' + (i === 0 ? ' primary' : ''), ...dis, onclick: () => start(it, r.fbrc) }, i === 0 ? 'Start again' : 'Start')))];
+  }
+
   function idle() {
+    el.classList.remove('tg');
     const starting = state.state === 'starting', stopping = state.state === 'stopping';
     fill(headSlot, head('Session', badge(starting || stopping ? 'warn' : '', starting ? 'Starting' : stopping ? 'Stopping' : 'Idle'), starting ? 'Starting the mock server. This can take a few seconds.' : 'Nothing is running.'));
     fill(tabsEl);
     fill(body, h('div', { class: 'empty' }, h('div', { class: 'ring' }, icon('play')), h('h2', {}, starting ? 'Starting…' : 'Nothing is running'),
       h('p', {}, 'Pick a scenario or a customer, press Start, then use the app. Every request it makes shows up here.'),
-      starting || stopping ? null : h('button', { class: 'btn primary', onclick: () => go('library') }, 'Browse mocks')));
+      starting || stopping ? null : h('button', { class: 'btn primary', onclick: () => go('library') }, 'Browse mocks')),
+      recentRows());
     const kv = [['Project', proj.name], ['Platform', proj.platform || 'unknown']];
     if (git && git.repo) { kv.push(['Branch', git.branch]); if (git.commit) kv.push(['Latest change', git.commit.subject + ' · ' + git.commit.when]); }
     fill(panel, h('div', { class: 'ph' }, 'Details'), kvList(kv),
@@ -576,7 +740,10 @@ function mountSession() {
       [h('button', { class: 'btn', onclick: () => go('library') }, 'Choose another'),
        h('button', { class: 'btn danger', ...(busy() ? { disabled: '' } : {}), onclick: stopMock }, icon('stop'), 'Stop mock')]));
     const unmatched = rows.filter((r) => r.unmatched).length;
-    const tabs = [['requests', 'Requests', rows.length], ['custom', 'Custom responses', custom.length], ['fbrc', 'Remote Config', fbrc.length, JSON.stringify(s.fbrc) !== JSON.stringify(s.defaultFbrc) ? h('small', { style: 'color:var(--warn);margin-left:6px' }, 'edited') : null], ['activity', 'Activity', null]];
+    const guide = (s.steps && s.steps.length) || (s.checks && s.checks.length);
+    updateFetchStatus(s);
+    // A flow with a test script keeps Remote Config in the side panel, beside its steps and the requests.
+    const tabs = [['requests', 'Requests', rows.length], ['custom', 'Custom responses', custom.length], ['fbrc', 'Remote Config', fbrc.length, JSON.stringify(s.fbrc) !== JSON.stringify(s.defaultFbrc) ? h('small', { style: 'color:var(--warn);margin-left:6px' }, 'edited') : null], ['activity', 'Activity', null]].filter((t) => !(guide && t[0] === 'fbrc'));
     if (!tabs.some((t) => t[0] === tab)) tab = 'requests';
     fill(tabsEl, ...tabs.map(([id, label, n]) => h('button', { class: 'tab', role: 'tab', 'aria-selected': String(tab === id), onclick: () => { tab = id; store.set('tab', id); update(); } }, label, n != null ? h('small', {}, String(n)) : null)));
 
@@ -606,7 +773,7 @@ function mountSession() {
       fill(body, log.length ? log.map((l) => h('div', { class: 'logline ' + l.level }, h('span', { class: 't' }, fmtTime(Date.parse(l.time))), h('span', {}, l.text))) : h('div', { class: 'empty' }, h('p', {}, 'Nothing has been logged yet.')));
     }
 
-    fill(panel, 
+    const details = [
       h('div', { class: 'ph' }, 'Details'),
       kvList([['Type', KIND[s.kind]], ['Customer', s.profile || 'none'], ['Port', String(s.port)], ['Extra stubs', s.overrides && s.overrides.length ? s.overrides.join(', ') : 'none'], ['Platform', proj.platform || 'unknown']]),
       h('div', { class: 'ph' }, 'Saved responses', h('span', {}, saved.length + (saved.length === 1 ? ' response' : ' responses'))),
@@ -614,7 +781,22 @@ function mountSession() {
         h('span', { class: 'fico', style: 'background:color-mix(in srgb, ' + tint(c.name) + ' 18%, transparent);color:' + tint(c.name) }, icon('bookmark')),
         h('span', { class: 'grow' }, h('span', { class: 'tt' }, c.title), h('small', {}, c.method + ' ' + c.path + ' → ' + c.status)), icon('right')))
         : [h('p', { class: 'hintp' }, 'Edit a response and choose Save for later to reuse it here.')]),
-      saved.length ? h('p', { class: 'hintp' }, h('a', { href: '#/saved' }, 'Manage saved responses')) : null);
+      saved.length ? h('p', { class: 'hintp' }, h('a', { href: '#/saved' }, 'Manage saved responses')) : null];
+    el.classList.toggle('tg', !!guide);
+    if (!guide) { fill(panel, details); return; }
+    fill(checksSlot, checkPanel(s.checks));
+    const platforms = guidePlatforms(s.steps), pick = guidePlatform(platforms);
+    const sig = JSON.stringify([s.name, pick, s.steps]);
+    if (stepsSlot.dataset.k !== sig) {
+      fill(stepsSlot, s.steps && s.steps.length ? stepsPanel(s, platforms, pick, (p) => { store.set('platform', p); delete stepsSlot.dataset.k; update(); }) : null);
+      stepsSlot.dataset.k = sig;
+    }
+    const edited = JSON.stringify(s.fbrc) !== JSON.stringify(s.defaultFbrc);
+    fill(fbrcSum, 'Remote Config', h('small', { style: 'color:var(--faint);margin-left:6px;font-weight:400' }, String(Object.keys(s.fbrc || {}).length)), edited ? h('small', { style: 'color:var(--warn);margin-left:6px' }, 'edited') : null);
+    const fsig = 'fbrc:' + JSON.stringify([s.name, s.fbrc, s.defaultFbrc]);
+    if (fbrcSlot.dataset.k !== fsig) { fill(fbrcSlot, fbrcEditor(s)); fbrcSlot.dataset.k = fsig; }
+    fill(moreBody, details);
+    fill(panel, checksSlot, stepsSlot, fbrcEl, moreEl);
   }
 
   function update() {
@@ -680,8 +862,17 @@ async function copyText(text, btn) {
 }
 
 // ---------- actions
-async function start(it) {
-  try { await api('/api/serve', { kind: it.kind, ref: it.ref }); notice = ''; go('session'); } catch (e) { flash(e.message); }
+// What the tester ran last in this project, so a stopped mock is one click away instead of a new search.
+const recentKey = () => 'recent:' + (proj.path || '');
+function recents() { try { return JSON.parse(store.get(recentKey(), '[]')); } catch { return []; } }
+function remember(it, fbrc) {
+  const keep = recents().filter((r) => !(r.kind === it.kind && r.ref === it.ref));
+  keep.unshift({ kind: it.kind, ref: it.ref, title: it.title, ...(fbrc ? { fbrc } : {}) });
+  store.set(recentKey(), JSON.stringify(keep.slice(0, 5)));
+}
+// fbrc is the Remote Config the tester chose in the preview; leave it out to serve the mock's own.
+async function start(it, fbrc) {
+  try { await api('/api/serve', { kind: it.kind, ref: it.ref, ...(fbrc ? { fbrc } : {}) }); remember(it, fbrc); notice = ''; go('session'); } catch (e) { flash(e.message); }
   refresh();
 }
 async function stopMock() { try { await api('/api/stop', {}); } catch (e) { flash(e.message); } refresh(); }

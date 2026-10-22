@@ -48,6 +48,8 @@ type Serving struct {
 	FBRC        map[string]string `json:"fbrc"`        // what the app is served now
 	DefaultFBRC map[string]string `json:"defaultFbrc"` // what the target itself defines
 	Port        int               `json:"port"`
+	Steps       []Step            `json:"steps,omitempty"`  // a flow's commands as a tester would follow them
+	Checks      []LiveCheck       `json:"checks,omitempty"` // a flow's apiVerifications, counted by the page
 }
 
 // StateView is the JSON the page polls.
@@ -83,6 +85,11 @@ type Manager struct {
 	eng   *engine.Engine
 	sess  *engine.MockSession
 	log   []LogLine
+
+	// guide is the served flow's steps and checks, read once per served target rather than on every poll.
+	guideOf     *engine.MockTarget
+	guideSteps  []Step
+	guideChecks []LiveCheck
 }
 
 func NewManager(p *project.Project, opts engine.Options) *Manager {
@@ -115,17 +122,31 @@ func (m *Manager) State() StateView {
 		v.Custom = m.sess.CustomResponses()
 		snap := m.sess.Snapshot()
 		s := &Serving{Kind: snap.Kind, Name: snap.Name, Profile: snap.Profile, Overrides: snap.Overrides, FBRC: snap.FBRC, DefaultFBRC: snap.Defaults, Port: snap.Port}
-		if h := m.sess.Target().Header; h != nil {
-			s.Description = h.Description
+		t := m.sess.Target()
+		if t.Header != nil {
+			s.Description = t.Header.Description
 		}
+		s.Steps, s.Checks = m.guideFor(t)
 		v.Serving = s
 	}
 	return v
 }
 
+// guideFor returns the served flow's steps and checks, reading the flow once per served target.
+// The caller holds m.mu.
+func (m *Manager) guideFor(t *engine.MockTarget) ([]Step, []LiveCheck) {
+	if t.Kind != "flow" || t.Header == nil {
+		return nil, nil
+	}
+	if m.guideOf != t {
+		m.guideOf, m.guideSteps, m.guideChecks = t, FlowSteps(t.Header.Path), ChecksFor(t.Header.Verifications)
+	}
+	return m.guideSteps, m.guideChecks
+}
+
 // Serve starts the mock on ref, or switches the running server to it. It returns once the work
 // is under way; callers poll State for the outcome.
-func (m *Manager) Serve(ref string) error {
+func (m *Manager) Serve(ref string, fbrc map[string]string) error {
 	m.mu.Lock()
 	if m.busy {
 		m.mu.Unlock()
@@ -141,9 +162,9 @@ func (m *Manager) Serve(ref string) error {
 	go func() {
 		var err error
 		if sess == nil {
-			err = m.start(ref)
+			err = m.start(ref, fbrc)
 		} else {
-			err = m.switchTo(sess, eng, ref)
+			err = m.switchTo(sess, eng, ref, fbrc)
 		}
 		m.mu.Lock()
 		m.busy = false
@@ -161,7 +182,8 @@ func (m *Manager) Serve(ref string) error {
 	return nil
 }
 
-func (m *Manager) start(ref string) error {
+// start serves ref. A non-nil fbrc is the Remote Config the tester chose in the preview, served from the first fetch.
+func (m *Manager) start(ref string, fbrc map[string]string) error {
 	e := m.newEngine()
 	if err := e.CheckEnvironment("mock"); err != nil {
 		return err
@@ -179,6 +201,12 @@ func (m *Manager) start(ref string) error {
 	if err != nil {
 		return err
 	}
+	if fbrc != nil {
+		if err := sess.SetFBRC(ctx, fbrc); err != nil {
+			sess.Stop()
+			return err
+		}
+	}
 	m.mu.Lock()
 	m.sess, m.eng, m.state, m.since = sess, e, StateServing, time.Now()
 	m.mu.Unlock()
@@ -186,12 +214,18 @@ func (m *Manager) start(ref string) error {
 	return nil
 }
 
-func (m *Manager) switchTo(sess *engine.MockSession, e *engine.Engine, ref string) error {
+func (m *Manager) switchTo(sess *engine.MockSession, e *engine.Engine, ref string, fbrc map[string]string) error {
 	target, err := e.ResolveMockTarget([]string{ref})
 	if err != nil {
 		return err
 	}
-	return sess.Switch(context.Background(), target)
+	if err := sess.Switch(context.Background(), target); err != nil {
+		return err
+	}
+	if fbrc != nil {
+		return sess.SetFBRC(context.Background(), fbrc)
+	}
+	return nil
 }
 
 // watch notices WireMock dying on its own (killed, crashed) and returns the page to idle.

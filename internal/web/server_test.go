@@ -11,6 +11,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/fixtures"
 	"github.com/feernandooff/mockstro/internal/project"
 )
 
@@ -195,5 +196,242 @@ func TestEveryResponseNamesTheLaunch(t *testing.T) {
 	other, _ := testServer(t)
 	if c := do(other, "GET", "/api/ping", goodHost, nil, "").Header().Get("X-Mockstro-Instance"); c == a {
 		t.Fatalf("a second launch reused instance %q", c)
+	}
+}
+
+// render prints steps one per line so a test can compare a whole card at once.
+func render(steps []Step, indent string) string {
+	var b strings.Builder
+	for _, s := range steps {
+		line := indent + s.Kind + ": " + s.Text
+		if s.Platform != "" {
+			line += " [" + s.Platform + "]"
+		}
+		if s.Optional {
+			line += " (optional)"
+		}
+		if s.Note != "" {
+			line += " -- " + s.Note
+		}
+		b.WriteString(line + "\n")
+		b.WriteString(render(s.Steps, indent+"  "))
+	}
+	return b.String()
+}
+
+func TestFlowStepsReadTheFlowItself(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "shared/launch-logged-in.yaml", "appId: x\n---\n- tapOn: \"should not appear\"\n")
+	write(t, root, "shared/assert-home-loaded.yaml", "appId: x\n---\n- assertVisible: \"Home\"\n")
+	write(t, root, "shared/close-survey.yaml", "appId: x\n---\n- tapOn:\n    id: \"survey_close\"\n")
+	write(t, root, "flows/pay.yaml", `appId: x
+name: pay
+properties:
+  apiProfile: electricity
+---
+- runFlow: ../shared/launch-logged-in.yaml
+- runFlow: ../shared/assert-home-loaded.yaml
+# Close the popup to reach the tabs.
+- tapOn: "Close dialog"
+- assertNotVisible: ".*Payment Required.*"
+- scrollUntilVisible:
+    element: "Make a payment"
+    direction: DOWN
+- tapOn:
+    id: "payNowButton"
+    label: Press Pay now
+- inputText: "5000"
+- extendedWaitUntil:
+    visible: "(?i).*(thank you|thanks).*"
+    timeout: 5000
+- extendedWaitUntil:
+    notVisible: ".*50.*Outstanding.*"
+    timeout: 5000
+- assertVisible:
+    text: "Maybe shown"
+    optional: true
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          id: "pay_electricity_now"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "PAY ELECTRICITY NOW"
+- runFlow:
+    when:
+      visible: "Open Settings"
+    commands:
+      - tapOn: "Cancel"
+- runFlow:
+    when:
+      true: ${LAUNCH_MODE != "warm"}
+    commands:
+      - clearState
+- runFlow: ../shared/close-survey.yaml
+- runFlow: ../shared/relaunch.yaml
+- hideKeyboard
+- waitForAnimationToEnd
+`)
+	got := render(FlowSteps(filepath.Join(root, "flows/pay.yaml")), "")
+	want := `do: Launch the app (fresh start)
+do: Tap “Close dialog” -- Close the popup to reach the tabs.
+gone: “Payment Required” should not be shown
+do: Scroll to “Make a payment”
+do: Press Pay now
+do: Type 5000
+see: You should see “thank you or thanks”
+gone: “50…Outstanding” should go away
+see: You should see “Maybe shown” (optional)
+do: Tap “Pay electricity now” [android]
+do: Tap “PAY ELECTRICITY NOW” [ios]
+if: If “Open Settings” is shown
+  do: Tap “Cancel”
+do: Tap “Survey close”
+do: Close and reopen the app
+`
+	if got != want {
+		t.Errorf("steps:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestFlowStepsToleratesMissingAndStepLessFlows(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "flows/header-only.yaml", "appId: x\nname: nothing here\n")
+	write(t, root, "flows/loop.yaml", "appId: x\n---\n- runFlow: loop.yaml\n- tapOn: \"Go\"\n")
+	if got := FlowSteps(filepath.Join(root, "flows/missing.yaml")); got != nil {
+		t.Errorf("missing file: %v", got)
+	}
+	if got := FlowSteps(filepath.Join(root, "flows/header-only.yaml")); got != nil {
+		t.Errorf("header only: %v", got)
+	}
+	// A flow that runs itself must stop at the depth limit instead of recursing forever.
+	if got := render(FlowSteps(filepath.Join(root, "flows/loop.yaml")), ""); !strings.Contains(got, "Tap “Go”") {
+		t.Errorf("self-referencing flow: %q", got)
+	}
+}
+
+func TestChecksForCarryTheBounds(t *testing.T) {
+	one, two := 1, 2
+	got := ChecksFor([]fixtures.Verification{
+		{Stub: "electricity-only/billing-details-paid", AtLeast: &one},
+		{Stub: "payments/topup-clears-outstanding", Exactly: &one},
+		{Stub: "a/b", AtLeast: &one, AtMost: &two},
+	})
+	if len(got) != 3 {
+		t.Fatalf("checks: %v", got)
+	}
+	if c := got[0]; c.Label != "Billing details paid" || c.Expect != "at least 1" || c.Min != 1 || c.Max != nil {
+		t.Errorf("at least: %+v", c)
+	}
+	if c := got[1]; c.Expect != "exactly 1" || c.Min != 1 || c.Max == nil || *c.Max != 1 {
+		t.Errorf("exactly: %+v", c)
+	}
+	if c := got[2]; c.Max == nil || *c.Max != 2 || c.Expect != "between 1 and 2" {
+		t.Errorf("between: %+v", c)
+	}
+}
+
+func TestGuideIsReadOncePerServedTarget(t *testing.T) {
+	s, p := testServer(t)
+	m := mgr(s)
+	flow := filepath.Join(p.MaestroRoot, "flows", "survey", "shown.yaml")
+	write(t, p.MaestroRoot, "flows/survey/shown.yaml", "appId: com.example\nproperties:\n  apiProfile: gas-only\n  apiVerifications:\n    - stub: ping\n      atLeast: 1\n---\n- tapOn: \"Go\"\n")
+	h, err := fixtures.ParseHeader(flow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &engine.MockTarget{Kind: "flow", Name: "survey/shown.yaml", Header: h}
+
+	steps, checks := m.guideFor(target)
+	if len(steps) != 1 || steps[0].Text != "Tap “Go”" || len(checks) != 1 || checks[0].Stub != "ping" {
+		t.Fatalf("steps %v checks %v", steps, checks)
+	}
+
+	// Editing the file mid-session changes nothing until a target is served again.
+	write(t, p.MaestroRoot, "flows/survey/shown.yaml", "appId: com.example\n---\n- tapOn: \"Stop\"\n")
+	if steps, _ := m.guideFor(target); steps[0].Text != "Tap “Go”" {
+		t.Errorf("same target was read again: %v", steps)
+	}
+	again := &engine.MockTarget{Kind: "flow", Name: "survey/shown.yaml", Header: h}
+	if steps, _ := m.guideFor(again); steps[0].Text != "Tap “Stop”" {
+		t.Errorf("a newly served target must be read fresh: %v", steps)
+	}
+
+	for _, other := range []*engine.MockTarget{{Kind: "scenario"}, {Kind: "profile"}, {Kind: "flow"}} {
+		if steps, checks := m.guideFor(other); steps != nil || checks != nil {
+			t.Errorf("%s without a flow header has no guide, got %v %v", other.Kind, steps, checks)
+		}
+	}
+}
+
+func TestPreviewDescribesAMockWithoutServingIt(t *testing.T) {
+	s, p := testServer(t)
+	write(t, p.MaestroRoot, "flows/pay/pay.yaml", `appId: com.example
+name: "Pay it"
+properties:
+  apiProfile: gas-only
+  apiOverrides:
+    - ping
+  fbrcOverrides:
+    Config_Survey_Enabled: "false"
+  apiVerifications:
+    - stub: ping
+      exactly: 1
+---
+# Open the app first.
+- tapOn: "Pay now"
+- assertVisible: "Thanks"
+`)
+	flow := filepath.Join(p.MaestroRoot, "flows", "pay", "pay.yaml")
+
+	rec := do(s, "GET", "/api/preview?kind=flow&ref="+flow, goodHost, nil, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("flow preview: %d %s", rec.Code, rec.Body)
+	}
+	var pv Preview
+	if err := json.Unmarshal(rec.Body.Bytes(), &pv); err != nil {
+		t.Fatal(err)
+	}
+	if pv.Title != "Pay it" || pv.FBRC["Config_Survey_Enabled"] != "false" {
+		t.Errorf("title or Remote Config: %+v", pv)
+	}
+	if got := render(pv.Steps, ""); got != "do: Tap “Pay now” -- Open the app first.\nsee: You should see “Thanks”\n" {
+		t.Errorf("steps:\n%s", got)
+	}
+	if len(pv.Stubs) != 1 || pv.Stubs[0] != (StubInfo{Name: "ping", Method: "GET", Path: "/ping"}) {
+		t.Errorf("stubs: %+v", pv.Stubs)
+	}
+	if len(pv.Checks) != 1 || pv.Checks[0].Expect != "exactly 1" {
+		t.Errorf("checks: %+v", pv.Checks)
+	}
+	if st := mgr(s).State(); st.State != StateIdle || st.Serving != nil {
+		t.Errorf("previewing must not start anything: %+v", st)
+	}
+
+	rec = do(s, "GET", "/api/preview?kind=scenario&ref=gas-survey", goodHost, nil, "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Config_Survey_Enabled") {
+		t.Errorf("scenario preview: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(s, "GET", "/api/preview?kind=flow&ref=/etc/passwd", goodHost, nil, ""); rec.Code != http.StatusNotFound {
+		t.Errorf("a ref the catalog does not list: %d, want 404", rec.Code)
+	}
+}
+
+func TestServeChecksTheRemoteConfigDraftBeforeStarting(t *testing.T) {
+	s, _ := testServer(t)
+	h := map[string]string{tokenHeader: s.token, "Content-Type": "application/json"}
+	bad := do(s, "POST", "/api/serve", goodHost, h, `{"kind":"scenario","ref":"gas-survey","fbrc":{"not a key":"x"}}`)
+	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "not a valid Remote Config key") {
+		t.Errorf("invalid draft: %d %s", bad.Code, bad.Body)
+	}
+	if rec := do(s, "POST", "/api/serve", goodHost, h, `{"kind":"scenario","ref":"nope","fbrc":{"A":"b"}}`); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown ref still 404: %d", rec.Code)
+	}
+	if st := mgr(s).State(); st.State != StateIdle {
+		t.Errorf("a refused draft must not start the mock: %v", st.State)
 	}
 }
