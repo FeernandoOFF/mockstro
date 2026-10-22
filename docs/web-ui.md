@@ -43,23 +43,42 @@ system's light or dark setting.
   Maestro flows, split by feature folder. **Feature chips** (`survey`, `ces`, `usage`…) filter
   across every group, and search does too; filtering opens the groups that match. Starting an item
   serves it on port 18080 and opens the Session; choosing another while one is running switches
-  without a restart. Which folds you left open is remembered in the browser.
+  without a restart. Which folds you left open is remembered in the browser, and so are the search
+  and the chip filter while the page stays open, so coming back from the Session does not mean
+  searching again.
+  - **Preview** on any item opens what it would do without starting it: for a flow, its test
+    script, the checks it runs, the extra API calls it answers (method, path and stub), and its
+    Remote Config. The Remote Config can be changed there. **Start with your changes** serves the
+    mock with those values from the app's first fetch; the mock's own values come back on the
+    next start from the Library.
   - The group comes from the customer profile's name: `dual…` is Dual fuel, `gas…` is Gas only and
     `elec…` is Elec only. A scenario or flow takes its profile's group.
   - Chips come from the `tags` in scenario and flow headers. A scenario also gets a feature from its
     Remote Config keys (`Config_<Feature>_…`) when a tag of that name exists somewhere in the
     project. `regression` and `smoke` mark test suites, and `electricity-only`, `gas-only` and `dual-fuel` name
     customer types, which the groups already show, so none of those appear as chips.
-- **Session:** the running mock, with tabs for **Requests**, **Custom responses**, **Remote
+- **Session:** when nothing is running, it lists the last few things run in this project, each
+  with **Preview** and **Start again**; an entry keeps the Remote Config changes it was started
+  with. Otherwise it shows the running mock, with tabs for **Requests**, **Custom responses**, **Remote
   Config** and **Activity**, and a side panel with its details and the saved responses.
   - A request with no stub is red. Clicking a request shows what the app sent and the response it
     received.
+  - **Test script:** serving a flow adds its steps and live checks to the side panel, which is
+    wider and stays in view beside the Requests list. The steps are read from the flow file
+    itself: taps, typed text, what to expect on screen, with the comment above each command as its
+    explanation (a command's `label:` replaces the generated text). Branches for one platform get
+    an **Android** / **iOS** switch, remembered in the browser. Waits, scrolling and the launch
+    and utility sub-flows are left out. The **live checks** are the flow's `apiVerifications`,
+    counted from the request list as the app calls the stubs. To run it again, stop the mock and
+    start it again.
   - **Remote Config** is editable. Each served value can be changed (true or false values get a
     toggle), **Removed** so the app gets no such key, or added, with suggestions from the keys the
     project's scenarios and flows already set. **Apply changes** serves the new values from the app's
-    next Remote Config fetch, usually when it is relaunched; **Reset to scenario** puts the
-    scenario's own values back. Only the Remote Config answer changes: the request list and custom
-    responses stay. An edit lasts until the target is switched or the mock stopped.
+    next Remote Config fetch, usually when it is relaunched, and a line under the heading says when
+    the app has fetched them; **Reset to scenario** puts the scenario's own values back. Only the
+    Remote Config answer changes: the request list and custom responses stay. An edit lasts until
+    the target is switched or the mock stopped. For a flow with a test script the editor is a fold
+    in the side panel instead of a tab.
   - **Edit response** (or **Add a response** on a red row) answers one route with a status,
     headers, body and delay you type. JSON is checked and errors name the line and column. It
     applies at once and lasts until the target is switched or the mock stopped.
