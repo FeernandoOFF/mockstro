@@ -28,29 +28,38 @@ Recent projects are remembered in `ui.json` under `MOCKSTRO_STATE_DIR`, or under
 A sidebar on the left, a top bar with breadcrumbs, and one view at a time. The page follows the
 system's light or dark setting.
 
-- **Sidebar:** **Session**, the **Library** (Mocks, Saved responses),
-  **Setup check**, and a **Projects** tree. The tree lists the open project with its git branch and
-  **Reload from disk** (after a `git pull`), plus recent projects to switch to. The footer shows
+- **Sidebar:** **Session**, the **Library** (Profiles, Tests, Saved responses), and a **Projects**
+  tree, with a small **Setup check** link above the footer. The tree lists the open project with its git branch and
+  **Reload from disk** (after a `git pull`), plus recent projects to switch to. A project with an
+  IntelliJ or Android Studio icon (`.idea/icon.svg` or `icon.png`, and the `_dark` variants in dark
+  mode) shows it. The footer shows
   whether the mock is running and has the **Quit** button.
 - **Top bar:** breadcrumbs, the project's git branch as a chip, and its platform. The branch chip
   opens the **Version** dialog: the branch, its latest commit and whether it is up to date, with
   **Check for updates**, **Update to latest** and a branch list to **Switch** to. The page fetches
   once when a project opens; pulling and switching are always the tester's click.
-- **Mocks:** everything that can be started, in one list grouped by profile. Each
-  group folds, and starts open only when it holds the running mock. Inside a group are the
-  scenarios, then the bare profiles, then a folded **Automated tests** section holding the
-  Maestro flows, split by feature folder. **Tag chips** filter
-  across every group, and search does too; filtering opens the groups that match. Starting an item
-  serves it on port 18080 and opens the Session; choosing another while one is running switches
-  without a restart. Which folds you left open is remembered in the browser, and so are the search
-  and the chip filter while the page stays open, so coming back from the Session does not mean
-  searching again.
-  - **Preview** on any item opens what it would do without starting it: for a flow, its test
-    script and the checks it runs; **Responses it will serve**, every API call the mock answers,
-    grouped as added by the test, the profile's own, and the shared defaults; and its Remote
-    Config. **View** shows a response exactly as the app would get it (status, headers, body,
-    resolved from the stub file and whatever it extends). A call another stub already answers is
-    dimmed, and a call the flow's `apiVerifications` count is marked.
+- **Tests:** the Maestro flows, grouped by the profile they use and split by feature folder inside
+  each group. Each group folds, and starts open only when it holds the running test.
+- **Profiles:** the profiles and scenarios, for exploring the app by hand. A group heading only
+  shows when a group holds more than its own profile.
+- On both, **tag chips** filter and search does too; filtering opens the groups that match. Starting
+  an item serves it on port 18080 and opens the Session; choosing another while one is running
+  switches without a restart. Which folds you left open is remembered in the browser, and so are
+  each page's search and chip filter while the page stays open, so coming back from the Session
+  does not mean searching again.
+  - Clicking an item opens its **Preview**: what it would do, without starting it. Its **Start**
+    button starts it straight away. A flow's test script and
+    the checks it runs fill the page; **Responses it will serve** is a bar at the bottom: click it
+    to open or close it, or drag its handle (or focus it and use the arrow keys) to make it taller
+    or shorter; the height you leave it at is kept. It lists every API call the mock answers, grouped as added by the test, the profile's
+    own, and the shared defaults (a mock without a script shows them as the page instead).
+    **Details** opens a side panel with the mock's details and its Remote Config; it starts closed
+    and marks itself when Remote Config has been changed. Both remember whether you left them
+    open. Opening a call shows its response exactly as the app would get it (status, headers,
+    body, resolved from the stub file and whatever it extends), with **Edit** on the call's row
+    and **Copy** on the body. A
+    call another stub already answers is dimmed, and a call the flow's `apiVerifications` count
+    is marked.
   - A call that changes as the test runs shows as one call with an answer for each step, in order
     ("At the start", "After POST /api/topup"), and a line says what changes between them, field
     by field (`currentOverdueValueInEuro: 50 → 0`). The line follows any edits you make.

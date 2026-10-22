@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -565,5 +567,29 @@ func TestPreviewTellsStatesOfOneCallApartAndNamesWhatMovesThem(t *testing.T) {
 	}
 	if pay := by["pay"]; pay.Next != "paid" {
 		t.Errorf("the call that moves the scenario on: %+v", pay)
+	}
+}
+
+func TestProjectIconServesOnlyKnownProjects(t *testing.T) {
+	s, p := testServer(t)
+	host := "127.0.0.1:" + strconv.Itoa(testPort)
+	write(t, p.Root, ".idea/icon.svg", `<svg xmlns="http://www.w3.org/2000/svg"/>`)
+	write(t, p.Root, ".idea/icon_dark.png", "png")
+	other := t.TempDir()
+	write(t, other, ".idea/icon.svg", `<svg/>`)
+
+	rec := do(s, "GET", "/api/project/icon?path="+url.QueryEscape(p.Root), host, nil, "")
+	if rec.Code != 200 || rec.Header().Get("Content-Type") != "image/svg+xml" || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("icon: %d %v", rec.Code, rec.Header())
+	}
+	if rec := do(s, "GET", "/api/project/icon?dark=1&path="+url.QueryEscape(p.Root), host, nil, ""); rec.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("dark icon: %d %v", rec.Code, rec.Header())
+	}
+	if rec := do(s, "GET", "/api/project/icon?path="+url.QueryEscape(other), host, nil, ""); rec.Code != 404 {
+		t.Fatalf("icon of an unknown folder: %d", rec.Code)
+	}
+	var v ProjectView
+	if err := json.Unmarshal(do(s, "GET", "/api/project", host, nil, "").Body.Bytes(), &v); err != nil || !v.Icon {
+		t.Fatalf("project view: %+v %v", v, err)
 	}
 }

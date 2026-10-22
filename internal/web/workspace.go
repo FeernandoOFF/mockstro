@@ -29,6 +29,7 @@ type RecentProject struct {
 	Path   string `json:"path"`
 	Name   string `json:"name"`
 	Exists bool   `json:"exists"`
+	Icon   bool   `json:"icon,omitempty"`
 }
 
 // recents remembers opened projects in a small JSON file; failures to read or write it are

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="mockstro-token" content="__TOKEN__">
 <title>MockStro</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
 :root {
   --bg: #ffffff; --bg-side: #f7f7f8; --bg-hover: #f1f1f3; --bg-active: #ebebee;
@@ -77,9 +78,13 @@ button.chip { cursor: pointer; } button.chip:hover { color: var(--text); }
 .glabel button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px; border-radius: 4px; display: grid; } .glabel button:hover { background: var(--bg-hover); color: var(--text); } .glabel svg { width: 14px; height: 14px; }
 .proj { gap: 8px !important; }
 .sq { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.sq.pic { width: 16px; height: 16px; margin: 0 -2px; border-radius: 4px; object-fit: contain; }
 .sub { padding-left: 30px !important; height: 28px !important; color: var(--muted); font-size: 13px; }
 .sub svg { width: 14px !important; height: 14px !important; }
 .sidefoot { border-top: 1px solid var(--line); padding: 10px 4px 0; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+.sidecheck { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 6px; margin: 0 0 6px; border-radius: 6px; font-size: 12px; color: var(--muted); text-decoration: none; }
+.sidecheck:hover, .sidecheck[aria-current="page"] { background: var(--bg-hover); color: var(--text); }
+.sidecheck svg { width: 13px; height: 13px; flex: none; } .sidecheck .dot { width: 6px; height: 6px; margin-left: auto; }
 .sidefoot .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -198,6 +203,7 @@ pre.code { background: var(--bg-side); border: 1px solid var(--line); border-rad
 @media (max-width: 1100px) { .page { grid-template-columns: minmax(0, 1fr); } .panel { border-left: 0; border-top: 1px solid var(--line); } }
 @media (max-width: 860px) {
   .shell { grid-template-columns: 56px minmax(0, 1fr); }
+  .sidecheck { justify-content: center; } .sidecheck .dot { display: none; }
   .sidebar .label, .sidebar .count, .sidebar .glabel, .sidebar .tree, .sidebar .brand span, .sidebar .sidefoot .txt { display: none; }
   .nav a { justify-content: center; padding: 0; } .brand { justify-content: center; padding-left: 0; padding-right: 0; }
   .head, .banner, .tabs, .row, .bar, .gh, .check, details.fold > summary, .logline, .note, .pv-detail, .pv-filter { padding-left: 16px; padding-right: 16px; } .banner { margin-left: 16px; margin-right: 16px; }
@@ -226,6 +232,7 @@ pre.code { background: var(--bg-side); border: 1px solid var(--line); border-rad
 .panel .row { padding: 10px 0; flex-wrap: wrap; gap: 6px 10px; } .panel .row > .grow { flex-basis: 100%; overflow-wrap: anywhere; }
 .panel .gh { padding: 7px 8px; margin-top: 8px; }
 .panel .fbv { width: auto; flex: 1; min-width: 0; }
+.panel .note { padding: 12px 0; }
 .panel .fb-add { padding: 12px 0; flex-wrap: wrap; border-bottom: 0; } .panel .fb-add .input { flex-basis: 100%; max-width: none !important; }
 .panel .fb-bar { padding: 12px 0; flex-wrap: wrap; }
 /* preview: the responses a mock will serve */
@@ -240,6 +247,45 @@ pre.code { background: var(--bg-side); border: 1px solid var(--line); border-rad
 .tg-more { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 12px; }
 .tg-more > summary { cursor: pointer; font-weight: 650; }
 .tg-more[open] > summary { margin-bottom: 12px; }
+/* preview: script first; details on demand, responses docked at the bottom */
+.back { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 0 8px 0 4px; margin: -4px 0 10px -6px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.back:hover { background: var(--bg-hover); color: var(--text); } .back svg { width: 15px; height: 15px; }
+.btn[aria-pressed="true"] { background: var(--bg-active); }
+.btn .dot { width: 6px; height: 6px; }
+.page.tg.nopanel { grid-template-columns: minmax(0, 1fr); }
+/* the preview fills the window: the heading stays put, the script scrolls, the dock sits below it */
+#content > .page.pv { flex: none; }
+.page.pv { height: calc(100vh - 48px); min-height: 0; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.page.pv > .col { display: flex; flex-direction: column; min-height: 0; }
+.page.pv > .col > .pv-main { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.page.pv > .panel { position: static; align-self: stretch; max-height: none; overflow-y: auto; }
+@media (max-width: 1100px) { .page.pv { grid-template-rows: minmax(0, 1fr) auto; } .page.pv > .panel { max-height: 45vh; } }
+.pv-script { padding: 4px 28px 28px; max-width: 760px; }
+.pv-script .ph { justify-content: flex-start; gap: 8px; margin-bottom: 8px; }
+.pv-dock { position: relative; flex: none; background: var(--bg-side); border-top: 1px solid var(--line-strong); box-shadow: 0 -12px 28px -16px rgba(0,0,0,.35); }
+.pv-grip { position: absolute; left: 0; right: 0; top: -6px; height: 14px; cursor: row-resize; z-index: 2; touch-action: none; }
+.pv-grip::after { content: ""; position: absolute; left: 50%; top: 9px; width: 40px; height: 4px; margin-left: -20px; border-radius: 4px; background: var(--line-strong); transition: background .12s, width .12s, margin .12s; }
+.pv-grip:hover::after, .pv-grip:focus-visible::after, .pv-dock.dragging .pv-grip::after { background: var(--muted); width: 56px; margin-left: -28px; }
+.pv-grip:focus-visible { outline: none; }
+.pv-dock.dragging, .pv-dock.dragging * { cursor: row-resize; user-select: none; }
+.pv-dock-head { display: flex; align-items: center; gap: 10px; width: 100%; height: 52px; padding: 4px 28px 0; border: 0; background: none; text-align: left; cursor: pointer; }
+.pv-dock-head:hover .pv-dock-hint { color: var(--text); }
+.pv-dock-head > svg { width: 14px; height: 14px; color: var(--muted); flex: none; transition: transform .15s; }
+.pv-dock.open > .pv-dock-head > svg { transform: rotate(180deg); }
+.pv-dock-head .fname { font-weight: 650; } .pv-dock-head .fcount { color: var(--muted); font-size: 12.5px; }
+.pv-dock-hint { color: var(--muted); font-size: 12.5px; }
+.pv-dock-body { overflow: auto; background: var(--bg); border-top: 1px solid var(--line); transition: height .2s ease; }
+.pv-dock:not(.open) .pv-dock-body { visibility: hidden; border-top-color: transparent; transition: height .2s ease, visibility 0s .2s; }
+.pv-dock.dragging .pv-dock-body { transition: none; }
+.pv-dock-body .pv-filter { position: sticky; top: 0; z-index: 1; background: var(--bg); }
+.pv-dock-body > .hintp { margin: 0; padding: 12px 28px 4px; }
+.pv-row { gap: 10px; }
+.pv-row > svg { width: 14px; height: 14px; color: var(--faint); flex: none; transition: transform .12s; }
+.pv-row.open > svg { transform: rotate(90deg); color: var(--text); }
+.pv-code { position: relative; }
+.pv-copy { position: absolute; top: 12px; right: 8px; background: var(--bg); }
+@media (max-width: 860px) { .pv-script, .pv-dock-head, .pv-dock-body > .hintp { padding-left: 16px; padding-right: 16px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
@@ -290,6 +336,9 @@ const ICONS = {
   check: '<circle cx="8" cy="8" r="6"/><path d="m5.6 8.2 1.8 1.8 3.1-3.5"/>',
   branch: '<circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="6" r="1.5"/><path d="M4.5 5v6M11.5 7.5c0 2.6-3 2.6-7 3.6"/>',
   right: '<path d="m6 3.5 4.5 4.5L6 12.5"/>',
+  left: '<path d="M10 3.5 5.5 8l4.5 4.5"/>',
+  up: '<path d="m3.5 10 4.5-4.5 4.5 4.5"/>',
+  panel: '<rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M10 2.5v11"/>',
   plus: '<path d="M8 3.5v9M3.5 8h9"/>',
   alert: '<path d="M8 2.2 14.4 13H1.6z"/><path d="M8 6.6v3M8 11.4v.1"/>',
   power: '<path d="M8 2v5"/><path d="M4.4 4.3a5.5 5.5 0 1 0 7.2 0"/>',
@@ -328,6 +377,15 @@ async function api(path, body) {
   return data;
 }
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+// A project's own IntelliJ / Android Studio icon when it has one, else a coloured square.
+function projIcon(p) {
+  const sq = () => h('span', { class: 'sq', style: 'background:' + tint(p.name) });
+  if (!p.icon) return sq();
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches ? '1' : '0';
+  const img = h('img', { class: 'sq pic', alt: '', src: '/api/project/icon?path=' + encodeURIComponent(p.path) + '&dark=' + dark });
+  img.addEventListener('error', () => img.replaceWith(sq()));
+  return img;
+}
 function tint(name) {
   let n = 0; for (const c of name) n = (n * 31 + c.charCodeAt(0)) % 360;
   return `hsl(${n} 55% 50%)`;
@@ -338,13 +396,16 @@ let proj = { open: false, recent: [] }, items = [], saved = [], savedDir = '', g
 let state = { state: 'idle', custom: [], log: [] }, notice = '', dismissedErr = '', current = null, stateSig = '', rowsSig = '', gitBusy = false;
 
 const KIND = { scenario: 'Scenario', profile: 'Profile', flow: 'Test flow' };
-const VIEWS = ['session', 'library', 'preview', 'saved', 'setup'];
-const TITLES = { session: 'Session', library: 'Mocks', preview: 'Preview', saved: 'Saved responses', setup: 'Setup check' };
+const VIEWS = ['session', 'tests', 'profiles', 'preview', 'saved', 'setup'];
+const TITLES = { session: 'Session', tests: 'Tests', profiles: 'Profiles', preview: 'Preview', saved: 'Saved responses', setup: 'Setup check' };
+// Automated tests have their own page; profiles and scenarios are the data the app is served.
+const pageOf = (kind) => kind === 'flow' ? 'tests' : 'profiles';
 const viewName = () => {
   const v = location.hash.slice(2);
-  if (['scenario', 'profile', 'flow'].includes(v)) return 'library';
-  if (v === 'preview' && !previewTarget) return 'library';
-  return VIEWS.includes(v) ? v : (state.serving ? 'session' : 'library');
+  if (v === 'library' || v === 'flow') return 'tests';
+  if (v === 'profile' || v === 'scenario') return 'profiles';
+  if (v === 'preview' && !previewTarget) return 'tests';
+  return VIEWS.includes(v) ? v : (state.serving ? 'session' : 'tests');
 };
 const go = (v) => { location.hash = '#/' + v; };
 const serving = () => state.state === 'serving' && state.serving;
@@ -371,25 +432,25 @@ function banner() {
 // ---------- chrome
 function renderSidebar() {
   const view = viewName();
-  const link = (v, ic, label, count, lead) => h('a', { href: '#/' + v, ...(view === v || (v === 'library' && view === 'preview') ? { 'aria-current': 'page' } : {}), title: label }, icon(ic), h('span', { class: 'label' }, label), lead, count != null && count !== '' ? h('span', { class: 'count' }, String(count)) : null);
+  const link = (v, ic, label, count, lead) => h('a', { href: '#/' + v, ...(view === v || (view === 'preview' && previewTarget && v === pageOf(previewTarget.kind)) ? { 'aria-current': 'page' } : {}), title: label }, icon(ic), h('span', { class: 'label' }, label), lead, count != null && count !== '' ? h('span', { class: 'count' }, String(count)) : null);
   const status = health ? (health.overall === 'ok' ? 'ok' : health.overall) : '';
   const others = (proj.recent || []).filter((r) => r.path !== proj.path);
   const tree = [];
-  tree.push(h('button', { class: 'navbtn proj', onclick: () => openProjectDialog() }, h('span', { class: 'sq', style: 'background:' + tint(proj.name) }), h('span', { class: 'label', style: 'font-weight:600' }, proj.name), h('span', { class: 'count' }, '')));
+  tree.push(h('button', { class: 'navbtn proj', onclick: () => openProjectDialog() }, projIcon(proj), h('span', { class: 'label', style: 'font-weight:600' }, proj.name), h('span', { class: 'count' }, '')));
   if (git && git.repo) tree.push(h('button', { class: 'navbtn sub', onclick: openGitDialog, title: 'Project version' }, icon('branch'), h('span', { class: 'label' }, git.branch + (git.behind > 0 ? ' · ' + git.behind + ' new' : '') + (git.dirty && git.dirty.length ? ' · changed' : ''))));
   tree.push(h('button', { class: 'navbtn sub', onclick: reloadCatalog, title: 'Read the scenarios from disk again' }, icon('refresh'), h('span', { class: 'label' }, 'Reload from disk')));
-  for (const r of others) tree.push(h('button', { class: 'navbtn proj', ...(r.exists ? {} : { disabled: '' }), onclick: () => openRecent(r.path), title: r.path }, h('span', { class: 'sq', style: 'background:' + tint(r.name) }), h('span', { class: 'label' }, r.name)));
+  for (const r of others) tree.push(h('button', { class: 'navbtn proj', ...(r.exists ? {} : { disabled: '' }), onclick: () => openRecent(r.path), title: r.path }, projIcon(r), h('span', { class: 'label' }, r.name)));
   fill($('sidebar'), 
     h('div', { class: 'brand' }, h('div', { class: 'mark' }, h('i')), h('span', {}, 'MockStro')),
     h('nav', { class: 'nav' },
       link('session', 'play', 'Session', serving() ? rows.length : '', serving() ? h('span', { class: 'dot ok', style: 'margin-left:-2px' }) : null),
       h('div', { class: 'glabel' }, 'Library'),
-      link('library', 'box', 'Mocks', items.length),
+      link('profiles', 'users', 'Profiles', items.filter((it) => it.kind !== 'flow').length),
+      link('tests', 'flow', 'Tests', items.filter((it) => it.kind === 'flow').length),
       link('saved', 'bookmark', 'Saved responses', saved.length),
-      h('div', { class: 'glabel' }, 'System'),
-      link('setup', 'check', 'Setup check', '', status ? h('span', { class: 'dot ' + status, style: 'margin-left:auto' }) : null),
       h('div', { class: 'glabel' }, 'Projects', h('button', { onclick: openProjectDialog, title: 'Open another project', 'aria-label': 'Open another project' }, icon('plus'))),
       h('div', { class: 'tree' }, tree)),
+    h('a', { class: 'sidecheck', href: '#/setup', ...(view === 'setup' ? { 'aria-current': 'page' } : {}), title: 'Setup check' }, icon('check'), h('span', { class: 'label' }, 'Setup check'), status ? h('span', { class: 'dot ' + status }) : null),
     h('div', { class: 'sidefoot' },
       h('span', { class: 'dot ' + (serving() ? 'ok' : '') }),
       h('span', { class: 'txt' }, serving() ? 'Serving on :' + state.serving.port : state.state === 'idle' ? 'Mock is off' : state.state === 'starting' ? 'Starting…' : 'Stopping…'),
@@ -417,7 +478,7 @@ function renderAll() { renderChrome(); if (current) current.update(); }
 function mountView() {
   if (!proj.open) return;
   const v = viewName();
-  const build = { session: mountSession, library: mountLibrary, preview: mountPreview, saved: mountSaved, setup: mountSetup }[v];
+  const build = { session: mountSession, tests: () => mountLibrary('tests'), profiles: () => mountLibrary('profiles'), preview: mountPreview, saved: mountSaved, setup: mountSetup }[v];
   current = build();
   fill($('content'), current.el);
   document.querySelector('.scroll').scrollTop = 0;
@@ -451,70 +512,80 @@ function fold(id, defaultOpen, forceOpen, cls, summary, children) {
 }
 
 // The search and chip filter outlive the view, so coming back from the Session does not mean searching again.
-const lib = { query: '', feature: '' };
-function mountLibrary() {
+const libs = { tests: { query: '', feature: '' }, profiles: { query: '', feature: '' } };
+function mountLibrary(page) {
+  const lib = libs[page], tests = page === 'tests';
+  const pool = () => items.filter((it) => (it.kind === 'flow') === tests);
+  const noun = tests ? 'tests' : 'profiles';
   const headSlot = h('div'), slot = h('div'), chipsEl = h('div', { class: 'chips' }), list = h('div');
-  const search = h('div', { class: 'search' }, icon('search'), h('input', { class: 'input', type: 'search', value: lib.query, placeholder: 'Search mocks', 'aria-label': 'Search mocks', oninput: (e) => { lib.query = e.target.value; draw(); } }));
+  const search = h('div', { class: 'search' }, icon('search'), h('input', { class: 'input', type: 'search', value: lib.query, placeholder: 'Search ' + noun, 'aria-label': 'Search ' + noun, oninput: (e) => { lib.query = e.target.value; draw(); } }));
   const el = h('div', { class: 'page single' }, h('div', { class: 'col' }, headSlot, slot, chipsEl, list));
 
   const matches = (it) => {
     const q = lib.query.trim().toLowerCase();
-    if (q && ![it.title, it.description, it.profileGroup, it.profile, ...(it.tags || [])].join(' ').toLowerCase().includes(q)) return false;
+    if (q && ![it.title, it.description, it.profileGroup, it.profile, it.group, ...(it.tags || [])].join(' ').toLowerCase().includes(q)) return false;
     return !lib.feature || (it.tags || []).includes(lib.feature);
   };
 
   function libRow(it) {
     const active = isActive(it);
-    const meta = [KIND_LABEL[it.kind]];
-    if (it.profile && it.kind !== 'profile') meta.push('Profile ' + it.profile);
+    const meta = [];
+    if (it.kind === 'scenario') meta.push('Scenario');
+    if (it.profile && it.kind !== 'profile' && it.profile !== it.profileGroup) meta.push('Profile ' + it.profile);
     const nf = Object.keys(it.fbrc || {}).length;
     if (nf) meta.push(nf + ' Remote Config ' + (nf > 1 ? 'values' : 'value'));
     const tags = it.tags || [];
     if (tags.length) meta.push(tags.join(', '));
-    const act = active ? h('button', { class: 'btn sm', onclick: () => go('session') }, 'Open session')
-      : h('button', { class: 'btn sm' + (serving() ? '' : ' primary'), ...(busy() ? { disabled: '' } : {}), onclick: () => start(it) }, serving() ? 'Switch to this' : 'Start');
-    return h('div', { class: 'row' + (active ? ' active' : '') },
-      h('div', { class: 'grow' }, h('div', { class: 'rt' }, it.title), it.description ? h('div', { class: 'rd' }, it.description) : null, h('div', { class: 'rm' }, meta.join(' · '))),
-      active ? badge('ok', 'Serving') : null,
-      h('button', { class: 'btn sm ghost', title: 'See what it does and set it up before starting', onclick: () => openPreview(it) }, 'Preview'), act);
+    // The row itself opens the preview; the button starts it straight away.
+    const act = active ? h('button', { class: 'btn sm', onclick: (e) => { e.stopPropagation(); go('session'); } }, 'Open session')
+      : h('button', { class: 'btn sm' + (serving() ? '' : ' primary'), ...(busy() ? { disabled: '' } : {}), onclick: (e) => { e.stopPropagation(); start(it); } }, serving() ? 'Switch to this' : 'Start');
+    return h('div', { class: 'row click' + (active ? ' active' : ''), role: 'link', tabindex: '0', 'aria-label': 'Preview ' + it.title, onclick: () => openPreview(it),
+        onkeydown: (e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openPreview(it); } } },
+      h('div', { class: 'grow' }, h('div', { class: 'rt' }, it.title), it.description ? h('div', { class: 'rd' }, it.description) : null, meta.length ? h('div', { class: 'rm' }, meta.join(' · ')) : null),
+      active ? badge('ok', 'Serving') : null, act);
   }
 
   function drawChips() {
-    const counts = new Map();
-    for (const it of items) for (const t of it.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+    const all = pool(), counts = new Map();
+    for (const it of all) for (const t of it.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
     const tags = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     if (lib.feature && !counts.has(lib.feature)) lib.feature = '';
     const chip = (label, n, on, fn) => h('button', { class: 'pillbtn', 'aria-pressed': String(on), onclick: fn }, label, n != null ? h('small', {}, String(n)) : null);
-    fill(chipsEl, tags.length ? [chip('All', items.length, !lib.feature, () => { lib.feature = ''; drawChips(); draw(); }), ...tags.map(([t, n]) => chip(t, n, lib.feature === t, () => { lib.feature = lib.feature === t ? '' : t; drawChips(); draw(); }))] : []);
+    fill(chipsEl, tags.length ? [chip('All', all.length, !lib.feature, () => { lib.feature = ''; drawChips(); draw(); }), ...tags.map(([t, n]) => chip(t, n, lib.feature === t, () => { lib.feature = lib.feature === t ? '' : t; drawChips(); draw(); }))] : []);
     chipsEl.hidden = !tags.length;
   }
 
   function draw() {
     const filtering = !!(lib.query.trim() || lib.feature);
-    const shown = items.filter(matches);
+    const all = pool(), shown = all.filter(matches);
     fill(list);
-    if (!shown.length) { list.append(h('div', { class: 'note' }, items.length ? 'Nothing matches that.' : 'There is nothing to mock in this project yet.')); return; }
-    const order = { scenario: 0, profile: 1 };
-    for (const g of new Set(shown.map((it) => it.profileGroup || 'Other'))) {
-      const inGroup = shown.filter((it) => (it.profileGroup || 'Other') === g);
-      if (!inGroup.length) continue;
-      const mocks = inGroup.filter((it) => it.kind !== 'flow').sort((a, b) => order[a.kind] - order[b.kind] || a.title.localeCompare(b.title));
-      const tests = inGroup.filter((it) => it.kind === 'flow').sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.title.localeCompare(b.title));
-      const kids = mocks.map(libRow);
-      if (tests.length) {
-        const rows = []; let grp = null;
-        for (const it of tests) { if (it.group && it.group !== grp) { grp = it.group; rows.push(h('div', { class: 'gh' }, grp)); } rows.push(libRow(it)); }
-        kids.push(fold('a:' + g, tests.some(isActive), filtering, 'nested', [h('span', { class: 'fname' }, 'Automated tests'), h('span', { class: 'fcount' }, String(tests.length)), h('span', { class: 'grow' }), tests.some(isActive) ? badge('ok', 'Serving') : null], rows));
+    if (!shown.length) { list.append(h('div', { class: 'note' }, all.length ? 'Nothing matches that.' : tests ? 'This project has no automated tests yet.' : 'This project has no profiles yet.')); return; }
+    const groups = [...new Set(shown.map((it) => it.profileGroup || 'Other'))];
+    if (!tests) {
+      // Most groups hold one profile of the same name, so a heading only appears when it adds something.
+      const order = { profile: 0, scenario: 1 };
+      for (const g of groups) {
+        const inGroup = shown.filter((it) => (it.profileGroup || 'Other') === g).sort((a, b) => order[a.kind] - order[b.kind] || a.title.localeCompare(b.title));
+        if (groups.length > 1 && !(inGroup.length === 1 && inGroup[0].title === g)) list.append(h('div', { class: 'gh' }, g));
+        list.append(...inGroup.map(libRow));
       }
-      list.append(fold('g:' + g, inGroup.some(isActive), filtering, '', [h('span', { class: 'fname' }, g), h('span', { class: 'fcount' }, String(inGroup.length)), h('span', { class: 'grow' }), inGroup.some(isActive) ? badge('ok', 'Serving') : null], kids));
+      return;
+    }
+    for (const g of groups) {
+      const inGroup = shown.filter((it) => (it.profileGroup || 'Other') === g).sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.title.localeCompare(b.title));
+      const rows = []; let grp = null;
+      for (const it of inGroup) { if (it.group && it.group !== grp) { grp = it.group; rows.push(h('div', { class: 'gh' }, grp)); } rows.push(libRow(it)); }
+      list.append(fold('t:' + g, inGroup.some(isActive), filtering, '', [h('span', { class: 'fname' }, g), h('span', { class: 'fcount' }, String(inGroup.length)), h('span', { class: 'grow' }), inGroup.some(isActive) ? badge('ok', 'Serving') : null], rows));
     }
   }
 
   return {
     el,
     update() {
-      const lede = 'Choose a profile group, then a ready-made setup or the data an automated test uses. ' + items.length + ' in this project.';
-      if (!headSlot.firstChild) fill(headSlot, head('Mocks', null, lede, search)); else headSlot.querySelector('.lede').textContent = lede;
+      const n = pool().length;
+      const lede = tests ? 'Automated tests, grouped by the profile they use. Open one to see its steps before you start it. ' + n + ' in this project.'
+        : 'The data the app is served. Start one to explore the app by hand. ' + n + ' in this project.';
+      if (!headSlot.firstChild) fill(headSlot, head(TITLES[page], null, lede, search)); else headSlot.querySelector('.lede').textContent = lede;
       const b = banner(); fill(slot, b ? [b] : []);
       drawChips(); draw();
     },
@@ -628,22 +699,73 @@ function bodyDiff(a, b) {
 }
 
 function mountPreview() {
-  const headSlot = h('div'), main = h('div'), panel = h('aside', { class: 'panel' });
-  const el = h('div', { class: 'page tg' }, h('div', { class: 'col' }, headSlot, main), panel);
+  const headSlot = h('div'), main = h('div'), panel = h('aside', { class: 'panel', id: 'pv-panel', 'aria-label': 'Details and Remote Config' });
+  // The side panel and the responses dock start closed so the test script is what a tester reads first.
+  let panelOpen = store.get('pv-panel', 'closed') === 'open', dockOpen = store.get('pv-dock', 'closed') === 'open';
+  const dockHead = h('button', { class: 'pv-dock-head', 'aria-controls': 'pv-dock-body' }), dockBody = h('div', { class: 'pv-dock-body', id: 'pv-dock-body', style: 'height:0' });
+  const grip = h('div', { class: 'pv-grip', role: 'separator', tabindex: '0', 'aria-orientation': 'horizontal', 'aria-label': 'Resize the responses', 'aria-controls': 'pv-dock-body' });
+  const dock = h('section', { class: 'pv-dock', 'aria-label': 'Responses it will serve', hidden: '' }, grip, dockHead, dockBody);
+  main.classList.add('pv-main');
+  const col = h('div', { class: 'col' }, headSlot, main, dock);
+  const el = h('div', { class: 'page tg pv' }, col, panel);
+  // The dock keeps the height it was dragged to; until then it takes a bit under half the column.
+  let dockH = Number(store.get('pv-dock-h', '0')) || 0;
+  const maxH = () => Math.max(160, col.clientHeight - headSlot.offsetHeight - 96);
+  const fitH = (px) => Math.min(Math.max(px, 140), maxH());
+  const setDock = (open) => { dockOpen = open; store.set('pv-dock', open ? 'open' : 'closed'); drawDock(); };
+  dockHead.addEventListener('click', () => setDock(!dockOpen));
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    const startY = e.clientY, startH = dockOpen ? dockBody.offsetHeight : 0;
+    let moved = false;
+    dock.classList.add('dragging');
+    const move = (ev) => {
+      if (!moved && Math.abs(ev.clientY - startY) < 3) return;
+      moved = true;
+      if (!dockOpen) { dockOpen = true; dock.classList.add('open'); }
+      dockBody.style.height = Math.min(Math.max(startH + startY - ev.clientY, 0), maxH()) + 'px';
+    };
+    const end = () => {
+      grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', end); grip.removeEventListener('pointercancel', end);
+      dock.classList.remove('dragging');
+      if (!moved) { setDock(!dockOpen); return; }
+      // Dragged nearly shut closes it, and the last real height is kept for the next open.
+      const hh = dockBody.offsetHeight;
+      if (hh < 90) { setDock(false); return; }
+      dockH = fitH(hh); store.set('pv-dock-h', String(dockH)); setDock(true);
+    };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', end); grip.addEventListener('pointercancel', end);
+  });
+  grip.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowUp' ? 40 : e.key === 'ArrowDown' ? -40 : 0;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDock(!dockOpen); return; }
+    if (!step) return;
+    e.preventDefault();
+    const hh = (dockOpen ? dockBody.offsetHeight : 0) + step;
+    if (hh < 90) { setDock(false); return; }
+    dockH = fitH(hh); store.set('pv-dock-h', String(dockH)); setDock(true);
+  });
+  const showPanel = () => { panel.hidden = !panelOpen; el.classList.toggle('nopanel', !panelOpen); };
+  showPanel();
   const it = items.find((i) => previewTarget && i.kind === previewTarget.kind && i.ref === previewTarget.ref);
   let pv = null, failed = '', draft = null;
   const customDraft = new Map(), details = new Map(), expanded = new Set();
   let filterText = '';
-  if (!it) { setTimeout(() => go('library')); return { el, update() {} }; }
+  if (!it) { setTimeout(() => go('tests')); return { el, update() {} }; }
 
   const keyOf = (st) => st.method + ' ' + st.path + (st.scenario && st.state ? ' [' + st.scenario + ': ' + st.state + ']' : '');
   const changedFbrc = () => pv && draft && !sameValues(draft, pv.fbrc);
   function drawHead() {
     const changed = changedFbrc() || customDraft.size > 0;
     const label = (serving() ? 'Switch to this' : 'Start') + (changed ? ' with your changes' : '');
-    fill(headSlot, head(it.title, badge('', 'Preview'), pv ? pv.description || [KIND_LABEL[it.kind], it.profile ? 'Profile ' + it.profile : null].filter(Boolean).join(' · ') : 'Reading it…',
-      [h('button', { class: 'btn', onclick: () => go('library') }, 'Back to mocks'),
-       h('button', { class: 'btn primary', ...(!pv || busy() ? { disabled: '' } : {}), onclick: () => start(it, changedFbrc() ? draft : undefined, customDraft.size ? [...customDraft.values()] : undefined) }, icon('play'), label)]));
+    const hd = head(it.title, null, pv ? pv.description || [KIND_LABEL[it.kind], it.profile ? 'Profile ' + it.profile : null].filter(Boolean).join(' · ') : 'Reading it…',
+      [h('button', { class: 'btn', 'aria-pressed': String(panelOpen), 'aria-controls': 'pv-panel', title: (panelOpen ? 'Hide' : 'Show') + ' details and Remote Config',
+          onclick: () => { panelOpen = !panelOpen; store.set('pv-panel', panelOpen ? 'open' : 'closed'); showPanel(); drawHead(); } },
+         icon('panel'), 'Details', changedFbrc() ? h('span', { class: 'dot warn', title: 'Remote Config changed' }) : null),
+       h('button', { class: 'btn primary', ...(!pv || busy() ? { disabled: '' } : {}), onclick: () => start(it, changedFbrc() ? draft : undefined, customDraft.size ? [...customDraft.values()] : undefined) }, icon('play'), label)]);
+    hd.prepend(h('button', { class: 'back', onclick: () => go(pageOf(it.kind)) }, icon('left'), TITLES[pageOf(it.kind)]));
+    fill(headSlot, hd);
   }
 
   async function detailOf(name) {
@@ -659,27 +781,34 @@ function mountPreview() {
             info: st.scenario && st.state ? 'This answer is used ' + lowerFirst(stateWord(st)) + '. Your edit keeps the test\'s steps, so the other answers still change as before.' : '',
             note: [d.scenario && !d.state ? 'This call is part of a scenario but has no state of its own, so a response set here replaces it for every state and it will stop changing.' : '', d.template ? 'This response uses {{templates}} that WireMock fills in for each request. Editing replaces it with the fixed text below.' : '', d.truncated ? 'The body is longer than what is shown here. Editing replaces it with the text below.' : ''].filter(Boolean).join(' ') });
   }
-  function detailBox(st) {
+  function detailBox(st, noEdit) {
     const mine = customDraft.get(keyOf(st)), d = details.get(st.name);
     if (!d) return h('div', { class: 'pv-detail pv-meta' }, 'Loading…');
     const show = mine || d;
     const hdrs = Object.entries(show.headers || {}).map(([k, v]) => k + ': ' + v).join('\n');
+    const body = show.body ? show.body + (!mine && d.truncated ? '\n… (cut off)' : '') : '';
     return h('div', { class: 'pv-detail' },
-      h('div', { class: 'pv-meta' }, [mine ? 'Your edited response' : 'Response', 'status ' + show.status, show.delayMs ? show.delayMs + ' ms delay' : null, !mine && d.template ? 'uses templates' : null].filter(Boolean).join(' · ')),
-      hdrs ? h('pre', {}, hdrs) : null, show.body ? h('pre', {}, show.body + (!mine && d.truncated ? '\n… (cut off)' : '')) : h('div', { class: 'pv-meta', style: 'margin-top:6px' }, 'No body.'));
+      noEdit ? h('p', { class: 'hint', style: 'margin:0 0 6px' }, noEdit) : null,
+      h('div', { class: 'pv-meta' }, [mine ? 'Your edited response' : 'Response', 'status ' + show.status, show.delayMs ? show.delayMs + ' ms delay' : null, !mine && d.template ? 'uses templates' : null, 'stub ' + st.name].filter(Boolean).join(' · ')),
+      hdrs ? h('pre', {}, hdrs) : null,
+      body ? h('div', { class: 'pv-code' }, h('pre', {}, body), h('button', { class: 'btn sm pv-copy', onclick: (e) => copyText(show.body, e.currentTarget) }, 'Copy')) : h('div', { class: 'pv-meta', style: 'margin-top:6px' }, 'No body.'));
   }
   function stubRow(st, label) {
     const mine = customDraft.get(keyOf(st)), open = expanded.has(st.name);
     const noEdit = st.next ? 'This call moves the test on, so it can\'t be edited here. Edit the answers it leads to instead.' : !st.editable ? 'This stub answers several URLs, so it can\'t be edited here. Once the app calls it, edit it from Requests.' : st.replaced ? 'The stub above answers this call instead. Edit that one.' : '';
-    const row = h('div', { class: 'row' + (st.replaced ? ' pv-dim' : '') },
-      h('div', { class: 'grow' }, label ? h('div', { class: 'rt' }, label) : h('div', { class: 'rt mono' }, st.method ? st.method + ' ' + st.path : st.name),
-        h('div', { class: 'rm' }, [st.method ? st.name : null, st.checked ? 'checked by this test' : null, st.next ? 'moves the test on to "' + st.next + '"' : (!label && st.scenario ? 'changes as the test runs' : null), st.replaced ? 'replaced by the stub above' : null].filter(Boolean).join(' · '))),
+    // A row opens to show the response; editing is offered there, once the tester has seen what it is.
+    const toggle = async () => { if (open) expanded.delete(st.name); else { expanded.add(st.name); drawStubs(); try { await detailOf(st.name); } catch (e) { flash(e.message); expanded.delete(st.name); } } drawStubs(); };
+    const meta = [st.checked ? 'checked by this test' : null, st.next ? 'moves the test on to "' + st.next + '"' : (!label && st.scenario ? 'changes as the test runs' : null), st.replaced ? 'replaced by the stub above' : null].filter(Boolean).join(' · ');
+    const row = h('div', { class: 'row click pv-row' + (open ? ' open' : '') + (st.replaced ? ' pv-dim' : ''), role: 'button', tabindex: '0', 'aria-expanded': String(open), onclick: toggle,
+        onkeydown: (e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } } },
+      icon('right'),
+      h('div', { class: 'grow' }, label ? h('div', { class: 'rt' }, label) : h('div', { class: 'rt mono' }, st.method ? st.method + ' ' + st.path : st.name), meta ? h('div', { class: 'rm' }, meta) : null),
       mine ? badge('warn', 'edited') : null,
       st.status ? h('span', { class: 'chip' }, String(mine ? mine.status : st.status)) : null,
-      h('button', { class: 'btn sm ghost', onclick: async () => { if (open) expanded.delete(st.name); else { expanded.add(st.name); drawStubs(); try { await detailOf(st.name); } catch (e) { flash(e.message); expanded.delete(st.name); } } drawStubs(); } }, open ? 'Hide' : 'View'),
-      mine ? h('button', { class: 'btn sm', onclick: () => { customDraft.delete(keyOf(st)); drawHead(); drawStubs(); } }, 'Revert') : null,
-      h('button', { class: 'btn sm', ...(noEdit ? { disabled: '', title: noEdit } : {}), onclick: () => editStub(st) }, 'Edit'));
-    return h('div', {}, row, open ? detailBox(st) : null);
+      // Editing is offered once the row is open, so the list itself stays quiet.
+      open && mine ? h('button', { class: 'btn sm ghost', onclick: (e) => { e.stopPropagation(); customDraft.delete(keyOf(st)); drawHead(); drawStubs(); } }, 'Undo my edit') : null,
+      open ? h('button', { class: 'btn sm', ...(noEdit ? { disabled: '', title: noEdit } : {}), onclick: (e) => { e.stopPropagation(); editStub(st); } }, mine ? 'Edit again' : 'Edit') : null);
+    return h('div', {}, row, open ? detailBox(st, noEdit) : null);
   }
   const asked = new Set();
   function routeBlock(states) {
@@ -711,7 +840,18 @@ function mountPreview() {
   }
   const stubsEl = h('div');
   const filterInput = h('input', { class: 'input', type: 'search', placeholder: 'Filter by path or stub name', 'aria-label': 'Filter responses', oninput: (e) => { filterText = e.target.value; drawStubs(); } });
+  function drawDock() {
+    const edits = customDraft.size;
+    fill(dockHead, icon('up'), h('span', { class: 'fname' }, 'Responses it will serve'), h('span', { class: 'fcount' }, pv.stubs.length + ' API calls'),
+      edits ? badge('warn', edits + ' edited') : null, h('span', { class: 'grow' }), h('span', { class: 'pv-dock-hint' }, dockOpen ? 'Hide' : 'Show'));
+    dockHead.setAttribute('aria-expanded', String(dockOpen));
+    const hh = dockOpen ? fitH(dockH || Math.round(col.clientHeight * 0.45)) : 0;
+    dockBody.style.height = hh + 'px';
+    grip.setAttribute('aria-valuenow', String(hh)); grip.setAttribute('aria-valuemin', '0'); grip.setAttribute('aria-valuemax', String(maxH()));
+    dock.classList.toggle('open', dockOpen);
+  }
   function drawStubs() {
+    if (!dock.hidden) drawDock();
     const q = filterText.trim().toLowerCase();
     const shown = pv.stubs.filter((st) => !q || [st.path, st.name, st.method].join(' ').toLowerCase().includes(q));
     const who = pv.kind === 'profile' ? it.ref : pv.profile;
@@ -730,22 +870,25 @@ function mountPreview() {
     const platforms = guidePlatforms(pv.steps);
     let pick = guidePlatform(platforms);
     const pad = (...kids) => h('div', { style: 'padding:6px 28px 8px' }, ...kids);
+    // With a script the responses dock at the bottom; without one they are the page.
+    const docked = !!(pv.steps && pv.steps.length);
+    const responsesHint = h('p', { class: 'hintp', style: 'margin:0' }, 'Open a response to see exactly what the app gets, or edit it. Edits are applied the moment you start.');
     const drawMain = () => {
       fill(main,
-        pv.steps && pv.steps.length ? fold('pv:steps', true, false, '', [h('span', { class: 'fname' }, 'Test script'), h('span', { class: 'fcount' }, doCount(pv.steps, pick) + ' steps')],
-          [pad(stepsPanel(pv, platforms, pick, (p) => { store.set('platform', p); pick = p; drawMain(); }, 'What you will do and see once it is running.'))]) : null,
+        docked ? h('div', { class: 'pv-script' }, h('div', { class: 'ph' }, 'Test script', h('span', {}, doCount(pv.steps, pick) + ' steps')),
+          stepsPanel(pv, platforms, pick, (p) => { store.set('platform', p); pick = p; drawMain(); }, 'What you will do and see once it is running.')) : null,
         pv.checks && pv.checks.length ? pad(h('div', { class: 'ph' }, 'Checked while it runs'), h('div', { class: 'tg-checks' }, pv.checks.map((c) => h('div', { class: 'tg-chk' },
           h('span', { class: 'ic' }, '…'), h('div', {}, h('div', { class: 'ct' }, c.label), h('div', { class: 'cd' }, 'Expected ' + c.expect + ' once you start')))))) : null,
-        pad(h('div', { class: 'ph' }, 'Responses it will serve', h('span', {}, pv.stubs.length + ' API calls')),
-          h('p', { class: 'hintp', style: 'margin:0' }, 'View a response to see exactly what the app gets, or edit it. Edits are applied the moment you start.')),
-        h('div', { class: 'pv-filter' }, filterInput), stubsEl);
-      drawStubs();
+        docked ? null : [pad(h('div', { class: 'ph' }, 'Responses it will serve', h('span', {}, pv.stubs.length + ' API calls')), responsesHint), h('div', { class: 'pv-filter' }, filterInput), stubsEl]);
     };
     drawMain();
-    fill(panel, h('div', { class: 'ph' }, 'Remote Config', h('span', {}, Object.keys(pv.fbrc).length + ' set')),
-      fbrcEditor({ name: pv.ref, fbrc: pv.fbrc, defaultFbrc: pv.fbrc }, { draftOnly: true, onChange: (d) => { draft = d; drawHead(); } }),
-      h('div', { class: 'ph', style: 'margin-top:22px' }, 'Details'),
-      kvList([['Type', KIND[pv.kind] || pv.kind], ['Profile', pv.profile || 'none'], ['API calls', String(pv.stubs.length)]]));
+    dock.hidden = !docked;
+    if (docked) fill(dockBody, responsesHint, h('div', { class: 'pv-filter' }, filterInput), stubsEl);
+    drawStubs();
+    fill(panel, h('div', { class: 'ph' }, 'Details'),
+      kvList([['Type', KIND[pv.kind] || pv.kind], ['Profile', pv.profile || 'none'], ['API calls', String(pv.stubs.length)]]),
+      h('div', { class: 'ph' }, 'Remote Config', h('span', {}, Object.keys(pv.fbrc).length + ' set')),
+      fbrcEditor({ name: pv.ref, fbrc: pv.fbrc, defaultFbrc: pv.fbrc }, { draftOnly: true, onChange: (d) => { draft = d; drawHead(); } }));
   }
   api('/api/preview?kind=' + encodeURIComponent(it.kind) + '&ref=' + encodeURIComponent(it.ref))
     .then((r) => { pv = r; draft = { ...r.fbrc }; drawHead(); drawBody(); })
@@ -835,8 +978,8 @@ function mountSession() {
     fill(headSlot, head('Session', badge(starting || stopping ? 'warn' : '', starting ? 'Starting' : stopping ? 'Stopping' : 'Idle'), starting ? 'Starting the mock server. This can take a few seconds.' : 'Nothing is running.'));
     fill(tabsEl);
     fill(body, h('div', { class: 'empty' }, h('div', { class: 'ring' }, icon('play')), h('h2', {}, starting ? 'Starting…' : 'Nothing is running'),
-      h('p', {}, 'Pick a scenario or a profile, press Start, then use the app. Every request it makes shows up here.'),
-      starting || stopping ? null : h('button', { class: 'btn primary', onclick: () => go('library') }, 'Browse mocks')),
+      h('p', {}, 'Pick a test or a profile, press Start, then use the app. Every request it makes shows up here.'),
+      starting || stopping ? null : h('button', { class: 'btn primary', onclick: () => go('tests') }, 'Browse tests')),
       recentRows());
     const kv = [['Project', proj.name], ['Platform', proj.platform || 'unknown']];
     if (git && git.repo) { kv.push(['Branch', git.branch]); if (git.commit) kv.push(['Latest change', git.commit.subject + ' · ' + git.commit.when]); }
@@ -848,7 +991,7 @@ function mountSession() {
   function live() {
     const s = state.serving, custom = state.custom || [], fbrc = Object.entries(s.fbrc || {});
     fill(headSlot, head(s.name, badge('ok', 'Serving'), [KIND[s.kind], s.profile ? 'Profile ' + s.profile : null, 'port ' + s.port].filter(Boolean).join(' · ') + (s.description ? '. ' + s.description : ''),
-      [h('button', { class: 'btn', onclick: () => go('library') }, 'Choose another'),
+      [h('button', { class: 'btn', onclick: () => go(pageOf(s.kind)) }, 'Choose another'),
        h('button', { class: 'btn danger', ...(busy() ? { disabled: '' } : {}), onclick: stopMock }, icon('stop'), 'Stop mock')]));
     const unmatched = rows.filter((r) => r.unmatched).length;
     const guide = (s.steps && s.steps.length) || (s.checks && s.checks.length);
@@ -1148,7 +1291,7 @@ function projectChooser(done) {
     catch (e) { msg.className = 'hint bad'; msg.textContent = e.message; }
   }
   const recent = (proj.recent || []).map((r) => h('div', { class: 'recent' },
-    h('span', { class: 'sq', style: 'background:' + tint(r.name) }),
+    projIcon(r),
     h('span', { class: 'what' }, h('strong', {}, r.name), h('small', {}, r.exists ? r.path : r.path + ' (folder not found)')),
     h('button', { class: 'btn sm', ...(r.exists ? {} : { disabled: '' }), onclick: () => open(r.path) }, 'Open')));
   return h('div', {},
