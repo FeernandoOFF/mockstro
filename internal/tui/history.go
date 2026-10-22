@@ -437,7 +437,7 @@ func (hm *historyModel) view(w, h int) (string, string) {
 			help = sWarn.Render(fmt.Sprintf("Delete %s (%s)%s? "+confirmHint, filepath.Base(run.dir), engine.HumanSize(run.size), extra))
 		}
 	case "prune":
-		help = sWarn.Render(fmt.Sprintf("Keep the newest %d finished runs, delete the rest and strip APK snapshots? "+confirmHint, engine.KeepRuns()))
+		help = sWarn.Render(fmt.Sprintf("Keep the newest %d finished runs, delete the rest and strip build artifacts? "+confirmHint, engine.KeepRuns()))
 	case "all":
 		help = sWarn.Render("Delete every finished run dir of this project? " + confirmHint)
 	}

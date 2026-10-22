@@ -35,6 +35,12 @@ properties:
 - assertVisible: "No accounts yet"
 ```
 
+Remote Config uses the same validation for fixture files, CLI overrides and live edits:
+at most 500 values, keys of 1–200 ASCII letters, digits, `_`, `.` or `-`, and values
+up to 64 KiB each. CLI overrides replace matching fixture values; omitted keys use
+app defaults. Attached full-integration runs deliver values through the device override;
+server-only and Map Remote sessions serve them through WireMock's Firebase mappings.
+
 ## Stubs
 
 - A stub can `extends` another stub or a base. Only `response` is inherited.

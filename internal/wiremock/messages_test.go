@@ -76,7 +76,7 @@ func TestReplaceMessagesResetsSeparateJournals(t *testing.T) {
 			}
 		}
 	})
-	if err := s.Replace([]any{NonceMapping("test-run")}, []any{mapping(t, `{"trigger":{"type":"message"},"actions":[]}`)}); err != nil {
+	if _, err := s.Replace([]any{NonceMapping("test-run")}, []any{mapping(t, `{"trigger":{"type":"message"},"actions":[]}`)}); err != nil {
 		t.Fatal(err)
 	}
 	want := "DELETE /__admin/mappings,DELETE /__admin/message-mappings,POST /__admin/message-mappings,POST /__admin/mappings/import,DELETE /__admin/requests,DELETE /__admin/messages"
@@ -85,8 +85,40 @@ func TestReplaceMessagesResetsSeparateJournals(t *testing.T) {
 	}
 	s.MessageSupport = false
 	before := len(calls)
-	if err := s.Replace(nil, []any{map[string]any{}}); err == nil || len(calls) != before {
+	if _, err := s.Replace(nil, []any{map[string]any{}}); err == nil || len(calls) != before {
 		t.Fatal("v3 mutated before message support check")
+	}
+}
+
+func TestReplaceReportsWhetherFailureClearedPreviousMappings(t *testing.T) {
+	for _, tc := range []struct {
+		failure string
+		reset   bool
+	}{
+		{"GET " + NoncePath, false},
+		{"DELETE /__admin/mappings", false},
+		{"DELETE /__admin/message-mappings", true},
+		{"POST /__admin/mappings/import", true},
+		{"DELETE /__admin/requests", true},
+		{"", true},
+	} {
+		t.Run(tc.failure, func(t *testing.T) {
+			s := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method+" "+r.URL.Path == tc.failure {
+					http.Error(w, "failed", http.StatusInternalServerError)
+					return
+				}
+				if r.URL.Path == NoncePath {
+					fmt.Fprint(w, "test-run")
+					return
+				}
+				fmt.Fprint(w, `{}`)
+			})
+			reset, err := s.Replace([]any{NonceMapping("test-run")})
+			if reset != tc.reset || (err != nil) != (tc.failure != "") {
+				t.Fatalf("reset=%v error=%v, want reset=%v", reset, err, tc.reset)
+			}
+		})
 	}
 }
 
@@ -116,7 +148,7 @@ func TestRealWebSocketRoundTripAndReset(t *testing.T) {
 	defer s.Stop()
 	messages := []any{mapping(t, `{"name":"connect","trigger":{"type":"message","channel":{"type":"websocket","initiatingRequestPattern":{"url":"/ws"}},"message":{"body":{"matchesJsonPath":{"expression":"$.method","equalTo":"connect"}}}},"actions":[{"type":"send","channelTarget":{"type":"originating"},"message":{"body":{"data":"{\"type\":\"res\",\"id\":\"{{jsonPath message.body '$.id'}}\",\"ok\":true}"}}}]}`)}
 	httpMappings := []any{NonceMapping("integration"), mapping(t, `{"name":"upgrade","request":{"method":"GET","url":"/ws"},"response":{"openWebsocketChannel":true}}`)}
-	if err := s.Replace(httpMappings, messages); err != nil {
+	if _, err := s.Replace(httpMappings, messages); err != nil {
 		t.Fatal(err)
 	}
 	client := exec.CommandContext(ctx, "java", "testdata/WebSocketClient.java", fmt.Sprintf("ws://127.0.0.1:%d/ws", port))
@@ -173,7 +205,7 @@ func TestRealWebSocketRoundTripAndReset(t *testing.T) {
 	if received != 1 || sent != 2 {
 		t.Fatalf("received=%d sent=%d", received, sent)
 	}
-	if err := s.Replace(httpMappings); err != nil {
+	if _, err := s.Replace(httpMappings); err != nil {
 		t.Fatal(err)
 	}
 	events, err = s.MessageJournal(true)

@@ -168,7 +168,7 @@ func (e *Engine) DeleteRunDir(ctx context.Context, path string) error {
 	return os.RemoveAll(path)
 }
 
-// Prune keeps the newest `keep` finished run dirs and strips APK snapshots from the rest of
+// Prune keeps the newest `keep` finished run dirs and strips build artifacts from the rest of
 // the finished ones.
 func (e *Engine) Prune(ctx context.Context, keep int) (removed int, freed int64) {
 	kept := 0

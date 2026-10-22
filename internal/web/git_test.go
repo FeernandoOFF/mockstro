@@ -12,6 +12,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/gitrepo"
 	"github.com/feernandooff/mockstro/internal/project"
 )
 
@@ -63,9 +64,9 @@ func newRepos(t *testing.T) repos {
 func gitServer(t *testing.T, r repos) *Server {
 	t.Helper()
 	p := &project.Project{Root: r.work, MaestroRoot: filepath.Join(r.work, ".maestro"), Env: map[string]string{}, Platform: "ios", Integration: "lite"}
-	ws := NewWorkspace(nil, "")
+	ws := NewWorkspace(nil, "", execx.Real{})
 	ws.Use(p, engine.DefaultOptions())
-	s, err := NewServer(ws, execx.Real{}, testPort)
+	s, err := NewServer(ws, testPort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,9 +77,9 @@ func gitPost(s *Server, path, body string) *httptest.ResponseRecorder {
 	return do(s, "POST", path, goodHost, map[string]string{tokenHeader: s.token, "Content-Type": "application/json"}, body)
 }
 
-func status(t *testing.T, s *Server) GitStatus {
+func status(t *testing.T, s *Server) gitrepo.Status {
 	t.Helper()
-	var st GitStatus
+	var st gitrepo.Status
 	rec := do(s, "GET", "/api/git", goodHost, nil, "")
 	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
 		t.Fatal(err)
@@ -178,9 +179,9 @@ func TestBranchListAndSwitch(t *testing.T) {
 	gitIn(t, r.other, "push", "-q", "-u", "origin", "feature/survey")
 	gitPost(s, "/api/git/fetch", "{}")
 
-	var branches []GitBranch
+	var branches []gitrepo.Branch
 	_ = json.Unmarshal(do(s, "GET", "/api/git/branches", goodHost, nil, "").Body.Bytes(), &branches)
-	byName := map[string]GitBranch{}
+	byName := map[string]gitrepo.Branch{}
 	for _, b := range branches {
 		byName[b.Name] = b
 	}
@@ -234,10 +235,7 @@ func TestSwitchRefusesBadNamesAndDirtyCheckouts(t *testing.T) {
 func TestPullAndSwitchRefuseWhileAMockIsRunning(t *testing.T) {
 	r := newRepos(t)
 	s := gitServer(t, r)
-	m := mgr(s)
-	m.mu.Lock()
-	m.busy = true
-	m.mu.Unlock()
+	blockWorkspaceStartup(t, s.ws)
 	for path, body := range map[string]string{"/api/git/pull": "{}", "/api/git/switch": `{"branch":"main"}`} {
 		if rec := gitPost(s, path, body); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "stop the running mock") {
 			t.Errorf("%s: %d %s", path, rec.Code, rec.Body)
@@ -247,23 +245,11 @@ func TestPullAndSwitchRefuseWhileAMockIsRunning(t *testing.T) {
 
 func TestGitWithoutARepo(t *testing.T) {
 	s, _ := testServer(t) // the project's folder is not a git checkout
+	s.ws.runner = execx.Real{}
 	if st := status(t, s); st.Repo {
 		t.Fatalf("status = %+v", st)
 	}
 	if rec := gitPost(s, "/api/git/pull", "{}"); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not a git checkout") {
 		t.Fatalf("pull: %d %s", rec.Code, rec.Body)
-	}
-}
-
-func TestGitFriendlyErrors(t *testing.T) {
-	for stderr, want := range map[string]string{
-		"git@bitbucket.org: Permission denied (publickey).\nfatal: Could not read from remote repository.": "could not sign in",
-		"fatal: Not possible to fast-forward, aborting.":                                                   "both changed",
-		"There is no tracking information for the current branch.":                                         "not linked to a remote branch",
-		"error: something unexpected":                                                                      "something unexpected",
-	} {
-		if got := friendlyGitError(stderr); !strings.Contains(got, want) {
-			t.Errorf("%q -> %q, want it to mention %q", stderr, got, want)
-		}
 	}
 }

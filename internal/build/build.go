@@ -19,104 +19,184 @@ import (
 	"github.com/feernandooff/mockstro/internal/project"
 )
 
-func Build(ctx context.Context, p *project.Project, platform string, ex execx.Runner, dir string, out io.Writer) (string, string, error) {
+// Artifact is a run-owned snapshot of an APK or iOS Simulator bundle. Source
+// rebuilds never modify it; SHA256 covers the entire snapshot, including resources.
+type Artifact struct {
+	Path     string
+	SHA256   string
+	Platform string
+	AppID    string
+	System   project.BuildSystem
+}
+
+func (a Artifact) Exists() bool {
+	st, err := os.Stat(a.Path)
+	if err != nil {
+		return false
+	}
+	switch a.Platform {
+	case "ios":
+		return st.IsDir() && strings.HasSuffix(a.Path, ".app")
+	case "android":
+		return st.Mode().IsRegular() && strings.HasSuffix(a.Path, ".apk")
+	}
+	return false
+}
+
+// Hash reads the snapshot, returning errors rather than treating unreadable files
+// as an empty hash. Platform determines whether a bundle or a file is hashed.
+func (a Artifact) Hash() (string, error) {
+	if !a.Exists() {
+		return "", fmt.Errorf("installable %s artifact does not exist: %s", a.Platform, a.Path)
+	}
+	if a.Platform == "ios" {
+		return BundleSHA(a.Path)
+	}
+	return fsx.SHA256(a.Path)
+}
+
+func (a Artifact) Verify() error {
+	sum, err := a.Hash()
+	if err != nil {
+		return err
+	}
+	if sum != a.SHA256 {
+		return fmt.Errorf("artifact changed since build: %s", a.Path)
+	}
+	return nil
+}
+
+// Build runs exactly one configured build command in the source checkout and
+// snapshots its single matching installable output. It never discovers devices or
+// retries a failed native build through a different build system.
+func Build(ctx context.Context, p *project.Project, ex execx.Runner, dir string, out io.Writer) (Artifact, error) {
+	if err := ctx.Err(); err != nil {
+		return Artifact{}, err
+	}
 	if out == nil {
 		out = io.Discard
 	}
-	root := p.SourceRoot()
+	b, err := p.Build.Resolve(p.Platform)
+	if err != nil {
+		return Artifact{}, err
+	}
+	root, err := filepath.Abs(p.SourceRoot())
+	if err != nil {
+		return Artifact{}, err
+	}
 	cmd := execx.Cmd{Dir: root, Stdout: out, Stderr: out}
-	glob := p.APKGlob
-	if p.BuildSystem == "kotlin-toolchain" {
-		module, target := p.KotlinAndroidModule, "android"
-		task := "buildAndroid"
-		if platform == "ios" {
-			module, target, task = p.KotlinIOSModule, "iosSimulatorArm64", "buildIosAppIosSimulatorArm64"
+	glob := b.Artifact
+	switch b.System {
+	case project.BuildCommand:
+		cmd.Name, cmd.Args = b.Command[0], b.Command[1:]
+	case project.BuildKotlin:
+		target, task := "android", "buildAndroid"
+		if p.Platform == "ios" {
+			target, task = "iosSimulatorArm64", "buildIosAppIosSimulatorArm64"
 		}
-		if module == "" || p.KotlinVariant != "debug" && p.KotlinVariant != "release" {
-			return "", "", fmt.Errorf("configure build.module and build.variant (debug or release) for %s", platform)
-		}
-		cmd.Name, cmd.Args = "./kotlin", []string{"build", "-m", module, "-p", target, "-v", p.KotlinVariant}
-		variant := strings.ToUpper(p.KotlinVariant[:1]) + p.KotlinVariant[1:]
-		if platform == "ios" {
-			glob = p.IOSAppGlob
-		}
+		cmd.Name, cmd.Args = "./kotlin", []string{"build", "-m", b.Module, "-p", target, "-v", b.Variant}
+		variant := strings.ToUpper(b.Variant[:1]) + b.Variant[1:]
 		if glob == "" {
-			taskDir := filepath.Join("build", "tasks", "_"+module+"_"+task+variant)
-			if platform == "ios" {
+			taskDir := filepath.Join("build", "tasks", "_"+b.Module+"_"+task+variant)
+			if p.Platform == "ios" {
 				glob = filepath.Join(taskDir, "bin", variant+"-iphonesimulator", "*.app")
 			} else {
 				glob = filepath.Join(taskDir, "*.apk")
 			}
 		}
-	} else if platform == "ios" {
-		if p.IOSProject == "" || p.IOSScheme == "" {
-			return "", "", fmt.Errorf("set platforms.ios.build.project and platforms.ios.build.scheme in .maestro/mockstro.yaml")
+	case project.BuildXcode:
+		if b.Project == "" || b.Scheme == "" {
+			return Artifact{}, fmt.Errorf("set platforms.ios.build.project and platforms.ios.build.scheme in .maestro/mockstro.yaml")
 		}
 		flag := "-project"
-		if strings.HasSuffix(p.IOSProject, ".xcworkspace") {
+		if strings.HasSuffix(b.Project, ".xcworkspace") {
 			flag = "-workspace"
 		}
-		derived := filepath.Join(root, "build", "maestro-derived-data")
-		cmd.Name, cmd.Args = "xcodebuild", []string{flag, filepath.Join(root, p.IOSProject), "-scheme", p.IOSScheme, "-configuration", p.IOSConfig, "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", derived, "CODE_SIGNING_ALLOWED=NO", "build"}
-		glob = p.IOSAppGlob
-		if glob == "" {
-			glob = filepath.Join(derived, "Build", "Products", p.IOSConfig+"-iphonesimulator", "*.app")
+		projectPath := b.Project
+		if !filepath.IsAbs(projectPath) {
+			projectPath = filepath.Join(root, projectPath)
 		}
-	} else {
-		cmd.Name, cmd.Args = "./gradlew", []string{p.GradleTask, "-q"}
-	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", "", err
+		derived := filepath.Join(root, "build", "maestro-derived-data")
+		cmd.Name, cmd.Args = "xcodebuild", []string{flag, projectPath, "-scheme", b.Scheme, "-configuration", b.Configuration, "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", derived, "CODE_SIGNING_ALLOWED=NO", "build"}
+		if glob == "" {
+			glob = filepath.Join(derived, "Build", "Products", b.Configuration+"-iphonesimulator", "*.app")
+		}
+	case project.BuildGradle:
+		cmd.Name, cmd.Args = "./gradlew", []string{b.Task, "-q"}
 	}
 	fmt.Fprintf(out, "Building %s (incremental)...\n", cmd.String())
 	if err := ex.Run(ctx, cmd); err != nil {
-		return "", "", fmt.Errorf("build failed: %s: %w", cmd.String(), err)
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return Artifact{}, fmt.Errorf("build failed: %s: %w", cmd.String(), err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Artifact{}, err
 	}
 	if !filepath.IsAbs(glob) {
 		glob = filepath.Join(root, glob)
 	}
 	matches, err := filepath.Glob(glob)
 	if err != nil {
-		return "", "", fmt.Errorf("artifact glob: %w", err)
+		return Artifact{}, fmt.Errorf("artifact glob: %w", err)
 	}
 	var artifacts []string
 	for _, path := range matches {
-		st, err := os.Stat(path)
-		if err == nil && (platform == "ios" && st.IsDir() || platform != "ios" && st.Mode().IsRegular()) {
+		if (Artifact{Path: path, Platform: p.Platform}).Exists() {
 			artifacts = append(artifacts, path)
 		}
 	}
 	if len(artifacts) != 1 {
-		return "", "", fmt.Errorf("expected one installable artifact at %s, found %d", glob, len(artifacts))
+		return Artifact{}, fmt.Errorf("expected one installable %s artifact at %s, found %d", p.Platform, glob, len(artifacts))
 	}
-	destDir := filepath.Join(dir, "artifacts")
+	destDir, err := filepath.Abs(filepath.Join(dir, "artifacts"))
+	if err != nil {
+		return Artifact{}, err
+	}
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return "", "", err
+		return Artifact{}, err
 	}
-	var dst, sum string
-	if platform == "ios" {
+	// Each invocation owns a new snapshot, even when the same run directory is reused.
+	snapshotDir, err := os.MkdirTemp(destDir, "build-")
+	if err != nil {
+		return Artifact{}, err
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			os.RemoveAll(snapshotDir)
+		}
+	}()
+	artifact := Artifact{Platform: p.Platform, AppID: p.AppID, System: b.System}
+	if p.Platform == "ios" {
 		if err := validateBundle(ctx, artifacts[0], p.AppID, ex); err != nil {
-			return "", "", err
+			return Artifact{}, err
 		}
-		dst = filepath.Join(destDir, filepath.Base(artifacts[0]))
-		if err := copyBundle(artifacts[0], dst); err != nil {
-			return "", "", err
-		}
-		sum, err = BundleSHA(dst)
+		artifact.Path = filepath.Join(snapshotDir, filepath.Base(artifacts[0]))
+		err = copyBundle(artifacts[0], artifact.Path)
 	} else {
-		dst = filepath.Join(destDir, "app.apk")
-		err = fsx.CopyAtomic(artifacts[0], dst)
-		if err == nil {
-			sum, err = fsx.SHA256(dst)
-		}
+		artifact.Path = filepath.Join(snapshotDir, "app.apk")
+		err = fsx.CopyAtomic(artifacts[0], artifact.Path)
 	}
 	if err != nil {
-		return "", "", err
+		return Artifact{}, err
 	}
-	if err = os.WriteFile(filepath.Join(dir, "apk.sha256"), []byte(sum+"  "+dst+"\n"), 0644); err != nil {
-		return "", "", err
+	if err := ctx.Err(); err != nil {
+		return Artifact{}, err
 	}
-	return dst, sum, nil
+	artifact.SHA256, err = artifact.Hash()
+	if err != nil {
+		return Artifact{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Artifact{}, err
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "artifact.sha256"), []byte(artifact.SHA256+"  "+artifact.Path+"\n"), 0644); err != nil {
+		return Artifact{}, err
+	}
+	complete = true
+	return artifact, nil
 }
 
 func validateBundle(ctx context.Context, path, appID string, ex execx.Runner) error {
@@ -209,6 +289,12 @@ func validateBundle(ctx context.Context, path, appID string, ex execx.Runner) er
 }
 
 func copyBundle(src, dst string) error {
+	// macOS commonly addresses the same temporary directory through /var and
+	// /private/var. Compare resolved paths on both sides of the containment check.
+	realSource, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return err
+	}
 	tmp, err := os.MkdirTemp(filepath.Dir(dst), ".bundle-")
 	if err != nil {
 		return err
@@ -237,6 +323,16 @@ func copyBundle(src, dst string) error {
 			link, err := os.Readlink(path)
 			if err != nil {
 				return err
+			}
+			// A snapshot must not keep a live dependency on the source checkout
+			// or another external path through a preserved bundle symlink.
+			resolved, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return fmt.Errorf("resolve bundle symlink %s: %w", path, err)
+			}
+			rel, err := filepath.Rel(realSource, resolved)
+			if err != nil || filepath.IsAbs(link) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("bundle symlink must be relative and remain inside the bundle: %s -> %s", path, link)
 			}
 			return os.Symlink(link, target)
 		}

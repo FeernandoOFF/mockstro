@@ -1,7 +1,8 @@
-package engine
+package mockruntime
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -78,49 +79,67 @@ func (c *CustomResponse) mapping() map[string]any {
 
 // SetCustomResponse serves c for its method and path, replacing an earlier custom response for
 // the same route. The returned copy carries WireMock's id.
-func (m *MockSession) SetCustomResponse(c CustomResponse) (CustomResponse, error) {
+func (m *Session) SetCustomResponse(c CustomResponse) (CustomResponse, error) {
 	if err := c.Validate(); err != nil {
 		return c, err
 	}
-	m.ovMu.Lock()
-	defer m.ovMu.Unlock()
-	id, err := m.Run.WM.AddMapping(c.mapping())
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	if m.stopped {
+		return c, ErrStopped
+	}
+	c.Headers = maps.Clone(c.Headers)
+	id, err := m.runtime.AddMapping(c.mapping())
 	if err != nil {
 		return c, err
 	}
 	for i, old := range m.custom {
 		if old.key() == c.key() {
-			if err := m.Run.WM.RemoveMapping(old.ID); err != nil {
-				_ = m.Run.WM.RemoveMapping(id)
+			if err := m.runtime.RemoveMapping(old.ID); err != nil {
+				_ = m.runtime.RemoveMapping(id)
 				return c, err
 			}
+			m.mu.Lock()
 			m.custom = slices.Delete(m.custom, i, i+1)
+			m.mu.Unlock()
 			break
 		}
 	}
 	c.ID = id
+	m.mu.Lock()
 	m.custom = append(m.custom, c)
+	m.mu.Unlock()
+	c.Headers = maps.Clone(c.Headers)
 	return c, nil
 }
 
 // RemoveCustomResponse restores the served target's own answer for that route.
-func (m *MockSession) RemoveCustomResponse(id string) error {
-	m.ovMu.Lock()
-	defer m.ovMu.Unlock()
+func (m *Session) RemoveCustomResponse(id string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	if m.stopped {
+		return ErrStopped
+	}
 	i := slices.IndexFunc(m.custom, func(c CustomResponse) bool { return c.ID == id })
 	if i < 0 {
 		return fmt.Errorf("no custom response with id %q", id)
 	}
-	if err := m.Run.WM.RemoveMapping(id); err != nil {
+	if err := m.runtime.RemoveMapping(id); err != nil {
 		return err
 	}
+	m.mu.Lock()
 	m.custom = slices.Delete(m.custom, i, i+1)
+	m.mu.Unlock()
 	return nil
 }
 
 // CustomResponses lists what is currently layered over the target, oldest first.
-func (m *MockSession) CustomResponses() []CustomResponse {
-	m.ovMu.Lock()
-	defer m.ovMu.Unlock()
-	return append([]CustomResponse{}, m.custom...)
+func (m *Session) CustomResponses() []CustomResponse {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := append([]CustomResponse{}, m.custom...)
+	for i := range out {
+		out[i].Headers = maps.Clone(out[i].Headers)
+	}
+	return out
 }

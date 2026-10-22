@@ -6,19 +6,21 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"maps"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/feernandooff/mockstro/internal/build"
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
 	"github.com/feernandooff/mockstro/internal/lock"
+	"github.com/feernandooff/mockstro/internal/maestro"
 	"github.com/feernandooff/mockstro/internal/paths"
 	"github.com/feernandooff/mockstro/internal/platform"
 	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/internal/registry"
+	"github.com/feernandooff/mockstro/internal/remoteconfig"
 )
 
 type Options struct {
@@ -60,8 +62,7 @@ type Options struct {
 	Lite bool
 
 	// Set by a parallel parent for its workers.
-	SessionAPK    string
-	SessionAPKSHA string
+	SessionArtifact build.Artifact
 }
 
 func DefaultOptions() Options {
@@ -95,6 +96,8 @@ func New(p *project.Project, opts Options, ex execx.Runner, sink Sink) *Engine {
 	if opts.Platform == "" {
 		opts.Platform = p.Platform
 	}
+	copy := *p
+	p = &copy
 	opts.Lite = p.Lite()
 	if opts.FBRC == nil {
 		opts.FBRC = map[string]string{}
@@ -207,12 +210,10 @@ func (e *Engine) DiscoverFlows() ([]*fixtures.Flow, error) {
 
 // FBRCFor merges the flow's Remote Config values with CLI overrides (CLI wins).
 func (e *Engine) FBRCFor(h *fixtures.Header) map[string]string {
-	out := map[string]string{}
-	if h != nil {
-		maps.Copy(out, h.FBRC)
+	if h == nil {
+		return remoteconfig.Copy(e.Opts.FBRC)
 	}
-	maps.Copy(out, e.Opts.FBRC)
-	return out
+	return remoteconfig.Merge(h.FBRC, e.Opts.FBRC)
 }
 
 // CheckEnvironment verifies the external tools a command needs.
@@ -239,7 +240,7 @@ func (e *Engine) CheckEnvironment(command string) error {
 	for _, n := range need {
 		_, err := e.Exec.LookPath(n)
 		if n == "maestro" {
-			_, err = e.maestroCommand()
+			_, err = maestro.Command(e.Exec)
 		}
 		if err != nil {
 			missing = append(missing, n)
@@ -349,8 +350,8 @@ func (o *Options) Validate(command string) error {
 			return fmt.Errorf("mock --device requires explicit --attach")
 		}
 	}
-	if o.SkipBuild && o.SessionAPK != "" {
-		return fmt.Errorf("--skip-build cannot be combined with a session APK")
+	if o.SkipBuild && o.SessionArtifact.Path != "" {
+		return fmt.Errorf("--skip-build cannot be combined with a session artifact")
 	}
 	return nil
 }

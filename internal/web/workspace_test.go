@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,11 +10,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/mockapp"
 	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/workspacecoord"
 )
 
 func fakeProject(t *testing.T, name string) *project.Project {
@@ -37,7 +42,7 @@ func loaderFor(projects map[string]*project.Project) Loader {
 
 func TestOpenRecordsRecentsNewestFirstWithoutDuplicates(t *testing.T) {
 	a, b := fakeProject(t, "alpha"), fakeProject(t, "beta")
-	ws := NewWorkspace(loaderFor(map[string]*project.Project{a.Root: a, b.Root: b}), filepath.Join(t.TempDir(), "ui.json"))
+	ws := NewWorkspace(loaderFor(map[string]*project.Project{a.Root: a, b.Root: b}), filepath.Join(t.TempDir(), "ui.json"), &execx.Fake{})
 	for _, dir := range []string{a.Root, b.Root, a.Root} {
 		if err := ws.Open(dir); err != nil {
 			t.Fatal(err)
@@ -55,7 +60,7 @@ func TestOpenRecordsRecentsNewestFirstWithoutDuplicates(t *testing.T) {
 func TestRecentsAreCappedAndMissingFoldersAreSkippedOnLaunch(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "ui.json")
 	projects := map[string]*project.Project{}
-	ws := NewWorkspace(loaderFor(projects), file)
+	ws := NewWorkspace(loaderFor(projects), file, &execx.Fake{})
 	var first *project.Project
 	for i := range maxRecents + 3 {
 		p := fakeProject(t, fmt.Sprintf("p%d", i))
@@ -81,7 +86,7 @@ func TestRecentsAreCappedAndMissingFoldersAreSkippedOnLaunch(t *testing.T) {
 }
 
 func TestOpenExplainsAFolderWithoutMaestro(t *testing.T) {
-	ws := NewWorkspace(loaderFor(nil), "")
+	ws := NewWorkspace(loaderFor(nil), "", &execx.Fake{})
 	err := ws.Open("/Users/qa/Documents")
 	if err == nil || !strings.Contains(err.Error(), "has no .maestro folder") || strings.Contains(err.Error(), "init --help") {
 		t.Fatalf("err = %v", err)
@@ -93,15 +98,13 @@ func TestOpenExplainsAFolderWithoutMaestro(t *testing.T) {
 
 func TestOpenRefusesWhileAMockIsRunningAndSwitchesWhenIdle(t *testing.T) {
 	a, b := fakeProject(t, "alpha"), fakeProject(t, "beta")
-	ws := NewWorkspace(loaderFor(map[string]*project.Project{a.Root: a, b.Root: b}), "")
+	ws := NewWorkspace(loaderFor(map[string]*project.Project{a.Root: a, b.Root: b}), "", &execx.Fake{})
 	if err := ws.Open(a.Root); err != nil {
 		t.Fatal(err)
 	}
 	_, first := ws.Current()
 
-	first.mu.Lock()
-	first.busy = true
-	first.mu.Unlock()
+	resume := blockWorkspaceStartup(t, ws)
 	if err := ws.Open(b.Root); err == nil || !strings.Contains(err.Error(), "stop the running mock") {
 		t.Fatalf("open while busy: %v", err)
 	}
@@ -109,9 +112,8 @@ func TestOpenRefusesWhileAMockIsRunningAndSwitchesWhenIdle(t *testing.T) {
 		t.Fatal("project changed even though the open was refused")
 	}
 
-	first.mu.Lock()
-	first.busy = false
-	first.mu.Unlock()
+	resume()
+	first.life.Wait()
 	if err := ws.Open(b.Root); err != nil {
 		t.Fatal(err)
 	}
@@ -122,8 +124,8 @@ func TestOpenRefusesWhileAMockIsRunningAndSwitchesWhenIdle(t *testing.T) {
 
 func emptyServer(t *testing.T, ex execx.Runner, projects map[string]*project.Project) *Server {
 	t.Helper()
-	ws := NewWorkspace(loaderFor(projects), "")
-	s, err := NewServer(ws, ex, testPort)
+	ws := NewWorkspace(loaderFor(projects), "", ex)
+	s, err := NewServer(ws, testPort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,4 +224,168 @@ func TestPingAndQuit(t *testing.T) {
 	}
 	do(s, "POST", "/api/quit", goodHost, map[string]string{tokenHeader: s.token, "Content-Type": "application/json"}, "{}")
 	<-quit
+}
+
+// blockedGit pauses after the idle/dirty checks, at the checkout-changing command.
+// This reproduces the old gap where Serve or Open could enter after gitGate.
+type blockedGit struct {
+	execx.Runner
+	command string
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (b *blockedGit) Output(ctx context.Context, c execx.Cmd) (string, error) {
+	if c.Name == "git" && len(c.Args) > 4 && c.Args[4] == b.command {
+		close(b.entered)
+		select {
+		case <-b.resume:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	return b.Runner.Output(ctx, c)
+}
+
+func TestGitReservationExcludesServeStopOpenAndOtherGit(t *testing.T) {
+	for _, command := range []string{"pull", "switch", "fetch"} {
+		t.Run(command, func(t *testing.T) {
+			r := newRepos(t)
+			gitIn(t, r.work, "branch", "other")
+			s := gitServer(t, r)
+			ws := s.ws
+			var loads atomic.Int32
+			ws.load = func(string) (*project.Project, engine.Options, error) {
+				loads.Add(1)
+				return fakeProject(t, "new"), engine.DefaultOptions(), nil
+			}
+			block := &blockedGit{Runner: execx.Real{}, command: command, entered: make(chan struct{}), resume: make(chan struct{})}
+			ws.runner = block
+			resumed := false
+			defer func() {
+				if !resumed {
+					close(block.resume)
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				switch command {
+				case "pull":
+					_, _, err = ws.Pull(ctx)
+				case "switch":
+					_, err = ws.SwitchBranch(ctx, "other")
+				case "fetch":
+					_, err = ws.Fetch(ctx)
+				}
+				done <- err
+			}()
+			select {
+			case <-block.entered:
+			case err := <-done:
+				t.Fatalf("git did not reach blocked command: %v", err)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			for name, invoke := range map[string]func() error{
+				"serve": func() error { return ws.Serve("scenario") },
+				"stop":  ws.Stop,
+				"open":  func() error { return ws.Open("/different-project") },
+				"use":   func() error { return ws.Use(fakeProject(t, "different"), engine.DefaultOptions()) },
+				"fetch": func() error { _, err := ws.Fetch(ctx); return err },
+			} {
+				if err := invoke(); !errors.Is(err, workspacecoord.ErrBusy) {
+					t.Errorf("%s during blocked %s: %v", name, command, err)
+				}
+			}
+			if loads.Load() != 0 {
+				t.Fatal("Open read project files during a Git operation")
+			}
+			if p, _ := ws.Current(); p.Root != r.work {
+				t.Fatal("project changed while Git was still running")
+			}
+			close(block.resume)
+			resumed = true
+			if err := <-done; err != nil {
+				t.Fatalf("git operation: %v", err)
+			}
+			if err := ws.Stop(); err != nil {
+				t.Fatalf("reservation not released: %v", err)
+			}
+		})
+	}
+}
+
+func TestShutdownClosesWorkspaceAdmission(t *testing.T) {
+	s := gitServer(t, newRepos(t))
+	s.ws.Shutdown()
+	for name, invoke := range map[string]func() error{
+		"serve": func() error { return s.ws.Serve("scenario") },
+		"open":  func() error { return s.ws.Open("/different") },
+		"pull":  func() error { _, _, err := s.ws.Pull(context.Background()); return err },
+	} {
+		if err := invoke(); !errors.Is(err, workspacecoord.ErrClosed) {
+			t.Errorf("%s after shutdown: %v", name, err)
+		}
+	}
+}
+
+// Use the lifecycle's actual synchronous admission instead of setting private
+// manager flags: busy must cover the whole asynchronous factory invocation.
+func blockWorkspaceStartup(t *testing.T, ws *Workspace) func() {
+	t.Helper()
+	_, m := ws.Current()
+	resume := make(chan struct{})
+	m.life = mockapp.New(func(ctx context.Context) (mockapp.Backend, error) {
+		select {
+		case <-resume:
+			return nil, errors.New("startup stopped by test")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	t.Cleanup(ws.Shutdown)
+	if err := ws.Serve("scenario"); err != nil {
+		t.Fatal(err)
+	}
+	return func() { close(resume) }
+}
+
+func TestAcceptedAsyncStartupExcludesCheckoutMutationAndOpen(t *testing.T) {
+	s := gitServer(t, newRepos(t))
+	resume := blockWorkspaceStartup(t, s.ws)
+	defer resume()
+	for name, invoke := range map[string]func() error{
+		"pull":   func() error { _, _, err := s.ws.Pull(context.Background()); return err },
+		"switch": func() error { _, err := s.ws.SwitchBranch(context.Background(), "main"); return err },
+		"open":   func() error { return s.ws.Open("/different") },
+	} {
+		if err := invoke(); !errors.Is(err, errWorkspaceRunning) {
+			t.Errorf("%s during async startup: %v", name, err)
+		}
+	}
+}
+
+// The runner supplied at composition reaches managers opened now and after switching.
+func TestWorkspaceMockStartupUsesInjectedRunnerAcrossProjects(t *testing.T) {
+	a, b := fakeProject(t, "alpha"), fakeProject(t, "beta")
+	runner := &execx.Fake{Paths: map[string]string{"lsof": "lsof"}}
+	ws := NewWorkspace(loaderFor(map[string]*project.Project{a.Root: a, b.Root: b}), "", runner)
+	defer ws.Shutdown()
+	for _, p := range []*project.Project{a, b} {
+		if err := ws.Open(p.Root); err != nil {
+			t.Fatal(err)
+		}
+		if err := ws.Serve("any"); err != nil {
+			t.Fatal(err)
+		}
+		_, manager := ws.Current()
+		manager.life.Wait()
+		got := manager.State()
+		if got.State != StateIdle || !strings.Contains(got.Error, "missing required command(s): java") || strings.Contains(got.Error, "lsof") {
+			t.Fatalf("startup did not use injected prerequisites: %+v", got)
+		}
+	}
 }

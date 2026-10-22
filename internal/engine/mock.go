@@ -3,32 +3,22 @@ package engine
 import (
 	"context"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/mockruntime"
+	"github.com/feernandooff/mockstro/internal/remoteconfig"
 	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
-// MockTarget is what `mock` serves: a flow's, a scenario's or a bare profile's fixtures.
-type MockTarget struct {
-	Kind      string // flow | scenario | profile
-	Name      string
-	Profile   string
-	Overrides []string
-	FBRC      map[string]string
-	Header    *fixtures.Header
-}
-
 // ResolveMockTarget interprets `mock [scenario|profile|flow [stub...]]`.
-func (e *Engine) ResolveMockTarget(args []string) (*MockTarget, error) {
-	t := &MockTarget{Kind: "profile"}
+func (e *Engine) ResolveMockTarget(args []string) (*mockruntime.Target, error) {
+	t := &mockruntime.Target{Kind: "profile"}
 	var flowOverrides []string
+	var defaults map[string]string
 	if len(args) > 0 {
 		first := args[0]
 		switch {
@@ -40,7 +30,8 @@ func (e *Engine) ResolveMockTarget(args []string) (*MockTarget, error) {
 			if err := e.Store.ValidateFlow(f); err != nil {
 				return nil, err
 			}
-			t.Kind, t.Name, t.Header, t.Profile = "flow", e.P.Rel(f.Path), f.Header, f.Header.Profile
+			t.Kind, t.Name, t.Description, t.Profile = "flow", e.P.Rel(f.Path), f.Header.Description, f.Header.Profile
+			defaults = f.Header.FBRC
 			flowOverrides = f.Header.Overrides
 		default:
 			sc, err := e.Store.FindScenario(first)
@@ -51,7 +42,8 @@ func (e *Engine) ResolveMockTarget(args []string) (*MockTarget, error) {
 				if err := e.Store.ValidateScenario(sc); err != nil {
 					return nil, err
 				}
-				t.Kind, t.Name, t.Header, t.Profile = "scenario", sc.Name, sc.Header, sc.Header.Profile
+				t.Kind, t.Name, t.Description, t.Profile = "scenario", sc.Name, sc.Header.Description, sc.Header.Profile
+				defaults = sc.Header.FBRC
 				flowOverrides = sc.Header.Overrides
 			} else {
 				if e.Opts.ProfileArg != "" {
@@ -87,7 +79,10 @@ func (e *Engine) ResolveMockTarget(args []string) (*MockTarget, error) {
 		return nil, err
 	}
 	t.Overrides = merged
-	t.FBRC = e.FBRCFor(t.Header)
+	t.FBRC, err = remoteconfig.Validate(remoteconfig.Merge(defaults, e.Opts.FBRC))
+	if err != nil {
+		return nil, err
+	}
 	return t, nil
 }
 
@@ -101,91 +96,16 @@ func (e *Engine) unknownProfile(name string) error {
 	return fmt.Errorf("unknown profile or scenario: %s\nAvailable profiles: %s\nAvailable scenarios: %s", name, strings.Join(profiles, ", "), strings.Join(names, ", "))
 }
 
-// MockSession is a running mock server; Stop cleans everything it created.
-// It is safe for concurrent use: a UI can Switch while another goroutine reads Snapshot or Traffic.
-type MockSession struct {
-	Run *Run
-
-	e      *Engine
-	mu     sync.RWMutex
-	target *MockTarget
-	fbrc   map[string]string // Remote Config being served; starts as the target's, editable
-
-	// ovMu orders custom-response changes against Switch, which wipes every mapping.
-	ovMu   sync.Mutex
-	custom []CustomResponse
-}
-
-// MockSnapshot is a point-in-time, copy-safe view of what a session is serving.
-type MockSnapshot struct {
-	Kind      string
-	Name      string
-	Profile   string
-	Overrides []string
-	FBRC      map[string]string // what the app is served now
-	Defaults  map[string]string // what the target itself defines
-	Port      int
-	Device    string
-}
-
-func (m *MockSession) Stop() { m.Run.Cleanup() }
-
-// Target is the target currently being served.
-func (m *MockSession) Target() *MockTarget {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.target
-}
-
-// Snapshot copies the served target's identity so callers can hold it without locking.
-func (m *MockSession) Snapshot() MockSnapshot {
-	t := m.Target()
-	s := MockSnapshot{Kind: t.Kind, Name: t.Name, Profile: t.Profile, Port: m.Run.Port, Device: m.Run.Device}
-	s.Overrides = append(s.Overrides, t.Overrides...)
-	s.Defaults = maps.Clone(t.FBRC)
-	if s.Defaults == nil {
-		s.Defaults = map[string]string{}
-	}
-	s.FBRC = m.FBRC()
-	if s.FBRC == nil {
-		s.FBRC = map[string]string{}
-	}
-	return s
-}
-
-// Switch serves t on the running server without restarting it. The journal and any custom
-// responses are cleared.
-// Activation emits events, so call it off any UI loop.
-func (m *MockSession) Switch(ctx context.Context, t *MockTarget) error {
-	m.ovMu.Lock()
-	err := m.Run.Activate(ctx, t.Profile, t.FBRC, t.Overrides)
-	m.custom = nil // Activate replaced every mapping, including ours
-	m.ovMu.Unlock()
-	if err != nil {
-		return err
-	}
-	m.mu.Lock()
-	m.target = t
-	m.fbrc = maps.Clone(t.FBRC)
-	m.mu.Unlock()
-	return nil
-}
-
-// Traffic returns the request journal newest first, each row tagged with the stub that served it.
-func (m *MockSession) Traffic() ([]wiremock.LoggedRequest, error) {
-	return m.Run.WM.Traffic(false)
-}
-
-// Request returns one journal entry with its request and response in full.
-func (m *MockSession) Request(id string) (*wiremock.LoggedRequest, error) {
-	return m.Run.WM.Request(id)
-}
-
-// Done is closed when the WireMock process exits.
-func (m *MockSession) Done() <-chan struct{} { return m.Run.WM.Done() }
-
 // StartMock starts server-only mock on 18080, or attaches the explicitly selected device.
-func (e *Engine) StartMock(ctx context.Context, t *MockTarget) (*MockSession, error) {
+func (e *Engine) StartMock(ctx context.Context, t *mockruntime.Target) (*mockruntime.Session, error) {
+	clean, err := remoteconfig.Validate(t.FBRC)
+	if err != nil {
+		return nil, err
+	}
+	target := *t
+	target.FBRC = clean
+	target.Overrides = append([]string(nil), t.Overrides...)
+	t = &target
 	run := e.newRun("mock", 0)
 	if err := run.Setup(ctx, e.Opts.Attach); err != nil {
 		run.Cleanup()
@@ -196,12 +116,12 @@ func (e *Engine) StartMock(ctx context.Context, t *MockTarget) (*MockSession, er
 		return nil, err
 	}
 	run.stage("MOCK", t.Name)
-	return &MockSession{Run: run, e: e, target: t, fbrc: maps.Clone(t.FBRC)}, nil
+	return mockruntime.New(newMockRuntime(run), t, run.Port, run.Device), nil
 }
 
-func (e *Engine) MockBanner(m *MockSession) string {
+func (e *Engine) MockBanner(m *mockruntime.Session) string {
 	var b strings.Builder
-	port := m.Run.Port
+	port := m.Snapshot().Port
 	fmt.Fprintf(&b, "WireMock API: http://127.0.0.1:%d/api/\n", port)
 	if e.Opts.Attach {
 		fmt.Fprintf(&b, "FBRC entries: %d (omitted keys use app defaults)\n", len(m.Target().FBRC))
@@ -215,7 +135,7 @@ func (e *Engine) MockBanner(m *MockSession) string {
 		fmt.Fprintf(&b, "Flow: %s\n", t.Name)
 	}
 	if t.Kind == "scenario" {
-		fmt.Fprintf(&b, "Scenario: %s — %s\n", t.Name, t.Header.Description)
+		fmt.Fprintf(&b, "Scenario: %s — %s\n", t.Name, t.Description)
 	}
 	shared, _ := e.Store.ProfileMappings("shared")
 	profile := m.Target().Profile
@@ -229,16 +149,6 @@ func (e *Engine) MockBanner(m *MockSession) string {
 	}
 	fmt.Fprintf(&b, "Fallback: %s (manual serving does not assert requests)", fb)
 	return b.String()
-}
-
-// Serve blocks until ctx ends or WireMock exits.
-func (m *MockSession) Serve(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return nil
-	case <-m.Run.WM.Done():
-		return fmt.Errorf("WireMock exited; see %s", m.Run.WM.Log)
-	}
 }
 
 var recordingName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)

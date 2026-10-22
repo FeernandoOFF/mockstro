@@ -10,14 +10,17 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/mockruntime"
 	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
@@ -93,15 +96,26 @@ func fakeMaestroWith(stopAfter int, skipFailedComplete bool, results string) fun
 
 func batchRun(t *testing.T, h func(c execx.Cmd) (string, error), names ...string) (*Run, []*fixtures.Flow) {
 	t.Helper()
+	return batchRunObserved(t, h, nil, names...)
+}
+
+func batchRunObserved(t *testing.T, h func(execx.Cmd) (string, error), observe func(*http.Request), names ...string) (*Run, []*fixtures.Flow) {
+	t.Helper()
 	e, _ := testEngine(t, "agent", h)
+	e.Exec.(*execx.Fake).Paths["maestro"] = "maestro"
 	r := e.newRun("run", 0)
 	if err := r.initDir(); err != nil {
 		t.Fatal(err)
 	}
 	wm := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if observe != nil {
+			observe(req)
+		}
 		switch {
 		case req.URL.Path == wiremock.NoncePath:
 			io.WriteString(w, r.ID)
+		case req.Method == http.MethodPost && req.URL.Path == "/__admin/mappings":
+			io.WriteString(w, `{"id":"custom"}`)
 		case req.URL.Path == "/__admin/requests":
 			io.WriteString(w, `{"requests":[]}`)
 		default:
@@ -183,7 +197,18 @@ func TestRunBatchFailFastStopsAtFirstFailure(t *testing.T) {
 }
 
 func TestRunBatchMaestroExitReportsUnfinishedFlows(t *testing.T) {
-	r, flows := batchRun(t, fakeMaestro(1), "ok", "never")
+	var mu sync.Mutex
+	imports, journalResets := 0, 0
+	r, flows := batchRunObserved(t, fakeMaestro(1), func(req *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if req.URL.Path == "/__admin/mappings/import" {
+			imports++
+		}
+		if req.Method == http.MethodDelete && req.URL.Path == "/__admin/requests" {
+			journalResets++
+		}
+	}, "ok", "never")
 	results, _ := runBatch(r, flows)
 	if results[0].Stage != "PASS" {
 		t.Fatalf("first flow %s", results[0].Stage)
@@ -191,27 +216,97 @@ func TestRunBatchMaestroExitReportsUnfinishedFlows(t *testing.T) {
 	if results[1] == nil || results[1].Stage != "TEST" || !strings.Contains(results[1].Message, "before the flow started") {
 		t.Fatalf("unstarted flow must fail visibly, got %+v", results[1])
 	}
+	mu.Lock()
+	defer mu.Unlock()
+	if imports != 1 || journalResets != 1 {
+		t.Fatalf("unreached flow changed fixtures: imports=%d journalResets=%d", imports, journalResets)
+	}
 }
 
-func TestClaimBatchSharesStartupAndBalances(t *testing.T) {
-	flows := make([]*fixtures.Flow, 10)
-	for i := range flows {
-		flows[i] = &fixtures.Flow{File: fmt.Sprint(i)}
-	}
-	q := &queue{flows: flows, claimed: make([]bool, 10), results: make([]*Result, 10), workers: 2}
-	var sizes []int
-	for {
-		idx := q.claimBatch(q.workers)
-		if len(idx) == 0 {
-			break
+func TestRunBatchSetupFailureDoesNotActivateAnyFlow(t *testing.T) {
+	var mu sync.Mutex
+	imports := 0
+	r, flows := batchRunObserved(t, fakeMaestro(-1), func(req *http.Request) {
+		if req.URL.Path == "/__admin/mappings/import" {
+			mu.Lock()
+			imports++
+			mu.Unlock()
 		}
-		sizes = append(sizes, len(idx))
+	}, "one", "two")
+	if err := os.WriteFile(r.configPath, []byte("invalid: ["), 0644); err != nil {
+		t.Fatal(err)
 	}
-	if fmt.Sprint(sizes) != "[3 2 2 1 1 1]" {
-		t.Fatalf("chunk sizes %v", sizes)
+	results, _ := runBatch(r, flows)
+	for _, res := range results {
+		if res == nil || res.Stage != "SETUP" {
+			t.Fatalf("setup outcome: %+v", res)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if imports != 0 {
+		t.Fatalf("setup failure activated %d flows", imports)
 	}
 }
 
+func TestIsolatedCancellationStopsWorkerWithoutCancellingParent(t *testing.T) {
+	for _, code := range []int{130, 143} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			exit := exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()
+			if execx.ExitCode(exit) != code {
+				t.Fatalf("exit fixture: %v", exit)
+			}
+			launched := 0
+			r, flows := batchRun(t, func(c execx.Cmd) (string, error) {
+				if c.Name == "maestro" {
+					launched++
+					return "", exit
+				}
+				return "", nil
+			}, "cancelled", "never")
+			r.e.Opts.Isolate = true
+			ctx := context.Background()
+			results, failures := r.e.executeFlows(ctx, flows, 1, r.Dir, func(context.Context, int) (*Run, error) { return r, nil })
+			if ctx.Err() != nil || len(failures) != 0 || launched != 1 || results[0].Stage != "CANCELLED" || results[1].Stage != "UNSTARTED" {
+				t.Fatalf("launched=%d results=%+v,%+v failures=%v", launched, results[0], results[1], failures)
+			}
+		})
+	}
+}
+
+func TestFailedSwitchReconcilesCustomResponsesAfterMappingReplacement(t *testing.T) {
+	for _, afterReplacement := range []bool{false, true} {
+		t.Run(fmt.Sprint(afterReplacement), func(t *testing.T) {
+			r, _ := batchRun(t, nil, "unused")
+			r.Device, r.overrideAuto = "device", true
+			failure := errors.New("device override failed")
+			r.e.Plat = &deliveryPlatform{err: failure}
+			runtime := &mockRuntime{run: r, done: make(chan struct{})}
+			session := mockruntime.New(runtime, &mockruntime.Target{Name: "old", FBRC: map[string]string{"K": "old"}}, r.Port, r.Device)
+			if _, err := session.SetCustomResponse(mockruntime.CustomResponse{Method: "GET", Path: "/custom", Status: 503}); err != nil {
+				t.Fatal(err)
+			}
+			next := &mockruntime.Target{Name: "new", FBRC: map[string]string{"K": "new"}}
+			if !afterReplacement {
+				next.Profile = "missing-profile"
+			}
+			err := session.Switch(context.Background(), next)
+			if err == nil || (afterReplacement && !errors.Is(err, failure)) {
+				t.Fatalf("switch error: %v", err)
+			}
+			want := 1
+			if afterReplacement {
+				want = 0
+			}
+			if got := len(session.CustomResponses()); got != want {
+				t.Fatalf("custom responses=%d, want %d", got, want)
+			}
+			if snap := session.Snapshot(); snap.Name != "old" || snap.FBRC["K"] != "old" {
+				t.Fatalf("failed switch published target: %+v", snap)
+			}
+		})
+	}
+}
 
 func TestRunBatchFailFastWhenCompletionHookNeverRuns(t *testing.T) {
 	r, flows := batchRun(t, fakeMaestroWith(-1, true, ""), "fail", "ok")

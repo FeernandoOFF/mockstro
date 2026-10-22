@@ -10,10 +10,11 @@ import (
 
 // Fake answers commands from a handler and records every call.
 type Fake struct {
-	mu      sync.Mutex
-	Calls   []string
-	Handler func(c Cmd) (string, error)
-	Paths   map[string]string
+	mu           sync.Mutex
+	Calls        []string
+	Handler      func(c Cmd) (string, error)
+	Paths        map[string]string
+	StartHandler func(Cmd, bool) (Process, error)
 }
 
 func (f *Fake) record(c Cmd) {
@@ -44,4 +45,12 @@ func (f *Fake) LookPath(name string) (string, error) {
 		return p, nil
 	}
 	return "", errors.New("not found")
+}
+
+func (f *Fake) Start(c Cmd, detach bool) (Process, error) {
+	f.record(c)
+	if f.StartHandler == nil {
+		return nil, fmt.Errorf("fake: unexpected process %s", c)
+	}
+	return f.StartHandler(c, detach)
 }

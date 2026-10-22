@@ -35,18 +35,19 @@ func testServer(t *testing.T) (*Server, *project.Project) {
 	write(t, m, "wiremock/stubs/ping.json", `{"name":"ping","request":{"method":"GET","urlPath":"/ping"},"response":{"status":200}}`)
 	write(t, m, "wiremock/__files/ping.json", `{}`)
 	write(t, m, "wiremock/profiles/shared.json", `{"mappings": []}`)
-	write(t, m, "wiremock/profiles/gas-only.json", `{"mappings": []}`)
-	write(t, m, "scenarios/gas-survey.yaml", "name: \"Gas customer with survey\"\ndescription: \"Survey at 100%.\"\nproperties:\n  apiProfile: gas-only\n  fbrcOverrides:\n    Config_Survey_Enabled: \"true\"\n")
-	write(t, m, "flows/survey/shown.yaml", "appId: com.example\nname: \"Survey shown\"\ntags:\n  - regression\n  - survey\nproperties:\n  apiProfile: gas-only\n---\n- launchApp\n")
+	write(t, m, "wiremock/profiles/member.json", `{"mappings": []}`)
+	write(t, m, "scenarios/member-survey.yaml", "name: \"Member with survey\"\ndescription: \"Survey at 100%.\"\nproperties:\n  apiProfile: member\n  fbrcOverrides:\n    survey.enabled: \"true\"\n")
+	write(t, m, "flows/survey/shown.yaml", "appId: com.example\nname: \"Survey shown\"\ntags:\n  - regression\n  - survey\nproperties:\n  apiProfile: member\n---\n- launchApp\n")
 	p := &project.Project{
 		Root: root, MaestroRoot: m, Env: map[string]string{}, Platform: "ios", AppID: "com.example", Integration: "lite",
 		ProxyBaseURL: "https://api.example.test", FBRCURL: project.DefaultFBRCURL,
 		OverrideKey: project.DefaultOverrideKy, AcceptKey: project.DefaultAcceptKey,
+		Catalog: project.CatalogConfig{ProfileGroups: map[string]string{"member": "Membership"}, FeatureTags: map[string]string{"survey.enabled": "feedback"}},
 	}
 	o := engine.DefaultOptions()
-	ws := NewWorkspace(nil, "")
+	ws := NewWorkspace(nil, "", &execx.Fake{})
 	ws.Use(p, o)
-	s, err := NewServer(ws, &execx.Fake{}, testPort)
+	s, err := NewServer(ws, testPort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,17 +130,17 @@ func TestCatalogListsScenariosProfilesAndFlows(t *testing.T) {
 	for _, it := range out.Items {
 		byKind[it.Kind] = append(byKind[it.Kind], it)
 	}
-	if len(byKind["scenario"]) != 1 || byKind["scenario"][0].Title != "Gas customer with survey" || byKind["scenario"][0].FBRC["Config_Survey_Enabled"] != "true" {
+	if len(byKind["scenario"]) != 1 || byKind["scenario"][0].Title != "Member with survey" || byKind["scenario"][0].FBRC["survey.enabled"] != "true" {
 		t.Errorf("scenarios = %+v", byKind["scenario"])
 	}
-	if len(byKind["profile"]) != 1 || byKind["profile"][0].Ref != "gas-only" {
+	if len(byKind["profile"]) != 1 || byKind["profile"][0].Ref != "member" {
 		t.Errorf("profiles (shared must be hidden) = %+v", byKind["profile"])
 	}
-	if sc := byKind["scenario"][0]; sc.Customer != CustomerGas || len(sc.Tags) != 1 || sc.Tags[0] != "survey" {
-		t.Errorf("scenario customer/tags = %q %v, want Gas only [survey] (from Config_Survey_Enabled)", sc.Customer, sc.Tags)
+	if sc := byKind["scenario"][0]; sc.ProfileGroup != "Membership" || len(sc.Tags) != 1 || sc.Tags[0] != "feedback" {
+		t.Errorf("scenario group/tags = %q %v, want Membership [feedback]", sc.ProfileGroup, sc.Tags)
 	}
-	if byKind["profile"][0].Customer != CustomerGas || byKind["flow"][0].Customer != CustomerGas {
-		t.Errorf("customer groups: profile %q flow %q", byKind["profile"][0].Customer, byKind["flow"][0].Customer)
+	if byKind["profile"][0].ProfileGroup != "Membership" || byKind["flow"][0].ProfileGroup != "Membership" {
+		t.Errorf("profile groups: profile %q flow %q", byKind["profile"][0].ProfileGroup, byKind["flow"][0].ProfileGroup)
 	}
 	if len(byKind["flow"]) != 1 || byKind["flow"][0].Group != "survey" || byKind["flow"][0].Tags[0] != "regression" {
 		t.Errorf("flows = %+v", byKind["flow"])

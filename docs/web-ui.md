@@ -1,6 +1,6 @@
 # Browser UI
 
-`mockstro ui` serves a page on `http://127.0.0.1:18090` for choosing a scenario, customer or flow
+`mockstro ui` serves a page on `http://127.0.0.1:18090` for choosing a scenario, profile or flow
 and starting the mock on port 18080, without remembering command names. It does what the TUI's
 Mock tab does, for people who do not use a terminal.
 
@@ -36,20 +36,20 @@ system's light or dark setting.
   opens the **Version** dialog: the branch, its latest commit and whether it is up to date, with
   **Check for updates**, **Update to latest** and a branch list to **Switch** to. The page fetches
   once when a project opens; pulling and switching are always the tester's click.
-- **Mocks:** everything that can be started, in one list grouped by the customer it is for:
-  **Elec only**, **Gas only** and **Dual fuel**, plus **Other** for anything that fits none. Each
+- **Mocks:** everything that can be started, in one list grouped by profile. Each
   group folds, and starts open only when it holds the running mock. Inside a group are the
-  scenarios, then the bare customer profiles, then a folded **Automated tests** section holding the
-  Maestro flows, split by feature folder. **Feature chips** (`survey`, `ces`, `usage`…) filter
+  scenarios, then the bare profiles, then a folded **Automated tests** section holding the
+  Maestro flows, split by feature folder. **Tag chips** filter
   across every group, and search does too; filtering opens the groups that match. Starting an item
   serves it on port 18080 and opens the Session; choosing another while one is running switches
   without a restart. Which folds you left open is remembered in the browser.
-  - The group comes from the customer profile's name: `dual…` is Dual fuel, `gas…` is Gas only and
-    `elec…` is Elec only. A scenario or flow takes its profile's group.
-  - Chips come from the `tags` in scenario and flow headers. A scenario also gets a feature from its
-    Remote Config keys (`Config_<Feature>_…`) when a tag of that name exists somewhere in the
-    project. `regression` and `smoke` mark test suites, and `electricity-only`, `gas-only` and `dual-fuel` name
-    customer types, which the groups already show, so none of those appear as chips.
+  - Groups use profile names by default; items without a profile appear under **Other**.
+    Set `catalog.profileGroups` in the shared config to label or combine profiles and
+    `catalog.groupOrder` to order labels. Unmapped profiles and new groups remain visible.
+  - Chips use all explicit scenario and flow header `tags`, including suite tags such as
+    `regression` and `smoke`. Optional `catalog.featureTags` maps exact Remote Config keys
+    to additional tags when an item sets those keys. No key or profile naming convention
+    is required. See [catalog metadata](configuration.md#web-catalog-metadata) for an example.
 - **Session:** the running mock, with tabs for **Requests**, **Custom responses**, **Remote
   Config** and **Activity**, and a side panel with its details and the saved responses.
   - A request with no stub is red. Clicking a request shows what the app sent and the response it

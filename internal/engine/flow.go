@@ -9,17 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/maestro"
 	"github.com/feernandooff/mockstro/internal/ojson"
 	"github.com/feernandooff/mockstro/internal/platform"
 	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/remoteconfig"
 	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
@@ -69,10 +69,22 @@ func (r *Run) override(fbrc map[string]string) platform.Override {
 
 // Activate loads a scenario into this run's WireMock and points the device at it.
 func (r *Run) Activate(ctx context.Context, profile string, fbrc map[string]string, overrides []string) error {
+	_, err := r.activate(ctx, profile, fbrc, overrides)
+	return err
+}
+
+// activate reports whether a switch invalidated the previous mappings, even if
+// delivering the device override or a later readiness check fails.
+func (r *Run) activate(ctx context.Context, profile string, fbrc map[string]string, overrides []string) (reset bool, err error) {
+	clean, err := remoteconfig.Validate(fbrc)
+	if err != nil {
+		return reset, err
+	}
+	fbrc = clean
 	e := r.e
 	mappings, err := e.BuildMappings(profile, overrides)
 	if err != nil {
-		return err
+		return reset, err
 	}
 	var httpMappings, messageMappings []any
 	for _, mapping := range mappings {
@@ -84,44 +96,45 @@ func (r *Run) Activate(ctx context.Context, profile string, fbrc map[string]stri
 	}
 	websocket := len(messageMappings) > 0 || e.P.WebSocketPath != ""
 	if websocket && !r.WM.MessageSupport {
-		return fmt.Errorf("WebSocket fixtures require wiremockVersion: %s", wiremock.WebSocketVersion)
+		return reset, fmt.Errorf("WebSocket fixtures require wiremockVersion: %s", wiremock.WebSocketVersion)
 	}
 	if websocket || r.websocketActive {
 		if r.Device != "" {
 			if err := e.Plat.StopApp(ctx, r.Device); err != nil {
-				return fmt.Errorf("stop app before WebSocket scenario: %w", err)
+				return reset, fmt.Errorf("stop app before WebSocket scenario: %w", err)
 			}
 		}
 		if r.websocketActive {
+			reset = true
 			r.WM.Stop()
 			r.WM = nil
 			if err := r.startWiremock(ctx); err != nil {
-				return err
+				return reset, err
 			}
 		}
 	}
 	mappings = httpMappings
-	if !r.overrideAuto {
-		mappings = append(mappings, wiremock.FBRCMappings(fbrc)...)
-	}
+	delivery := r.RemoteConfigDelivery()
+	mappings = append(mappings, delivery.Mappings(fbrc)...)
 	mappings = append(mappings, wiremock.FallbackMapping(e.P.FallbackURL), wiremock.NonceMapping(r.ID))
-	if err := r.WM.Replace(mappings, messageMappings); err != nil {
-		return err
+	replaced, err := r.WM.Replace(mappings, messageMappings)
+	reset = reset || replaced
+	if err != nil {
+		return reset, err
 	}
 	r.websocketActive = websocket
 	// Remote Config rides in the device override; only Map Remote setups serve it over HTTP.
-	if r.Device != "" && r.overrideAuto {
-		if err := e.Plat.WriteOverride(ctx, r.Device, r.override(fbrc)); err != nil {
-			return err
+	if delivery.UsesDeviceOverride() {
+		if err := delivery.Deliver(ctx, fbrc); err != nil {
+			return reset, err
 		}
-		r.overrideApplied = true
 	}
 
 	if !r.preflightDone && r.Device != "" {
 		if r.overrideAuto {
 			msg, err := e.Plat.PreflightOverride(ctx, r.Device, r.override(fbrc))
 			if err != nil {
-				return err
+				return reset, err
 			}
 			r.logf("%s", msg)
 		} else {
@@ -129,7 +142,7 @@ func (r *Run) Activate(ctx context.Context, profile string, fbrc map[string]stri
 		}
 		r.preflightDone = true
 	}
-	return nil
+	return reset, nil
 }
 
 func (e *Engine) ManualProxyInstructions(port int, device string) string {
@@ -148,24 +161,6 @@ func (e *Engine) ManualProxyInstructions(port int, device string) string {
 	s += "  The app is NOT modified: no override is written and no adb reverse is installed.\n"
 	s += fmt.Sprintf("  FBRC overrides are served over HTTP, so they need the %s rule.\n", e.P.FBRCURL)
 	return s
-}
-
-func (r *Run) sanitize(f *fixtures.Flow) (string, error) {
-	out := filepath.Join(r.flowsRoot, "flows", filepath.FromSlash(f.Rel))
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-		return "", err
-	}
-	link := filepath.Join(r.flowsRoot, "shared")
-	if _, err := os.Lstat(link); err != nil {
-		if err := os.Symlink(r.e.P.SharedRoot(), link); err != nil {
-			return "", err
-		}
-	}
-	data, err := fixtures.SanitizedFlow(f.Path)
-	if err != nil {
-		return "", fmt.Errorf("sanitize %s: %w", f.Rel, err)
-	}
-	return out, os.WriteFile(out, data, 0o644)
 }
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -243,56 +238,32 @@ func (r *Run) RunFlow(ctx context.Context, f *fixtures.Flow) *Result {
 	if r.activateFlow(ctx, fr) != nil {
 		return r.finishFlow(fr, "SETUP", 1)
 	}
-	flowPath, err := r.sanitize(f)
-	if err != nil {
-		res.Message = err.Error()
-		return r.finishFlow(fr, "SETUP", 1)
-	}
-
-	// Maestro's own debug log would otherwise pile up in ~/.maestro/tests forever.
-	debugDir := filepath.Join(r.Dir, "maestro-debug", FlowSlug(f.Feature, f.File))
-	logFile, _ := os.Create(res.LogPath)
-	lw := &lineWriter{tee: logFile, emit: func(line string) {
-		e.emit(Event{Kind: EvOutput, Worker: r.Worker, RunID: r.ID, Flow: f.Rel, Text: line})
-	}}
-
-	var args []string
-	if r.Device != "" {
-		args = append(args, "--device", r.Device)
-	}
 	stage := "TEST"
-	values := e.flowVariables(f, r.Port)
-	var envArgs []string
-	for _, key := range slices.Sorted(maps.Keys(values)) {
-		envArgs = append(envArgs, "-e", key+"="+values[key])
-	}
+	recording := ""
 	if e.Opts.Record {
 		stage = "RECORD"
 		res.Recording = r.recordingPath(f)
-		_ = os.MkdirAll(filepath.Dir(res.Recording), 0o755)
-		target := res.Recording
+		_ = os.MkdirAll(filepath.Dir(res.Recording), 0755)
+		recording = res.Recording
 		if e.Opts.Optimize {
-			target = rawPath(res.Recording)
+			recording = rawPath(recording)
 		}
 		r.logf("Recording %s/%s [%s]", f.Feature, f.File, fr.profile)
-		args = append(args, "record", "--local", "--config", r.configPath, "--debug-output", debugDir)
-		args = append(args, envArgs...)
-		args = append(args, flowPath, target)
 	} else {
 		r.logf("Running %s/%s [%s]", f.Feature, f.File, fr.profile)
-		args = append(args, "test", "--config", r.configPath, "--debug-output", debugDir)
-		args = append(args, envArgs...)
-		args = append(args, flowPath)
 	}
-	before := r.resultDirs()
-	maestro, _ := e.maestroCommand()
-	runErr := e.Exec.Run(ctx, execx.Cmd{Name: maestro, Args: args, Stdout: lw, Stderr: lw})
-	res.Artifacts, res.Shots = r.newArtifacts(before)
-	lw.Flush()
-	if logFile != nil {
-		logFile.Close()
+	out := r.maestro().Run(ctx, maestro.Flow{Source: f, Variables: e.flowVariables(f, r.Port), LogPath: res.LogPath}, recording)
+	res.Artifacts, res.Shots = out.Artifacts.Dir, out.Artifacts.Shots
+	exit := out.Exit
+	if out.Setup {
+		res.Message = out.Err.Error()
+		return r.finishFlow(fr, "SETUP", exit)
 	}
-	exit := execx.ExitCode(runErr)
+	runErr := out.Err
+	if runErr != nil {
+		res.Message = runErr.Error()
+	}
+
 	if ctx.Err() != nil || exit == 130 || exit == 143 {
 		if exit <= 0 {
 			exit = 130
@@ -481,31 +452,6 @@ func (e *Engine) OptimizeRecordings(ctx context.Context, results []*Result) bool
 		ok = false
 	}
 	return ok
-}
-
-// resultDirs lists Maestro's per-flow output dirs (results/<timestamp>/<flow name>).
-func (r *Run) resultDirs() map[string]bool {
-	out := map[string]bool{}
-	matches, _ := filepath.Glob(filepath.Join(r.Dir, "results", "*", "*"))
-	for _, m := range matches {
-		if st, err := os.Stat(m); err == nil && st.IsDir() {
-			out[m] = true
-		}
-	}
-	return out
-}
-
-// newArtifacts finds the output dir this flow produced and its screenshots, in step order.
-func (r *Run) newArtifacts(before map[string]bool) (string, []string) {
-	for d := range r.resultDirs() {
-		if before[d] {
-			continue
-		}
-		shots, _ := filepath.Glob(filepath.Join(d, "screenshots", "*.png"))
-		sort.Strings(shots)
-		return d, shots
-	}
-	return "", nil
 }
 
 // FlowSlug names a flow's log, debug dir and recording: <feature>-<file without .yaml>.

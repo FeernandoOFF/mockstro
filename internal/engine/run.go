@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,10 +8,13 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/feernandooff/mockstro/internal/build"
+	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/lock"
 	"github.com/feernandooff/mockstro/internal/registry"
 	"github.com/feernandooff/mockstro/internal/wiremock"
@@ -21,13 +23,14 @@ import (
 // Run owns one device, one port and one WireMock for its lifetime. A single-device session is
 // one Run; a parallel session is several, one per worker.
 type Run struct {
-	e       *Engine
-	Worker  int
-	ID      string
-	Dir     string
-	Device  string
-	Port    int
-	Command string
+	cleanupOnce sync.Once
+	e           *Engine
+	Worker      int
+	ID          string
+	Dir         string
+	Device      string
+	Port        int
+	Command     string
 
 	locks           *lock.Manager
 	reg             *registry.Registry
@@ -44,8 +47,8 @@ type Run struct {
 	configPath      string
 	flowsRoot       string
 
-	apkPath, apkSHA string
-	out             io.Writer // worker log (parallel) or nil
+	artifact build.Artifact
+	out      io.Writer // worker log (parallel) or nil
 }
 
 func (e *Engine) newRun(command string, worker int) *Run {
@@ -55,8 +58,7 @@ func (e *Engine) newRun(command string, worker int) *Run {
 		locks:        e.newLocks(id),
 		reg:          e.registry(),
 		overrideAuto: !e.Opts.MapRemote && (command == "run" || e.Opts.Attach),
-		apkPath:      e.Opts.SessionAPK,
-		apkSHA:       e.Opts.SessionAPKSHA,
+		artifact:     e.Opts.SessionArtifact,
 	}
 }
 
@@ -203,38 +205,36 @@ func (r *Run) ensureApp(ctx context.Context) error {
 		r.logf("Using the build already on %s: %s versionName=%s versionCode=%s installed=%s",
 			r.Device, e.P.AppID, dash(apk.VersionName), dash(apk.VersionCode), dash(apk.InstalledAt))
 		r.warnf("WARNING: --skip-build; nothing was compiled, so these results describe that build.")
-		r.info.APK = apk
+		r.info.Artifact = apk
 		_ = r.reg.Save(r.info)
 		return e.Plat.AfterInstall(ctx, r.Device, r.overrideAuto)
 	}
-	if r.apkPath != "" {
-		if !e.Plat.ArtifactExists(r.apkPath) {
-			return fmt.Errorf("parent-built app is missing: %s", r.apkPath)
-		}
-		sum, _ := e.Plat.ArtifactSHA(r.apkPath)
-		if sum != r.apkSHA {
-			return fmt.Errorf("parent-built APK changed: expected %s, got %s", r.apkSHA, sum)
-		}
-	} else {
+	if r.artifact.Path == "" {
 		r.stage("BUILD", "")
-		path, sha, err := e.Plat.Build(ctx, r.Dir, e.outputWriter(r.Worker, r.ID))
+		artifact, err := build.Build(ctx, e.P, e.Exec, r.Dir, e.outputWriter(r.Worker, r.ID))
 		if err != nil {
 			return err
 		}
-		r.apkPath, r.apkSHA = path, sha
+		r.artifact = artifact
 	}
-	_ = os.WriteFile(filepath.Join(r.Dir, "apk.sha256"), []byte(r.apkSHA+"  "+r.apkPath+"\n"), 0o644)
-	r.info.APK = &registry.APK{Path: r.apkPath, SHA256: r.apkSHA}
+	if r.artifact.Platform != e.Opts.Platform || r.artifact.AppID != e.P.AppID {
+		return fmt.Errorf("session artifact targets %s/%s, expected %s/%s", r.artifact.Platform, r.artifact.AppID, e.Opts.Platform, e.P.AppID)
+	}
+	if err := r.artifact.Verify(); err != nil {
+		return err
+	}
+	_ = os.WriteFile(filepath.Join(r.Dir, "artifact.sha256"), []byte(r.artifact.SHA256+"  "+r.artifact.Path+"\n"), 0644)
+	r.info.Artifact = &registry.Artifact{Path: r.artifact.Path, SHA256: r.artifact.SHA256}
 	_ = r.reg.Save(r.info)
 	if err := e.Plat.EnsureBooted(ctx, r.Device, e.Opts.Headless, r.progress); err != nil {
 		return err
 	}
-	if sum, _ := e.Plat.ArtifactSHA(r.apkPath); sum != r.apkSHA {
-		return fmt.Errorf("session APK changed before installation")
+	if err := r.artifact.Verify(); err != nil {
+		return err
 	}
 	r.stage("INSTALL", "")
-	r.logf("Installing %s on %s (SHA-256 %s)...", filepath.Base(r.apkPath), r.Device, short(r.apkSHA))
-	if err := e.Plat.Install(ctx, r.Device, r.apkPath); err != nil {
+	r.logf("Installing %s on %s (SHA-256 %s)...", filepath.Base(r.artifact.Path), r.Device, short(r.artifact.SHA256))
+	if err := e.Plat.Install(ctx, r.Device, r.artifact.Path); err != nil {
 		return err
 	}
 	return e.Plat.AfterInstall(ctx, r.Device, r.overrideAuto)
@@ -263,7 +263,9 @@ func (r *Run) startWiremock(ctx context.Context) error {
 }
 
 // Cleanup only ever touches state this run owns.
-func (r *Run) Cleanup() {
+func (r *Run) Cleanup() { r.cleanupOnce.Do(r.cleanup) }
+
+func (r *Run) cleanup() {
 	e := r.e
 	ctx, cancel := cleanupCtx()
 	defer cancel()
@@ -296,8 +298,8 @@ func (r *Run) Cleanup() {
 	if r.runtimeDir != "" {
 		os.RemoveAll(r.runtimeDir)
 	}
-	// The APK snapshot is ~70MB per run; once installed, the recorded SHA-256 is the provenance.
-	if r.Dir != "" && r.apkPath != "" && strings.HasPrefix(r.apkPath, r.Dir+string(os.PathSeparator)) {
+	// Once installed, the recorded SHA-256 preserves provenance without keeping the snapshot.
+	if r.Dir != "" && r.artifact.Path != "" && strings.HasPrefix(r.artifact.Path, r.Dir+string(os.PathSeparator)) {
 		stripArtifacts(r.Dir)
 	}
 	r.reg.Remove(r.ID)
@@ -336,45 +338,7 @@ func (e *Engine) EnsureJar(ctx context.Context) (string, error) {
 
 // outputWriter turns a child process's output into EvOutput events, line by line.
 func (e *Engine) outputWriter(worker int, runID string) io.Writer {
-	return &lineWriter{emit: func(line string) {
+	return execx.NewLines(nil, func(line string) {
 		e.emit(Event{Kind: EvOutput, Worker: worker, RunID: runID, Text: line})
-	}}
-}
-
-type lineWriter struct {
-	emit func(string)
-	buf  []byte
-	tee  io.Writer
-}
-
-func (w *lineWriter) Write(p []byte) (int, error) {
-	if w.tee != nil {
-		_, _ = w.tee.Write(p)
-	}
-	w.buf = append(w.buf, p...)
-	for {
-		i := bytes.IndexByte(w.buf, '\n')
-		if i < 0 {
-			break
-		}
-		line := strings.TrimRight(string(w.buf[:i]), "\r")
-		w.buf = w.buf[i+1:]
-		w.emit(stripCR(line))
-	}
-	return len(p), nil
-}
-
-func (w *lineWriter) Flush() {
-	if len(w.buf) > 0 {
-		w.emit(stripCR(string(w.buf)))
-		w.buf = nil
-	}
-}
-
-// stripCR keeps the last carriage-return segment (progress bars redraw with \r).
-func stripCR(s string) string {
-	if i := strings.LastIndex(s, "\r"); i >= 0 {
-		return s[i+1:]
-	}
-	return s
+	})
 }

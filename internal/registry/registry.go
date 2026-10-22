@@ -15,7 +15,7 @@ import (
 	"github.com/feernandooff/mockstro/internal/lock"
 )
 
-type APK struct {
+type Artifact struct {
 	Path        string `json:"path,omitempty"`
 	SHA256      string `json:"sha256,omitempty"`
 	Source      string `json:"source,omitempty"`
@@ -25,23 +25,23 @@ type APK struct {
 }
 
 type Run struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	RunID         string `json:"runId"`
-	Owner         string `json:"owner"`
-	OwnerLabel    string `json:"ownerLabel"`
-	User          string `json:"user"`
-	PID           int    `json:"pid"`
-	PIDStartedAt  string `json:"pidStartedAt"`
-	Device        string `json:"device"`
-	Port          int    `json:"port"`
-	Platform      string `json:"platform"`
-	Command       string `json:"command"`
-	Tags          string `json:"tags"`
-	StartedAt     string `json:"startedAt"`
-	RunDir        string `json:"runDir"`
-	Worktree      string `json:"worktree,omitempty"`
-	Runner        string `json:"runner,omitempty"`
-	APK           *APK   `json:"apk,omitempty"`
+	SchemaVersion int       `json:"schemaVersion"`
+	RunID         string    `json:"runId"`
+	Owner         string    `json:"owner"`
+	OwnerLabel    string    `json:"ownerLabel"`
+	User          string    `json:"user"`
+	PID           int       `json:"pid"`
+	PIDStartedAt  string    `json:"pidStartedAt"`
+	Device        string    `json:"device"`
+	Port          int       `json:"port"`
+	Platform      string    `json:"platform"`
+	Command       string    `json:"command"`
+	Tags          string    `json:"tags"`
+	StartedAt     string    `json:"startedAt"`
+	RunDir        string    `json:"runDir"`
+	Worktree      string    `json:"worktree,omitempty"`
+	Runner        string    `json:"runner,omitempty"`
+	Artifact      *Artifact `json:"artifact,omitempty"`
 
 	// Filled when read back for status.
 	State string `json:"state,omitempty"`

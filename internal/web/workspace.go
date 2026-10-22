@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +11,10 @@ import (
 	"sync"
 
 	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/gitrepo"
 	"github.com/feernandooff/mockstro/internal/project"
+	"github.com/feernandooff/mockstro/internal/workspacecoord"
 )
 
 const maxRecents = 8
@@ -71,16 +75,18 @@ func (r *recents) add(dir string) {
 // Workspace holds the project the UI is working on and the mock manager for it. It starts empty
 // when the UI is launched away from any project, and switches only while no mock is running.
 type Workspace struct {
-	mu      sync.RWMutex
-	load    Loader
-	recents *recents
-	p       *project.Project
-	mgr     *Manager
+	operations workspacecoord.Coordinator
+	runner     execx.Runner
+	mu         sync.RWMutex
+	load       Loader
+	recents    *recents
+	p          *project.Project
+	mgr        *Manager
 }
 
 // NewWorkspace makes an empty workspace. recentsFile may be "" to keep no history.
-func NewWorkspace(load Loader, recentsFile string) *Workspace {
-	return &Workspace{load: load, recents: &recents{path: recentsFile}}
+func NewWorkspace(load Loader, recentsFile string, runner execx.Runner) *Workspace {
+	return &Workspace{load: load, recents: &recents{path: recentsFile}, runner: runner}
 }
 
 // DefaultRecentsFile is where the UI remembers recent projects for this user.
@@ -96,17 +102,26 @@ func DefaultRecentsFile() string {
 }
 
 // Use installs an already-loaded project, such as the one found from the working directory.
-func (w *Workspace) Use(p *project.Project, o engine.Options) {
+func (w *Workspace) Use(p *project.Project, o engine.Options) error {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return err
+	}
+	defer release()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.mgr != nil && !w.mgr.Idle() {
+		return errWorkspaceRunning
+	}
 	w.install(p, o)
+	return nil
 }
 
 func (w *Workspace) install(p *project.Project, o engine.Options) {
 	if w.mgr != nil {
 		w.mgr.Shutdown()
 	}
-	w.p, w.mgr = p, NewManager(p, o)
+	w.p, w.mgr = p, NewManager(p, o, w.runner)
 	w.recents.add(p.Root)
 }
 
@@ -120,6 +135,17 @@ func (w *Workspace) Current() (*project.Project, *Manager) {
 // Open switches to the project containing dir. It refuses while a mock is running, so a tester
 // cannot lose a session by clicking Change.
 func (w *Workspace) Open(dir string) error {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return err
+	}
+	defer release()
+	// Reserve before loading: the loader reads files a Git mutation could change.
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.mgr != nil && !w.mgr.Idle() {
+		return errWorkspaceRunning
+	}
 	if w.load == nil {
 		return errors.New("opening projects is not available")
 	}
@@ -129,11 +155,6 @@ func (w *Workspace) Open(dir string) error {
 			return fmt.Errorf("%s has no .maestro folder. Choose the project folder that contains one", dir)
 		}
 		return err
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.mgr != nil && !w.mgr.Idle() {
-		return errors.New("stop the running mock before changing project")
 	}
 	w.install(p, o)
 	return nil
@@ -164,9 +185,121 @@ func (w *Workspace) LastRecent() (string, bool) {
 
 // Shutdown stops any mock the workspace started.
 func (w *Workspace) Shutdown() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.mgr != nil {
-		w.mgr.Shutdown()
+	w.operations.Shutdown(func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if w.mgr != nil {
+			w.mgr.Shutdown()
+		}
+	})
+}
+
+var errWorkspaceRunning = errors.New("stop the running mock before changing project or changing the project's files")
+
+// Serve admits startup or switching atomically with Open and checkout mutations.
+// Manager.Serve must set busy before returning, and Shutdown must wait for async
+// startup/stop completion; see workspacecoord.Coordinator's lifecycle contract.
+func (w *Workspace) Serve(ref string) error {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return err
 	}
+	defer release()
+	_, m := w.Current()
+	if m == nil {
+		return errNoProject
+	}
+	return m.Serve(ref)
+}
+
+func (w *Workspace) Stop() error {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, m := w.Current()
+	if m == nil {
+		return nil
+	}
+	return m.Stop()
+}
+
+// repository is called only under an operation reservation, so the project and
+// its manager cannot change before the caller finishes using the checkout.
+func (w *Workspace) repository(requireIdle bool) (*gitrepo.Repository, error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.p == nil {
+		return nil, errNoProject
+	}
+	if requireIdle && !w.mgr.Idle() {
+		return nil, errWorkspaceRunning
+	}
+	return gitrepo.New(w.p.Root, w.runner), nil
+}
+
+func (w *Workspace) GitStatus(ctx context.Context) (gitrepo.Status, error) {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return gitrepo.Status{}, err
+	}
+	defer release()
+	repo, err := w.repository(false)
+	if err != nil {
+		return gitrepo.Status{}, err
+	}
+	return repo.Status(ctx)
+}
+
+func (w *Workspace) Branches(ctx context.Context) ([]gitrepo.Branch, error) {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	repo, err := w.repository(false)
+	if err != nil {
+		return nil, err
+	}
+	return repo.Branches(ctx)
+}
+
+func (w *Workspace) Fetch(ctx context.Context) (gitrepo.Status, error) {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return gitrepo.Status{}, err
+	}
+	defer release()
+	repo, err := w.repository(false)
+	if err != nil {
+		return gitrepo.Status{}, err
+	}
+	return repo.Fetch(ctx)
+}
+
+func (w *Workspace) Pull(ctx context.Context) (string, gitrepo.Status, error) {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return "", gitrepo.Status{}, err
+	}
+	defer release()
+	repo, err := w.repository(true)
+	if err != nil {
+		return "", gitrepo.Status{}, err
+	}
+	return repo.Pull(ctx)
+}
+
+func (w *Workspace) SwitchBranch(ctx context.Context, name string) (gitrepo.Status, error) {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return gitrepo.Status{}, err
+	}
+	defer release()
+	repo, err := w.repository(true)
+	if err != nil {
+		return gitrepo.Status{}, err
+	}
+	return repo.SwitchBranch(ctx, name)
 }

@@ -75,16 +75,99 @@ func ReadVariables(path string) (Variables, error) {
 	return v, nil
 }
 
+type BuildSystem string
+
+const (
+	BuildGradle  BuildSystem = "gradle"
+	BuildXcode   BuildSystem = "xcode"
+	BuildKotlin  BuildSystem = "kotlin-toolchain"
+	BuildCommand BuildSystem = "command"
+)
+
+// BuildConfig describes how to produce an installable artifact, independently of devices.
 type BuildConfig struct {
-	System        string `yaml:"system,omitempty"`
-	Module        string `yaml:"module,omitempty"`
-	Variant       string `yaml:"variant,omitempty"`
-	Task          string `yaml:"task,omitempty"`
-	Artifact      string `yaml:"artifact,omitempty"`
-	Project       string `yaml:"project,omitempty"` // .xcodeproj or .xcworkspace relative to target checkout
-	Scheme        string `yaml:"scheme,omitempty"`
-	Configuration string `yaml:"configuration,omitempty"`
+	System        BuildSystem `yaml:"system,omitempty"`
+	Command       []string    `yaml:"command,omitempty"` // argv; never interpreted by a shell
+	Module        string      `yaml:"module,omitempty"`
+	Variant       string      `yaml:"variant,omitempty"`
+	Task          string      `yaml:"task,omitempty"`
+	Artifact      string      `yaml:"artifact,omitempty"`
+	Project       string      `yaml:"project,omitempty"` // .xcodeproj or .xcworkspace relative to target checkout
+	Scheme        string      `yaml:"scheme,omitempty"`
+	Configuration string      `yaml:"configuration,omitempty"`
 }
+
+// Resolve applies platform defaults and validates a build configuration. Xcode's
+// project and scheme are checked when building, so install-only configurations load.
+func (b BuildConfig) Resolve(platform string) (BuildConfig, error) {
+	if platform != "android" && platform != "ios" {
+		return b, fmt.Errorf("unknown platform %q", platform)
+	}
+	if b.System == "" {
+		switch {
+		case b.Command != nil:
+			b.System = BuildCommand
+		case platform == "ios":
+			b.System = BuildXcode
+		default:
+			b.System = BuildGradle
+		}
+	}
+	if b.Command != nil && b.System != BuildCommand {
+		return b, fmt.Errorf("build.command requires build.system: command (or omit system)")
+	}
+	switch b.System {
+	case BuildCommand:
+		if len(b.Command) == 0 || strings.TrimSpace(b.Command[0]) == "" {
+			return b, fmt.Errorf("build.command must be a non-empty argv list")
+		}
+		for _, arg := range b.Command {
+			if strings.ContainsRune(arg, 0) {
+				return b, fmt.Errorf("build.command arguments cannot contain NUL")
+			}
+		}
+		if b.Artifact == "" {
+			return b, fmt.Errorf("build.command requires build.artifact")
+		}
+	case BuildGradle:
+		if platform != "android" {
+			return b, fmt.Errorf("build.system: gradle requires android")
+		}
+		if b.Task == "" {
+			b.Task = "assembleDebug"
+		}
+		if b.Artifact == "" {
+			b.Artifact = "app/build/outputs/apk/debug/*.apk"
+		}
+	case BuildXcode:
+		if platform != "ios" {
+			return b, fmt.Errorf("build.system: xcode requires ios")
+		}
+		if b.Configuration == "" {
+			b.Configuration = "Debug"
+		}
+	case BuildKotlin:
+		if b.Module == "" {
+			b.Module = platform
+		}
+		if b.Variant == "" {
+			b.Variant = "debug"
+		}
+		if b.Variant != "debug" && b.Variant != "release" {
+			return b, fmt.Errorf("build.variant must be debug or release")
+		}
+	default:
+		return b, fmt.Errorf("build.system must be gradle, xcode, kotlin-toolchain or command (got %q)", b.System)
+	}
+	if b.Artifact != "" {
+		if _, err := filepath.Glob(b.Artifact); err != nil {
+			return b, fmt.Errorf("build.artifact: %w", err)
+		}
+	}
+	b.Command = append([]string(nil), b.Command...)
+	return b, nil
+}
+
 type TargetConfig struct {
 	WireMockVersion string      `yaml:"wiremockVersion,omitempty"`
 	WebSocketPath   string      `yaml:"websocketPath,omitempty"`
@@ -100,9 +183,18 @@ type TargetConfig struct {
 	OverrideKey     string      `yaml:"overrideKey,omitempty"`
 	AcceptKey       string      `yaml:"acceptKey,omitempty"`
 }
+
+// CatalogConfig supplies optional, suite-wide presentation metadata for the web catalog.
+type CatalogConfig struct {
+	ProfileGroups map[string]string `yaml:"profileGroups,omitempty"` // exact profile name -> group label
+	GroupOrder    []string          `yaml:"groupOrder,omitempty"`    // group labels, followed by remaining groups
+	FeatureTags   map[string]string `yaml:"featureTags,omitempty"`   // exact Remote Config key -> tag
+}
+
 type Config struct {
 	CLIVersion string                  `yaml:"cliVersion,omitempty"`
 	Env        Variables               `yaml:"env,omitempty"`
+	Catalog    CatalogConfig           `yaml:"catalog,omitempty"`
 	Platforms  map[string]TargetConfig `yaml:"platforms"`
 }
 
@@ -258,6 +350,15 @@ func Load(root string) (*Project, error) {
 			// Build overrides patch individual fields, retaining shared defaults.
 			if l.Build.System != "" {
 				t.Build.System = l.Build.System
+				if l.Build.System != BuildCommand {
+					t.Build.Command = nil
+				}
+			}
+			if l.Build.Command != nil {
+				t.Build.Command = l.Build.Command
+				if l.Build.System == "" {
+					t.Build.System = BuildCommand
+				}
 			}
 			if l.Build.Module != "" {
 				t.Build.Module = l.Build.Module
@@ -294,9 +395,8 @@ func Load(root string) (*Project, error) {
 		}
 		maps.Copy(loc, l.Env)
 		p := &Project{Root: root, MaestroRoot: maestro, BuildRoot: filepath.Clean(buildRoot), Platform: name, AppID: t.AppID, Integration: t.Integration,
-			BuildSystem: t.Build.System, KotlinVariant: t.Build.Variant, WireMockVersion: t.WireMockVersion, WebSocketPath: t.WebSocketPath,
+			Build: t.Build, Catalog: cfg.Catalog, WireMockVersion: t.WireMockVersion, WebSocketPath: t.WebSocketPath,
 			Variables: maps.Clone(cfg.Env), TargetVariables: maps.Clone(t.Env), LocalVariables: loc, Devices: append([]string(nil), t.Devices...),
-			GradleTask: t.Build.Task, APKGlob: t.Build.Artifact, IOSProject: t.Build.Project, IOSScheme: t.Build.Scheme, IOSConfig: t.Build.Configuration,
 			ProxyBaseURL: t.ProxyBaseURL, FallbackURL: t.FallbackURL, FBRCURL: t.FBRCURL, OverrideKey: t.OverrideKey, AcceptKey: t.AcceptKey, Env: map[string]string{}}
 		// SDK discovery still uses the machine's actual environment, not test variables.
 		for _, key := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
@@ -304,24 +404,9 @@ func Load(root string) (*Project, error) {
 		}
 		p.Env["MAESTRO_AGENT_AVDS"] = strings.Join(t.Devices, ",")
 		p.IOSSimNames = append([]string(nil), t.Devices...)
-		if p.BuildSystem == "" {
-			p.BuildSystem = "native"
-		}
-		if p.BuildSystem != "native" && p.BuildSystem != "kotlin-toolchain" {
-			return nil, fmt.Errorf("platform %s: build.system must be native or kotlin-toolchain", name)
-		}
-		if p.BuildSystem == "kotlin-toolchain" {
-			module := t.Build.Module
-			if module == "" {
-				module = name
-			}
-			p.KotlinAndroidModule, p.KotlinIOSModule = module, module
-			if p.KotlinVariant == "" {
-				p.KotlinVariant = "debug"
-			}
-			if p.KotlinVariant != "debug" && p.KotlinVariant != "release" {
-				return nil, fmt.Errorf("platform %s: build.variant must be debug or release", name)
-			}
+		p.Build, err = p.Build.Resolve(name)
+		if err != nil {
+			return nil, fmt.Errorf("platform %s: %w", name, err)
 		}
 		if p.WireMockVersion == "" {
 			p.WireMockVersion = "3.13.2"
@@ -336,18 +421,6 @@ func Load(root string) (*Project, error) {
 			if p.WireMockVersion != "4.0.0-beta.40" {
 				return nil, fmt.Errorf("websocketPath requires wiremockVersion=4.0.0-beta.40")
 			}
-		}
-		if name == "ios" {
-			p.IOSAppGlob = t.Build.Artifact
-		}
-		if p.BuildSystem == "native" && p.GradleTask == "" {
-			p.GradleTask = "assembleDebug"
-		}
-		if p.BuildSystem == "native" && p.APKGlob == "" {
-			p.APKGlob = "app/build/outputs/apk/debug/*.apk"
-		}
-		if p.IOSConfig == "" {
-			p.IOSConfig = "Debug"
 		}
 		if p.FBRCURL == "" {
 			p.FBRCURL = DefaultFBRCURL

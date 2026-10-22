@@ -13,8 +13,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/feernandooff/mockstro/internal/engine"
-	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/mockapp"
+	"github.com/feernandooff/mockstro/internal/mockruntime"
 	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
@@ -24,13 +25,12 @@ type (
 		err  error
 	}
 	mockStartedMsg struct {
-		m   *engine.MockSession
-		e   *engine.Engine
+		m   *mockruntime.Session
 		err error
 	}
 	mockStoppedMsg  struct{}
 	mockSwitchedMsg struct {
-		target *engine.MockTarget
+		target *mockruntime.Target
 		err    error
 	}
 )
@@ -56,8 +56,8 @@ type mockModel struct {
 	open         map[string]bool // folder key → expanded
 	cursor       int
 	attachDevice string // empty = server-only; retain the serial across status refreshes
-	session      *engine.MockSession
-	eng          *engine.Engine
+	session      *mockruntime.Session
+	life         *mockapp.Lifecycle
 	starting     bool
 	busy         bool // stopping or switching
 	startErr     error
@@ -160,14 +160,22 @@ func (m *mockModel) startOptions(device string) engine.Options {
 }
 
 func (m *mockModel) stopSync() {
-	if m.session != nil {
-		m.session.Stop()
-		m.session = nil
-		m.eng = nil
+	if m.life != nil {
+		m.life.Shutdown()
 	}
+	m.session = nil
 }
 
 func (m *mockModel) onTick() tea.Cmd {
+	if m.life != nil && m.session != nil {
+		v := m.life.View()
+		if v.Session == nil && !v.Busy {
+			m.session = nil
+			if v.Error != "" {
+				m.startErr = fmt.Errorf("%s", v.Error)
+			}
+		}
+	}
 	if m.session == nil || m.polling {
 		return nil
 	}
@@ -202,8 +210,8 @@ func (m *mockModel) update(msg tea.Msg) tea.Cmd {
 			m.a.log("error", "mock: %v", x.err)
 			return nil
 		}
-		m.session, m.eng = x.m, x.e
-		m.a.log("info", "mock serving %s %s on :%d", x.m.Target().Kind, x.m.Target().Name, x.m.Run.Port)
+		m.session = x.m
+		m.a.log("info", "mock serving %s %s on :%d", x.m.Target().Kind, x.m.Target().Name, x.m.Snapshot().Port)
 		return m.a.refreshStatus()
 	}
 	return nil
@@ -286,9 +294,13 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 		}
 	case "x":
 		if m.session != nil && !m.busy {
-			sess := m.session
-			m.session, m.eng, m.journal, m.busy = nil, nil, nil, true
-			return func() tea.Msg { sess.Stop(); return mockStoppedMsg{} }
+			life := m.life
+			if err := life.Stop(); err != nil {
+				m.startErr = err
+				return nil
+			}
+			m.session, m.journal, m.busy = nil, nil, true
+			return func() tea.Msg { life.Wait(); return mockStoppedMsg{} }
 		}
 	case "right", "left", " ":
 		if m.cursor < len(m.visible) && m.visible[m.cursor].folder != "" {
@@ -316,17 +328,25 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 			if m.busy {
 				return nil
 			}
-			// Same server, new fixtures; off the UI loop because activation emits events.
-			sess, eng := m.session, m.eng
+			life := m.life
+			if err := life.Serve(arg); err != nil {
+				m.startErr = err
+				return nil
+			}
 			m.busy = true
 			return func() tea.Msg {
-				target, err := eng.ResolveMockTarget([]string{arg})
-				if err == nil {
-					err = sess.Switch(context.Background(), target)
+				life.Wait()
+				v := life.View()
+				if v.Error != "" {
+					return mockSwitchedMsg{err: fmt.Errorf("%s", v.Error)}
 				}
-				return mockSwitchedMsg{target, err}
+				if v.Session == nil {
+					return mockSwitchedMsg{err: mockapp.ErrNotServing}
+				}
+				return mockSwitchedMsg{target: v.Session.Target()}
 			}
 		}
+
 		device := m.attachDevice
 		if device != "" && !slices.Contains(m.devices(), device) {
 			m.startErr = fmt.Errorf("device %q is unavailable; press a to select a target", device)
@@ -339,27 +359,38 @@ func (m *mockModel) key(k tea.KeyMsg) tea.Cmd {
 			target = a.deviceQuery(device).P
 		}
 		o := m.startOptions(device)
-		return func() tea.Msg {
+		life := mockapp.New(func(ctx context.Context) (mockapp.Backend, error) {
 			if err := o.Validate("mock"); err != nil {
-				return mockStartedMsg{err: err}
+				return nil, err
 			}
-			e := engine.New(target, o, execx.Real{}, func(ev engine.Event) {
+			e := engine.New(target, o, a.query.Exec, func(ev engine.Event) {
 				if ev.Kind == engine.EvLog {
 					a.prog.Send(activityMsg{ev.Level, ev.Text})
 				}
 			})
 			if err := e.CheckEnvironment("mock"); err != nil {
-				return mockStartedMsg{err: err}
+				return nil, err
 			}
-			target, err := e.ResolveMockTarget([]string{arg})
-			if err != nil {
-				return mockStartedMsg{err: err}
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-			ms, err := e.StartMock(ctx, target)
-			return mockStartedMsg{m: ms, e: e, err: err}
+			return e, nil
+		})
+		m.life = life
+		if err := life.Serve(arg); err != nil {
+			m.starting = false
+			m.startErr = err
+			return nil
 		}
+		return func() tea.Msg {
+			life.Wait()
+			v := life.View()
+			if v.Error != "" {
+				return mockStartedMsg{err: fmt.Errorf("%s", v.Error)}
+			}
+			if v.Session == nil {
+				return mockStartedMsg{err: mockapp.ErrClosed}
+			}
+			return mockStartedMsg{m: v.Session}
+		}
+
 	}
 	return nil
 }
@@ -439,7 +470,7 @@ func (m *mockModel) view(w, h int) (string, string) {
 				unmatched++
 			}
 		}
-		fmt.Fprintf(&jb, "%s %s · profile %s · %d overrides · :%d · %s\n", sOK.Render("● serving"), sBold.Render(t.Name), t.Profile, len(t.Overrides), m.session.Run.Port, deviceLabel(m.session.Run.Device))
+		fmt.Fprintf(&jb, "%s %s · profile %s · %d overrides · :%d · %s\n", sOK.Render("● serving"), sBold.Render(t.Name), t.Profile, len(t.Overrides), m.session.Snapshot().Port, deviceLabel(m.session.Snapshot().Device))
 		showing, toggle := "all traffic", "m unmatched only"
 		if m.onlyMiss {
 			showing, toggle = "unmatched only", "m all traffic"

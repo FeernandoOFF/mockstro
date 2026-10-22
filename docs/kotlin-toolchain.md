@@ -51,10 +51,25 @@ outputs fail instead of choosing a stale or unintended build.
 
 Android APKs are copied and hashed. iOS simulator bundles are checked for their application
 ID, platform and actual `CFBundleExecutable`, copied in full with framework symlinks and file
-modes preserved, and hashed with resources included. Binary Info.plist files are read via
+modes preserved, and hashed with resources included. Bundle symlinks must be relative
+and resolve within the bundle so the snapshot has no external mutable dependencies. Binary Info.plist files are read via
 macOS `plutil`. Hash/read errors fail the build instead of returning an unverified artifact.
 
-`build.system: native` is the default: Gradle on Android and Xcode on
-iOS. A lite project still uses the app already installed and does not build.
+When `build.system` is omitted, the defaults are `gradle` on Android and `xcode` on
+iOS. A lite project uses the app already installed and does not build.
+
+For a different toolchain layout or a project-owned task, use the generic command builder:
+
+```yaml
+build:
+  command: [mise, run, build-ios]
+  artifact: out/ios/*.app
+```
+
+`command` is an argv list executed in the source checkout, with no implicit shell.
+`system: command` may be specified explicitly. A command must include an artifact glob.
+A failed Kotlin, Gradle or Xcode build returns its error; Mockstro never silently retries
+through a custom command. See [configuration](configuration.md#builds) for Make and other
+command examples.
 
 For WebSockets, also configure the pinned beta and endpoint described in [websockets.md](websockets.md).

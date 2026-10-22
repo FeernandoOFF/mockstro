@@ -3,6 +3,7 @@ package project
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,48 @@ func writeConfig(t *testing.T, root, name, text string) {
 	}
 	if err := os.WriteFile(path, []byte(text), 0644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCatalogMetadataLoadsOnSuiteAndEveryTarget(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, "mockstro.yaml", `catalog:
+  profileGroups:
+    member: Members
+    staff: Team
+    admin: Team
+  groupOrder: [Team, Members]
+  featureTags:
+    feedback.enabled: feedback
+    arbitrary-key: Account settings
+platforms:
+  android:
+    appId: com.example.android
+`)
+	// Locally added targets still use the suite's catalog metadata.
+	writeConfig(t, root, "mockstro.local.yaml", `platforms:
+  ios:
+    appId: com.example.ios
+`)
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := CatalogConfig{
+		ProfileGroups: map[string]string{"member": "Members", "staff": "Team", "admin": "Team"},
+		GroupOrder:    []string{"Team", "Members"},
+		FeatureTags:   map[string]string{"feedback.enabled": "feedback", "arbitrary-key": "Account settings"},
+	}
+	if len(p.Warnings) != 0 || !reflect.DeepEqual(p.Catalog, want) {
+		t.Fatalf("suite catalog = %+v, warnings = %v", p.Catalog, p.Warnings)
+	}
+	for name, target := range p.Targets {
+		if !reflect.DeepEqual(target.Catalog, want) {
+			t.Errorf("%s catalog = %+v, want %+v", name, target.Catalog, want)
+		}
+	}
+	if len(p.Targets) != 2 {
+		t.Fatalf("targets = %v", p.Targets)
 	}
 }
 
@@ -69,7 +112,7 @@ platforms:
 	if a.SourceRoot() != filepath.Clean(filepath.Join(root, "../my-android")) || a.Root != root || a.FlowsRoot() != filepath.Join(root, ".maestro/flows") {
 		t.Fatal("source and suite roots were conflated", a)
 	}
-	if a.GradleTask != "assembleLocal" || a.APKGlob != "app/build/e2e/*.apk" || a.Env["MAESTRO_AGENT_AVDS"] != "My_AVD" {
+	if a.Build.Task != "assembleLocal" || a.Build.Artifact != "app/build/e2e/*.apk" || a.Env["MAESTRO_AGENT_AVDS"] != "My_AVD" {
 		t.Fatal("local build or device override lost", a)
 	}
 	if a.Variables["USER"] != "shared" || a.TargetVariables["USER"] != "android" || a.LocalVariables["USER"] != "local" || a.LocalVariables["COUNT"] != "3" {
@@ -200,7 +243,7 @@ platforms:
 			if a.AppID != "example.local" || a.Lite() || a.SourceRoot() != filepath.Clean(filepath.Join(root, "../other-app")) || a.FlowsRoot() != p.FlowsRoot() || len(a.Devices) != 1 || a.Devices[0] != "Local_device" {
 				t.Fatal("local platform configuration lost", a)
 			}
-			if a.IOSProject != "App.xcodeproj" || a.IOSScheme != "App" || a.GradleTask != "assembleLocal" || a.APKGlob != "local/build/*" || a.ProxyBaseURL != "https://api.example.test" || a.FallbackURL != "https://fallback.example.test" || a.FBRCURL != "https://config.example.test" || a.OverrideKey != "local_override" || a.AcceptKey != "local_accept" || a.WireMockVersion != "4.0.0-beta.40" || a.WebSocketPath != "/ws" {
+			if a.Build.Project != "App.xcodeproj" || a.Build.Scheme != "App" || a.Build.Task != "assembleLocal" || a.Build.Artifact != "local/build/*" || a.ProxyBaseURL != "https://api.example.test" || a.FallbackURL != "https://fallback.example.test" || a.FBRCURL != "https://config.example.test" || a.OverrideKey != "local_override" || a.AcceptKey != "local_accept" || a.WireMockVersion != "4.0.0-beta.40" || a.WebSocketPath != "/ws" {
 				t.Fatal("full local platform settings were not loaded", a)
 			}
 			if a.Variables["USER"] != "shared" || a.LocalVariables["USER"] != "platform-local" || a.LocalVariables["KEEP"] != "root" || p.Targets[shared].LocalVariables["USER"] != "local" || p.Targets[shared].Devices[0] != "Shared_device_override" {
@@ -297,11 +340,11 @@ func TestKotlinAndWebSocketConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.GradleTask != "" || p.APKGlob != "" || p.KotlinVariant != "debug" || p.KotlinAndroidModule != "android" || p.WebSocketPath != "/ws" {
+	if p.Build.Task != "" || p.Build.Artifact != "" || p.Build.Variant != "debug" || p.Build.Module != "android" || p.WebSocketPath != "/ws" {
 		t.Fatalf("config: %+v", p)
 	}
 	ios := p.Targets["ios"]
-	if ios.KotlinIOSModule != "mobileIos" || ios.KotlinVariant != "release" || ios.IOSAppGlob != "custom/*.app" || ios.WireMockVersion != "3.13.2" {
+	if ios.Build.Module != "mobileIos" || ios.Build.Variant != "release" || ios.Build.Artifact != "custom/*.app" || ios.WireMockVersion != "3.13.2" {
 		t.Fatalf("iOS config: %+v", ios)
 	}
 	for _, bad := range []string{"build: {system: unknown}", "build: {system: kotlin-toolchain, variant: custom}", "wiremockVersion: arbitrary", "websocketPath: /ws", "wiremockVersion: 4.0.0-beta.40, websocketPath: 'ws://host/ws'"} {

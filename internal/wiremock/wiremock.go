@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -137,7 +136,7 @@ type Server struct {
 	Port           int
 	RunID          string
 	Log            string
-	cmd            *exec.Cmd
+	cmd            execx.Process
 	exit           chan struct{}
 	http           *http.Client
 }
@@ -156,7 +155,7 @@ func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, run
 	if err != nil {
 		return nil, err
 	}
-	cmd, err := execx.Start(execx.Cmd{
+	cmd, err := ex.Start(execx.Cmd{
 		Name:   "java",
 		Args:   append(javaArgs, "-jar", jar, "--port", strconv.Itoa(port), "--bind-address", "127.0.0.1", "--root-dir", root),
 		Stdout: logf, Stderr: logf,
@@ -180,19 +179,31 @@ func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, run
 			return nil, ctx.Err()
 		default:
 		}
-		if resp, err := s.http.Get(s.base() + "/__admin/mappings"); err == nil {
-			resp.Body.Close()
-			if err := s.post("/__admin/mappings", NonceMapping(runID)); err != nil {
+		if _, err := s.doContext(ctx, http.MethodGet, "/__admin/mappings", nil); err == nil {
+			if _, err := s.doContext(ctx, http.MethodPost, "/__admin/mappings", NonceMapping(runID)); err != nil {
 				s.Stop()
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 				return nil, fmt.Errorf("failed to install the run nonce on port %d: %w", port, err)
 			}
-			if err := s.AssertOwn(); err != nil {
+			if err := s.assertOwn(ctx); err != nil {
 				s.Stop()
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 				return nil, err
 			}
 			return s, nil
 		}
-		time.Sleep(150 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			s.Stop()
+			return nil, ctx.Err()
+		case <-s.exit:
+			return nil, fmt.Errorf("WireMock exited during startup; see %s", logPath)
+		case <-time.After(150 * time.Millisecond):
+		}
 	}
 	s.Stop()
 	return nil, fmt.Errorf("WireMock did not become ready on 127.0.0.1:%d; see %s", port, logPath)
@@ -215,19 +226,27 @@ func (s *Server) Stop() {
 		return
 	default:
 	}
-	_ = s.cmd.Process.Signal(os.Interrupt)
+	_ = s.cmd.Signal(os.Interrupt)
 	select {
 	case <-s.exit:
 	case <-time.After(5 * time.Second):
-		_ = s.cmd.Process.Kill()
+		_ = s.cmd.Kill()
 		<-s.exit
 	}
 }
 
 // AssertOwn refuses to touch a server that is not this run's (the nonce answers the run id).
 func (s *Server) AssertOwn() error {
+	return s.assertOwn(context.Background())
+}
+
+func (s *Server) assertOwn(ctx context.Context) error {
 	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get(s.base() + NoncePath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.base()+NoncePath, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.Do(req)
 	seen := ""
 	if err == nil {
 		b, _ := io.ReadAll(resp.Body)
@@ -244,6 +263,10 @@ func (s *Server) AssertOwn() error {
 }
 
 func (s *Server) do(method, path string, body any) ([]byte, error) {
+	return s.doContext(context.Background(), method, path, body)
+}
+
+func (s *Server) doContext(ctx context.Context, method, path string, body any) ([]byte, error) {
 	var rdr io.Reader
 	if body != nil {
 		var b []byte
@@ -259,7 +282,7 @@ func (s *Server) do(method, path string, body any) ([]byte, error) {
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, s.base()+path, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, s.base()+path, rdr)
 	if err != nil {
 		return nil, err
 	}
@@ -284,46 +307,48 @@ func (s *Server) post(path string, body any) error {
 }
 
 // Replace wipes every mapping and imports the given set (the nonce must be in it).
-func (s *Server) Replace(mappings []any, messageSets ...[]any) error {
+// reset reports whether the previous mappings were cleared, including on failure.
+func (s *Server) Replace(mappings []any, messageSets ...[]any) (reset bool, err error) {
 	var messages []any
 	for _, set := range messageSets {
 		messages = append(messages, set...)
 	}
 	if len(messages) > 0 && !s.MessageSupport {
-		return fmt.Errorf("message fixtures require WireMock %s", WebSocketVersion)
+		return reset, fmt.Errorf("message fixtures require WireMock %s", WebSocketVersion)
 	}
 	if err := s.AssertOwn(); err != nil {
-		return err
+		return reset, err
 	}
 	if _, err := s.do(http.MethodDelete, "/__admin/mappings", nil); err != nil {
-		return fmt.Errorf("failed to clear WireMock mappings: %w", err)
+		return reset, fmt.Errorf("failed to clear WireMock mappings: %w", err)
 	}
+	reset = true
 	if s.MessageSupport {
 		if _, err := s.do(http.MethodDelete, "/__admin/message-mappings", nil); err != nil {
-			return fmt.Errorf("clear message mappings: %w", err)
+			return reset, fmt.Errorf("clear message mappings: %w", err)
 		}
 		for _, mapping := range messages {
 			if err := s.post("/__admin/message-mappings", mapping); err != nil {
-				return fmt.Errorf("load message mapping: %w", err)
+				return reset, fmt.Errorf("load message mapping: %w", err)
 			}
 		}
 	}
 	payload := map[string]any{"mappings": mappings}
 	if err := s.post("/__admin/mappings/import", payload); err != nil {
-		return fmt.Errorf("failed to bulk import WireMock scenario: %w", err)
+		return reset, fmt.Errorf("failed to bulk import WireMock scenario: %w", err)
 	}
 	if err := s.AssertOwn(); err != nil {
-		return err
+		return reset, err
 	}
 	if _, err := s.do(http.MethodDelete, "/__admin/requests", nil); err != nil {
-		return fmt.Errorf("failed to reset WireMock request journal: %w", err)
+		return reset, fmt.Errorf("failed to reset WireMock request journal: %w", err)
 	}
 	if s.MessageSupport {
 		if _, err := s.do(http.MethodDelete, "/__admin/messages", nil); err != nil {
-			return fmt.Errorf("clear message journal: %w", err)
+			return reset, fmt.Errorf("clear message journal: %w", err)
 		}
 	}
-	return nil
+	return reset, nil
 }
 
 type LoggedRequest struct {

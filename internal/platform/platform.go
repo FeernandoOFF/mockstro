@@ -1,5 +1,5 @@
 // Package platform isolates what genuinely differs between Android and iOS: device discovery,
-// booting, build/install, and how the app is told which mock to talk to.
+// booting, installation, and how the app is told which mock to talk to.
 //
 //	Android  base64 JSON in Settings.Global (read before the HTTP clients exist) + `adb reverse`.
 //	iOS      e2e-config.json inside the installed bundle + simulator launchctl environment;
@@ -13,7 +13,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -62,11 +61,8 @@ type Platform interface {
 	Boot(ctx context.Context, name string, headless bool, progress func(string)) (string, error)
 	EnsureBooted(ctx context.Context, serial string, headless bool, progress func(string)) error
 
-	Build(ctx context.Context, artifactDir string, out io.Writer) (path, sha string, err error)
-	ArtifactSHA(path string) (string, error)
-	ArtifactExists(path string) bool
 	Install(ctx context.Context, serial, path string) error
-	InstalledProvenance(ctx context.Context, serial string) (*registry.APK, error)
+	InstalledProvenance(ctx context.Context, serial string) (*registry.Artifact, error)
 	AfterInstall(ctx context.Context, serial string, overrideActive bool) error
 
 	AssertNoProxy(ctx context.Context, serial string) error

@@ -22,13 +22,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/mockruntime"
 	"github.com/feernandooff/mockstro/internal/project"
 )
 
@@ -75,13 +74,12 @@ type Server struct {
 	port     int
 	mux      *http.ServeMux
 	quit     func()
-	gitMu    sync.Mutex
 
 	// charlesConfig is where Charles keeps its settings; overridden in tests.
 	charlesConfig string
 }
 
-func NewServer(ws *Workspace, ex execx.Runner, port int) (*Server, error) {
+func NewServer(ws *Workspace, port int) (*Server, error) {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
 		return nil, err
@@ -90,7 +88,7 @@ func NewServer(ws *Workspace, ex execx.Runner, port int) (*Server, error) {
 	if _, err := rand.Read(inst); err != nil {
 		return nil, err
 	}
-	s := &Server{ws: ws, ex: ex, token: hex.EncodeToString(buf), instance: hex.EncodeToString(inst), port: port, mux: http.NewServeMux(), quit: func() {}, charlesConfig: defaultCharlesConfig()}
+	s := &Server{ws: ws, ex: ws.runner, token: hex.EncodeToString(buf), instance: hex.EncodeToString(inst), port: port, mux: http.NewServeMux(), quit: func() {}, charlesConfig: defaultCharlesConfig()}
 	s.mux.HandleFunc("GET /{$}", s.index)
 	s.mux.HandleFunc("GET /api/ping", s.ping)
 	s.mux.HandleFunc("GET /api/project", s.projectInfo)
@@ -268,7 +266,7 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	_, m := s.ws.Current()
 	if m == nil {
-		writeJSON(w, http.StatusOK, StateView{State: StateIdle, NoProject: true, Custom: []engine.CustomResponse{}, Log: []LogLine{}})
+		writeJSON(w, http.StatusOK, StateView{State: StateIdle, NoProject: true, Custom: []mockruntime.CustomResponse{}, Log: []LogLine{}})
 		return
 	}
 	writeJSON(w, http.StatusOK, m.State())
@@ -309,7 +307,7 @@ func (s *Server) setCustom(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var c engine.CustomResponse
+	var c mockruntime.CustomResponse
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&c); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -421,7 +419,7 @@ func (s *Server) saveResponse(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Title string `json:"title"`
-		engine.CustomResponse
+		mockruntime.CustomResponse
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -462,7 +460,7 @@ func (s *Server) applySaved(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	saved, err := m.SetCustom(engine.CustomResponse{Method: stub.Method, Path: stub.Path, Status: stub.Status,
+	saved, err := m.SetCustom(mockruntime.CustomResponse{Method: stub.Method, Path: stub.Path, Status: stub.Status,
 		Headers: stub.Headers, Body: stub.Body, DelayMs: stub.DelayMs})
 	switch {
 	case errors.Is(err, errNotServing):
@@ -502,7 +500,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
-	p, m, ok := s.cur(w)
+	p, _, ok := s.cur(w)
 	if !ok {
 		return
 	}
@@ -524,7 +522,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("unknown %s %q", req.Kind, req.Ref))
 		return
 	}
-	if err := m.Serve(req.Ref); err != nil {
+	if err := s.ws.Serve(req.Ref); err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
@@ -532,12 +530,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
-	_, m := s.ws.Current()
-	if m == nil {
-		writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
-		return
-	}
-	if err := m.Stop(); err != nil {
+	if err := s.ws.Stop(); err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
@@ -568,7 +561,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ws := NewWorkspace(cfg.Load, DefaultRecentsFile())
+	ws := NewWorkspace(cfg.Load, DefaultRecentsFile(), execx.Real{})
 	if cfg.Initial != "" {
 		if err := ws.Open(cfg.Initial); err != nil && cfg.Out != nil {
 			fmt.Fprintf(cfg.Out, "Not opening %s: %v\n", cfg.Initial, err)
@@ -579,7 +572,7 @@ func Run(ctx context.Context, cfg Config) error {
 			_ = ws.Open(last)
 		}
 	}
-	srv, err := NewServer(ws, execx.Real{}, port)
+	srv, err := NewServer(ws, port)
 	if err != nil {
 		return err
 	}

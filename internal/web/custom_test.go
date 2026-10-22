@@ -5,32 +5,32 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/feernandooff/mockstro/internal/engine"
+	"github.com/feernandooff/mockstro/internal/mockruntime"
 )
 
 func TestJSONBodyIsCheckedAgainstContentType(t *testing.T) {
-	bad := engine.CustomResponse{Body: "{\n  \"a\": 1,\n  \"b\": \n}", Headers: map[string]string{"content-type": "application/json"}}
+	bad := mockruntime.CustomResponse{Body: "{\n  \"a\": 1,\n  \"b\": \n}", Headers: map[string]string{"content-type": "application/json"}}
 	err := checkBodyMatchesContentType(&bad)
 	if err == nil || !strings.Contains(err.Error(), "line 4") {
 		t.Fatalf("want a line 4 error, got %v", err)
 	}
 
-	plain := engine.CustomResponse{Body: "not json", Headers: map[string]string{"Content-Type": "text/plain"}}
+	plain := mockruntime.CustomResponse{Body: "not json", Headers: map[string]string{"Content-Type": "text/plain"}}
 	if err := checkBodyMatchesContentType(&plain); err != nil {
 		t.Fatalf("text/plain body should pass: %v", err)
 	}
 
-	missing := engine.CustomResponse{Body: `{"ok":true}`}
+	missing := mockruntime.CustomResponse{Body: `{"ok":true}`}
 	if err := checkBodyMatchesContentType(&missing); err != nil || missing.Headers["Content-Type"] != "application/json" {
 		t.Fatalf("content type not defaulted: %v %v", err, missing.Headers)
 	}
 
-	typo := engine.CustomResponse{Body: `{"ok":`}
+	typo := mockruntime.CustomResponse{Body: `{"ok":`}
 	if err := checkBodyMatchesContentType(&typo); err != nil || typo.Headers != nil {
 		t.Fatalf("invalid JSON with no declared type is left alone: %v %v", err, typo.Headers)
 	}
 
-	empty := engine.CustomResponse{Headers: map[string]string{"Content-Type": "application/json"}}
+	empty := mockruntime.CustomResponse{Headers: map[string]string{"Content-Type": "application/json"}}
 	if err := checkBodyMatchesContentType(&empty); err != nil {
 		t.Fatalf("empty body is allowed: %v", err)
 	}

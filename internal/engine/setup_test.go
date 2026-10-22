@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/feernandooff/mockstro/internal/execx"
+	maestroexec "github.com/feernandooff/mockstro/internal/maestro"
 )
 
 func TestMaestroSetupRequiresWorkingJava17(t *testing.T) {
@@ -55,7 +56,7 @@ func TestMaestroSetupReusesExistingInstall(t *testing.T) {
 			if err := e.EnsureMaestro(context.Background(), yes); err != nil {
 				t.Fatal(err)
 			}
-			if got, err := e.maestroCommand(); err != nil || got != want {
+			if got, err := maestroexec.Command(e.Exec); err != nil || got != want {
 				t.Fatalf("resolved %q, %v; want %q", got, err, want)
 			}
 			for _, name := range []string{"java", "adb"} {
@@ -77,7 +78,7 @@ func TestMaestroDefaultInstallIsFoundWithoutPATH(t *testing.T) {
 	e, fake := testEngine(t, "human", nil)
 	path := filepath.Join(home, ".maestro", "bin", "maestro")
 	fake.Paths[path] = path
-	if got, err := e.maestroCommand(); err != nil || got != path {
+	if got, err := maestroexec.Command(e.Exec); err != nil || got != path {
 		t.Fatalf("default install: %q, %v", got, err)
 	}
 }
@@ -160,7 +161,7 @@ func TestMaestroSetupUsesOfficialInstallerWithoutHomebrew(t *testing.T) {
 	if err := e.EnsureMaestro(context.Background(), yes); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := e.maestroCommand(); err != nil || got != maestro {
+	if got, err := maestroexec.Command(e.Exec); err != nil || got != maestro {
 		t.Fatalf("installed command: %s, %v", got, err)
 	}
 }

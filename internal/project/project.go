@@ -30,22 +30,14 @@ type Project struct {
 	MaestroRoot     string // <root>/.maestro
 	Env             map[string]string
 	Warnings        []string // unknown config keys, ignored
+	Catalog         CatalogConfig
 
-	BuildSystem         string
-	KotlinAndroidModule string
-	KotlinIOSModule     string
-	KotlinVariant       string
-	IOSAppGlob          string
-	WireMockVersion     string
-	WebSocketPath       string
+	Build           BuildConfig
+	WireMockVersion string
+	WebSocketPath   string
 
 	Platform    string
 	AppID       string
-	GradleTask  string
-	APKGlob     string
-	IOSProject  string
-	IOSScheme   string
-	IOSConfig   string
 	IOSSimNames []string
 
 	ProxyBaseURL string
