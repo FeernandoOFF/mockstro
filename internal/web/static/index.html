@@ -183,9 +183,45 @@ table.rules { width: 100%; border-collapse: collapse; } table.rules td, table.ru
 /* welcome */
 .welcome { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
 .welcome .card { width: min(520px, 100%); }
-.welcome h1 { font-size: 24px; letter-spacing: -.015em; margin: 18px 0 6px; } .welcome p { color: var(--muted); margin: 0 0 22px; }
+.welcome h1 { font-size: 24px; letter-spacing: -.015em; margin: 18px 0 6px; } .welcome .card > p { color: var(--muted); margin: 0 0 22px; }
 .pathrow { display: flex; gap: 8px; margin-top: 8px; }
-.recent { display: flex; gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); } .recent .what { flex: 1; min-width: 0; } .recent small { display: block; color: var(--muted); word-break: break-all; font-size: 12px; }
+.chooser { display: flex; flex-direction: column; gap: 22px; }
+.chooser .recents { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.recentitem { border-top: 1px solid var(--line); } .recentitem:first-child { border-top: 0; }
+.recentrow { display: flex; align-items: center; }
+.rowpick:not(:empty) { padding: 0 12px 12px; } .rowpick .callout { margin-top: 0; }
+.recent { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; padding: 10px 12px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.recent:hover:not(:disabled) { background: var(--bg-hover); } .recent:disabled { cursor: default; }
+.recentrow .rm { margin: 0 8px; color: var(--faint); } .recentrow .rm:hover { color: var(--bad); }
+.confirm { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; background: var(--bad-bg); }
+.confirm > svg { width: 16px; height: 16px; color: var(--bad); flex: none; } .confirm .what { flex: 1; min-width: 0; } .confirm small { display: block; color: var(--muted); font-size: 12px; }
+.btn.danger-solid { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 550; } .btn.danger-solid:hover { opacity: .88; }
+.recent .what { flex: 1; min-width: 0; } .recent small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.recent .go { color: var(--faint); width: 15px; height: 15px; flex: none; } .recent:hover:not(:disabled) .go { color: var(--text); }
+.tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--bg-hover); margin-bottom: 14px; }
+.tabs .seg { padding: 5px 12px; } .tabs .seg[aria-pressed="true"] { background: var(--bg); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.clonerow .input { font-family: var(--mono); font-size: 12.5px; }
+.dest { margin-top: 6px; color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .dest b { color: var(--muted); font-weight: 600; }
+.spin { width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.callout { margin-top: 14px; padding: 14px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg-hover); font-size: 13px; line-height: 1.5; }
+.callout.bad { background: var(--bad-bg); border-color: color-mix(in srgb, var(--bad) 25%, transparent); }
+.callout.warn { background: var(--warn-bg); border-color: var(--warn-line); }
+.callout .ttl { display: flex; align-items: center; gap: 8px; font-weight: 650; margin-bottom: 4px; } .callout .ttl svg { width: 16px; height: 16px; flex: none; }
+.callout.bad .ttl { color: var(--bad); } .callout.warn .ttl { color: var(--warn-text); }
+.callout p { margin: 0 0 10px; color: var(--text); } .callout p:last-child { margin-bottom: 0; }
+.callout ol { margin: 0 0 10px; padding-left: 20px; } .callout li { margin: 4px 0; } .callout li::marker { color: var(--muted); font-weight: 600; }
+.callout a { color: inherit; font-weight: 600; text-underline-offset: 2px; }
+.cmd { display: flex; align-items: center; gap: 8px; margin: 6px 0 4px; padding: 4px 4px 4px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); }
+.cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 12.5px/1.6 var(--mono); }
+.callout .more { margin-top: 10px; padding-top: 10px; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); font-size: 12.5px; color: var(--muted); }
+.callout .more a { display: inline-block; margin-right: 14px; }
+.brlist { margin: 8px 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); overflow: hidden; }
+.brrow { display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 12px; border-top: 1px solid var(--line); } .brrow:first-child { border-top: 0; } .brrow > svg { width: 14px; height: 14px; color: var(--muted); flex: none; }
+.brrow code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12.5px var(--mono); } .brrow small { color: var(--faint); font-size: 12px; white-space: nowrap; }
+.callout .loading { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 0 0 10px; }
+.callout details { margin-top: 8px; font-size: 12px; color: var(--muted); } .callout summary { cursor: pointer; }
+.callout pre { margin: 6px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--bg); white-space: pre-wrap; word-break: break-all; font: 11.5px/1.5 var(--mono); color: var(--text); }
 .lab { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 4px; }
 
 /* dialog */
@@ -293,7 +329,7 @@ pre.code { background: var(--bg-side); border: 1px solid var(--line); border-rad
   <div class="card">
     <div class="brand" style="padding:0"><div class="mark"><i></i></div><span>MockStro</span></div>
     <h1>Choose your project</h1>
-    <p>Pick the project folder: the one that contains a <span class="mono">.maestro</span> folder.</p>
+    <p>Clone a project from Git, or open a folder that contains a <span class="mono">.maestro</span> folder.</p>
     <div id="welcome-chooser"></div>
   </div>
 </div>
@@ -345,6 +381,8 @@ const ICONS = {
   refresh: '<path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.6v2.9h-2.9"/>',
   search: '<circle cx="7" cy="7" r="4.4"/><path d="m10.4 10.4 3 3"/>',
   stop: '<rect x="4" y="4" width="8" height="8" rx="1.5"/>',
+  trash: '<path d="M2.8 4.4h10.4M6.4 4.4V3h3.2v1.4M4.2 4.4l.6 8.6h6.4l.6-8.6M6.8 7v3.8M9.2 7v3.8"/>',
+  x: '<path d="M4 4l8 8M12 4l-8 8"/>',
   folder: '<path d="M2 4.6C2 3.8 2.6 3.2 3.4 3.2H6l1.4 1.5h5.2c.8 0 1.4.6 1.4 1.4v5.5c0 .8-.6 1.4-1.4 1.4H3.4c-.8 0-1.4-.6-1.4-1.4z"/>',
 };
 function icon(name) {
@@ -366,13 +404,15 @@ function reloadOnce() {
 }
 async function api(path, body) {
   const opts = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mockstro-Token': TOKEN }, body: JSON.stringify(body) };
-  const res = await fetch(path, opts);
+  let res;
+  try { res = await fetch(path, opts); }
+  catch { throw Object.assign(new Error("MockStro isn't running. Open the Mockstro app again, then reload this page."), { offline: true }); }
   const instance = res.headers.get('X-Mockstro-Instance');
   if (instance) { if (seenInstance && instance !== seenInstance) reloadOnce(); seenInstance = seenInstance || instance; }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 403 && data.reload) reloadOnce();
-    throw new Error(data.error || res.statusText);
+    throw Object.assign(new Error(data.error || res.statusText), { data });
   }
   return data;
 }
@@ -434,7 +474,7 @@ function renderSidebar() {
   const view = viewName();
   const link = (v, ic, label, count, lead) => h('a', { href: '#/' + v, ...(view === v || (view === 'preview' && previewTarget && v === pageOf(previewTarget.kind)) ? { 'aria-current': 'page' } : {}), title: label }, icon(ic), h('span', { class: 'label' }, label), lead, count != null && count !== '' ? h('span', { class: 'count' }, String(count)) : null);
   const status = health ? (health.overall === 'ok' ? 'ok' : health.overall) : '';
-  const others = (proj.recent || []).filter((r) => r.path !== proj.path);
+  const others = (proj.recent || []).filter((r) => r.path !== proj.path && (r.exists || !r.folder));
   const tree = [];
   tree.push(h('button', { class: 'navbtn proj', onclick: () => openProjectDialog() }, projIcon(proj), h('span', { class: 'label', style: 'font-weight:600' }, proj.name), h('span', { class: 'count' }, '')));
   if (git && git.repo) tree.push(h('button', { class: 'navbtn sub', onclick: openGitDialog, title: 'Project version' }, icon('branch'), h('span', { class: 'label' }, git.branch + (git.behind > 0 ? ' · ' + git.behind + ' new' : '') + (git.dirty && git.dirty.length ? ' · changed' : ''))));
@@ -1171,9 +1211,10 @@ async function loadSaved() { try { const r = await api('/api/saved'); saved = r.
 async function checkHealth() { try { health = await api('/api/health'); } catch { return; } renderAll(); }
 async function loadGit(fetchFirst) {
   if (!proj.open) { git = null; return; }
-  if (fetchFirst) { try { git = await api('/api/git/fetch', {}); } catch {} }
+  // Show the local branch at once; a fetch can take seconds, then refreshes "new" counts.
   try { git = await api('/api/git'); } catch { return; }
   renderAll();
+  if (fetchFirst) { try { git = await api('/api/git/fetch', {}); renderAll(); } catch {} }
 }
 async function loadProject(autoFetch) {
   try { proj = await api('/api/project'); } catch { return; }
@@ -1277,29 +1318,191 @@ function openEditor(c, savedTitle, opts = {}) {
 }
 
 // project chooser: the welcome screen and the Open dialog share it
+const PROVIDERS = { 'github.com': 'GitHub', 'bitbucket.org': 'Bitbucket' };
+const cloneName = (u) => { const t = u.trim().replace(/\/+$/, ''); return t.slice(Math.max(t.lastIndexOf('/'), t.lastIndexOf(':')) + 1).replace(/\.git$/, ''); };
+const isSSH = (u) => /^ssh:\/\/|^[^\s/@]+@[^\s/:]+:/.test(u.trim());
+
+function cmdBox(text) {
+  const b = h('button', { class: 'btn sm', onclick: () => copyText(text, b) }, 'Copy');
+  return h('div', { class: 'cmd' }, h('code', {}, text), b);
+}
+function callout(tone, title, ...body) {
+  return h('div', { class: 'callout ' + tone, role: 'alert' }, h('div', { class: 'ttl' }, icon('alert'), title), ...body);
+}
+const link = (g) => h('a', { href: g.url, target: '_blank', rel: 'noopener' }, g.label);
+
+// cloneHelp turns a failed clone into what happened and the steps that fix it.
+// setupPicker explains that the checkout at path has no .maestro/mockstro.yaml on its current branch and
+// offers the branches that do, so a project set up on one branch can still be opened.
+function setupPicker(path, title, opened) {
+  const slot = h('div', {});
+  async function load() {
+    fill(slot, h('p', { class: 'loading' }, h('span', { class: 'spin' }), 'Looking for branches that have it…'));
+    let branches;
+    try { branches = (await api('/api/project/setup-branches?path=' + encodeURIComponent(path))).branches; }
+    catch (e) { fill(slot, h('p', { class: 'hint bad' }, e.message)); return; }
+    if (!branches.length) {
+      fill(slot, h('p', {}, 'No branch has a .maestro/mockstro.yaml yet. Ask a developer to add mockstro to this repository.'),
+        h('p', {}, h('button', { class: 'btn sm', onclick: load }, icon('refresh'), 'Check again')));
+      return;
+    }
+    const status = h('p', { class: 'hint', role: 'status', 'aria-live': 'polite' });
+    const rows = branches.map((b) => {
+      const go = h('button', { class: 'btn sm', onclick: async () => {
+        rows.forEach((r) => (r.querySelector('button').disabled = true));
+        fill(go, h('span', { class: 'spin' }), 'Switching…'); status.className = 'hint'; status.textContent = '';
+        try { await api('/api/project/open-branch', { path, branch: b.name }); await loadProject(true); opened && opened(); }
+        catch (e) { status.className = 'hint bad'; status.textContent = e.message; rows.forEach((r) => (r.querySelector('button').disabled = false)); fill(go, 'Switch and open'); }
+      } }, 'Switch and open');
+      return h('div', { class: 'brrow' }, icon('branch'), h('code', {}, b.name), b.when ? h('small', {}, b.when) : null, go);
+    });
+    fill(slot, h('p', { style: 'margin-bottom:0' }, 'Found on ' + branches.length + (branches.length === 1 ? ' branch:' : ' branches:')), h('div', { class: 'brlist' }, ...rows), status);
+  }
+  load();
+  return callout('warn', title,
+    h('p', {}, 'MockStro needs a .maestro/mockstro.yaml file, and the branch this copy is on doesn\'t have one. Some projects only add it on certain branches.'),
+    slot, h('p', { class: 'mono', style: 'color:var(--muted)' }, path));
+}
+
+function cloneHelp(e, url, openPath, opened) {
+  if (e.offline) return callout('bad', "MockStro isn't running", h('p', {}, 'Open the Mockstro app again, then reload this page.'));
+  const d = e.data || {}, host = d.host || 'the server', who = PROVIDERS[d.provider] || host;
+  const guides = d.guides || [], detail = d.detail ? h('details', {}, h('summary', {}, 'What Git said'), h('pre', {}, d.detail)) : null;
+  const signIn = () => {
+    const ssh = isSSH(url), first = guides[ssh ? guides.length - 1 : 0];
+    const getAccess = ssh ? 'Add an SSH key to your ' + who + ' account'
+      : d.provider === 'bitbucket.org' ? 'Create a Bitbucket API token' : d.provider === 'github.com' ? 'Create a GitHub personal access token' : 'Get a username and password or access token for ' + host;
+    return [
+      h('ol', {},
+        h('li', {}, first ? h('a', { href: first.url, target: '_blank', rel: 'noopener' }, getAccess) : getAccess, ' (one time).'),
+        h('li', {}, 'Open Terminal and run this:', cmdBox(d.command),
+          ssh ? 'Answer yes if it asks to trust ' + host + '.' : 'Enter your username and ' + (d.provider ? 'the token' : 'password') + ' when it asks. Your Mac remembers them.'),
+        h('li', {}, 'Come back and click Clone again.')),
+      guides.length > 1 ? h('div', { class: 'more' }, 'More help: ', ...guides.map(link)) : null];
+  };
+  switch (d.kind) {
+    case 'auth': return callout('bad', "Couldn't sign in to " + who,
+      h('p', {}, 'Git needs your ' + who + ' sign-in once. MockStro can\'t ask for passwords, so do this one time:'), ...signIn(), detail);
+    case 'hostKey': return callout('bad', "Can't verify " + host,
+      h('p', {}, host + ' showed a different key from the one this Mac saved before. It may have changed its key, or something may be intercepting the connection, so Git stopped.'),
+      h('p', {}, 'Ask a developer before going further.', guides[0] ? [' ', who, ' lists its real keys in ', link(guides[0]), '.'] : null), detail);
+    case 'notFound': return callout('bad', 'Repository not found',
+      h('p', {}, 'Check the address. If it is right, the repository is probably private: ' + who + ' says "not found" until you sign in with an account that has access.'), ...signIn(), detail);
+    case 'network': return callout('bad', "Couldn't reach " + host, h('p', {}, 'Check your internet connection or VPN, then try again.'), detail);
+    case 'noGit': return callout('bad', "Git isn't installed", h('p', {}, 'Run this in Terminal, follow the installer, then try again:'), cmdBox(d.command));
+    case 'exists': return callout('warn', 'Already cloned', h('p', {}, d.path + ' is already there.'),
+      h('button', { class: 'btn sm', onclick: () => openPath(d.path) }, 'Open it'));
+    case 'notProject': return setupPicker(d.path, 'Cloned, but this branch isn\'t set up for MockStro', opened);
+    case 'openFailed': return callout('warn', "Cloned, but it couldn't be opened", h('p', {}, e.message), h('p', { class: 'mono' }, d.path));
+    case 'running': return callout('warn', 'Stop the running mock first', h('p', {}, 'You cannot change project while a mock is running.'));
+    case 'timeout': return callout('bad', 'The clone took too long', h('p', {}, 'It was stopped after 15 minutes. Check your connection and try again.'));
+  }
+  return callout('bad', 'Clone failed', h('p', {}, e.message), detail);
+}
+
 function projectChooser(done) {
   const msg = h('p', { class: 'hint', role: 'status', 'aria-live': 'polite', style: 'margin-top:10px' });
-  const path = h('input', { class: 'input', type: 'text', placeholder: '/Users/you/code/project', 'aria-label': 'Project folder path' });
-  async function open(p) {
-    msg.className = 'hint'; msg.textContent = 'Opening…';
-    try { await api('/api/project/open', { path: p }); await loadProject(true); done && done(); }
-    catch (e) { msg.className = 'hint bad'; msg.textContent = e.message; }
+  const note = h('div', {});
+  const opened = () => done && done();
+  // open shows a folder without a .maestro folder as a branch picker in slot.
+  async function open(p, slot = note) {
+    msg.className = 'hint'; msg.textContent = 'Opening…'; fill(note);
+    try { await api('/api/project/open', { path: p }); await loadProject(true); opened(); }
+    catch (e) {
+      if (e.data && e.data.kind === 'notProject') {
+        msg.textContent = ''; fill(slot, setupPicker(e.data.path, 'This branch isn\'t set up for MockStro', opened));
+        slot.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+      else { msg.className = 'hint bad'; msg.textContent = e.message; }
+    }
   }
   async function pick() {
     msg.className = 'hint'; msg.textContent = 'Choose a folder in the window that opened…';
     try { const r = await api('/api/project/pick', {}); if (r.cancelled) { msg.textContent = ''; return; } await open(r.path); }
     catch (e) { msg.className = 'hint bad'; msg.textContent = e.message; }
   }
-  const recent = (proj.recent || []).map((r) => h('div', { class: 'recent' },
-    projIcon(r),
-    h('span', { class: 'what' }, h('strong', {}, r.name), h('small', {}, r.exists ? r.path : r.path + ' (folder not found)')),
-    h('button', { class: 'btn sm', ...(r.exists ? {} : { disabled: '' }), onclick: () => open(r.path) }, 'Open')));
-  return h('div', {},
+
+  // Clone from Git
+  const url = h('input', { class: 'input', type: 'text', placeholder: 'https://bitbucket.org/team/app.git', 'aria-label': 'Repository address', autocomplete: 'off', spellcheck: 'false' });
+  const go = h('button', { class: 'btn primary', onclick: clone }, 'Clone');
+  const dest = h('div', { class: 'dest' }), help = h('div', {});
+  const showDest = () => { const n = cloneName(url.value); fill(dest, n ? ['Saves to ', h('b', {}, proj.cloneDir + '/' + n)] : 'Paste the address from the repository\'s Clone button (https or SSH).'); };
+  url.addEventListener('input', () => {
+    const m = url.value.match(/^\s*git\s+clone\s+(?:-\S+\s+)*(\S+)/);
+    if (m) url.value = m[1];
+    showDest(); fill(help);
+  });
+  url.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') clone(); });
+  async function clone() {
+    if (!url.value.trim()) { url.focus(); return; }
+    url.disabled = go.disabled = true; fill(go, h('span', { class: 'spin' }), 'Cloning…');
+    fill(help, h('p', { class: 'hint', style: 'margin-top:10px' }, 'Downloading… a big repository can take a few minutes.'));
+    try { await api('/api/project/clone', { url: url.value }); await loadProject(true); done && done(); }
+    catch (e) { fill(help, e.data && e.data.kind === 'invalid' ? h('p', { class: 'hint bad', style: 'margin-top:8px' }, e.message) : cloneHelp(e, url.value, (p) => open(p, help), opened)); }
+    finally { url.disabled = go.disabled = false; fill(go, 'Clone'); }
+  }
+  showDest();
+  const clonePane = h('div', {}, h('div', { class: 'pathrow clonerow', style: 'margin-top:0' }, url, go), dest, help);
+
+  // Folder on this Mac
+  const path = h('input', { class: 'input', type: 'text', placeholder: '/Users/you/code/project', 'aria-label': 'Project folder path' });
+  path.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') open(path.value); });
+  const folderPane = h('div', {},
     proj.canPick ? h('button', { class: 'btn primary', onclick: pick }, icon('folder'), 'Choose folder…') : null,
-    recent.length ? h('div', { style: 'margin-top:22px' }, h('label', { class: 'lab' }, 'Recent'), ...recent) : null,
-    h('div', { style: 'margin-top:22px' }, h('label', { class: 'lab' }, proj.canPick ? 'Or type the full path' : 'Type the full path'), h('div', { class: 'pathrow' }, path, h('button', { class: 'btn', onclick: () => open(path.value) }, 'Open'))),
-    msg);
+    h('div', { style: proj.canPick ? 'margin-top:16px' : '' }, h('label', { class: 'lab' }, proj.canPick ? 'Or type its full path' : 'Type its full path'),
+      h('div', { class: 'pathrow' }, path, h('button', { class: 'btn', onclick: () => open(path.value) }, 'Open'))));
+
+  const modes = proj.cloneDir ? [['clone', 'Clone from Git', clonePane], ['folder', 'Folder on this Mac', folderPane]] : [['folder', '', folderPane]];
+  let mode = store.get('chooser', (proj.recent || []).some((r) => r.exists) ? 'folder' : 'clone');
+  if (!modes.some(([k]) => k === mode)) mode = modes[0][0];
+  const tabs = h('div', { class: 'tabs', role: 'group', 'aria-label': 'How to add a project' }), pane = h('div', {});
+  const show = () => {
+    fill(tabs, modes.map(([k, label]) => h('button', { class: 'seg', 'aria-pressed': String(k === mode), onclick: () => { mode = k; store.set('chooser', k); msg.textContent = ''; fill(note); show(); } }, label)));
+    fill(pane, modes.find(([k]) => k === mode)[2]);
+  };
+  show();
+
+  const recentBox = h('div', {}), addLabel = h('label', { class: 'lab' }, 'Add a project');
+  function drawRecents() {
+    const rows = (proj.recent || []).map(recentRow);
+    fill(recentBox, rows.length ? [h('label', { class: 'lab' }, 'Projects'), h('div', { class: 'recents' }, ...rows)] : null);
+    recentBox.hidden = addLabel.hidden = !rows.length;
+  }
+  // recentRow opens a project; its side button deletes a clone MockStro made, or only forgets a
+  // folder the tester chose.
+  function recentRow(r) {
+    const current = proj.open && r.path === proj.path;
+    const status = !r.folder ? ' (folder not found)' : !r.exists ? ' (not set up on this branch)' : '';
+    const go = icon('right'); go.classList.add('go');
+    const below = h('div', { class: 'rowpick' });
+    const row = h('div', { class: 'recentrow' },
+      h('button', { class: 'recent', ...(r.folder && !current ? {} : { disabled: '' }), onclick: () => { fill(note); document.querySelectorAll('.rowpick').forEach((el) => fill(el)); open(r.path, below); }, title: r.path },
+        projIcon(r), h('span', { class: 'what' }, h('strong', {}, r.name), h('small', {}, r.path + status)),
+        current ? h('span', { class: 'badge' }, 'Open now') : r.folder ? go : null));
+    if (!current) row.append(h('button', { class: 'btn ghost sm rm', title: r.managed ? 'Delete this project' : 'Remove from list', 'aria-label': (r.managed ? 'Delete ' : 'Remove ') + r.name,
+      onclick: () => (r.managed ? confirmDelete() : remove(false)) }, icon(r.managed ? 'trash' : 'x')));
+    async function remove(del) {
+      msg.textContent = '';
+      try { await api('/api/project/remove', { path: r.path, delete: del }); proj = await api('/api/project'); drawRecents(); renderChrome(); }
+      catch (e) { wrap.replaceWith(recentRow(r)); msg.className = 'hint bad'; msg.textContent = e.message; }
+    }
+    function confirmDelete() {
+      const del = h('button', { class: 'btn sm danger-solid', onclick: () => { del.disabled = true; fill(del, h('span', { class: 'spin' }), 'Deleting…'); remove(true); } }, 'Delete');
+      fill(row, h('div', { class: 'confirm', role: 'alertdialog', 'aria-label': 'Delete ' + r.name },
+        icon('trash'),
+        h('span', { class: 'what' }, h('strong', {}, 'Delete ' + r.name + '?'),
+          h('small', {}, 'This deletes its folder from this Mac, including saved responses. You can clone it again later.')),
+        h('button', { class: 'btn sm', onclick: () => wrap.replaceWith(recentRow(r)) }, 'Cancel'), del));
+      del.focus();
+    }
+    const wrap = h('div', { class: 'recentitem' }, row, below);
+    return wrap;
+  }
+  drawRecents();
+  return h('div', { class: 'chooser' }, recentBox,
+    h('div', {}, addLabel, modes.length > 1 ? tabs : null, pane, msg, note));
 }
+
 function openProjectDialog() {
   fill(dlgBody, 
     h('h2', { id: 'dlg-title' }, 'Open a project'),
