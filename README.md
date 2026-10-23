@@ -17,6 +17,12 @@ the result. There's a CLI for scripts, agents and CI, and a TUI for people.
 
 ## Quickstart
 
+There are two ways in. Developers and CI add mockstro to the app repo and run its
+`./mockstrow` wrapper, which follows the version the project pins. QA and others who mostly
+use the [browser UI](docs/web-ui.md) install one global CLI and a desktop shortcut.
+
+### Add it to a project (developers)
+
 From your app repo:
 
 ```bash
@@ -43,6 +49,24 @@ installed manually, e.g. `brew install --cask temurin@17`.
 
 To change versions, edit `cliVersion` in `mockstro.yaml`. Optional: `./mockstrow skill install --claude`
 adds an agent skill.
+
+### Install the app (QA)
+
+Once, on a Mac with Java 17+ (`brew install --cask temurin@17`):
+
+```bash
+version=v0.1.0-rc.3
+curl -fsSLo install-global.sh "https://github.com/FeernandoOFF/mockstro/releases/download/$version/install-global.sh"
+sh install-global.sh "$version" && rm install-global.sh
+```
+
+This installs `mockstro` to `~/.local/bin` (`BIN_DIR` changes it) and creates
+`~/Applications/Mockstro.app`. Clone the app repo, double-click **Mockstro** and choose the
+repo's folder; the page remembers it and lists other projects you open. **Setup check** on the
+page says what else is missing. Rerun the installer with a newer version to update.
+
+The global CLI runs every project with its own version, not the project's pin; use a
+version at least as new as the projects' `cliVersion`.
 
 ## Lite or full
 

@@ -16,10 +16,10 @@ for os in darwin linux; do
     done
 done
 cp internal/bootstrap/mockstrow "$out/mockstrow"
-cp scripts/install.sh "$out/install.sh"
-chmod 755 "$out/mockstrow" "$out/install.sh"
+cp scripts/install.sh scripts/install-global.sh scripts/install-ui-launcher.sh "$out/"
+chmod 755 "$out/mockstrow" "$out"/install*.sh
 (cd "$out"; if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum mockstro* install.sh > checksums.txt
+    sha256sum mockstro* install*.sh > checksums.txt
 else
-    shasum -a 256 mockstro* install.sh > checksums.txt
+    shasum -a 256 mockstro* install*.sh > checksums.txt
 fi)

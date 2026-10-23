@@ -94,3 +94,84 @@ cp "$ASSETS/${3##*/}" "$2"
 		t.Fatalf("lost init flags: %q, %v", out, err)
 	}
 }
+
+func TestGlobalInstaller(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX installer")
+	}
+	root := t.TempDir()
+	assets := filepath.Join(root, "assets")
+	fakes := filepath.Join(root, "fakes")
+	binDir := filepath.Join(root, "global bin")
+	for _, path := range []string{assets, fakes} {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(fakes, "curl"), []byte(`#!/bin/sh
+set -eu
+while [ "$1" != --output ]; do shift; done
+cp "$ASSETS/${3##*/}" "$2"
+`), 0755)
+	payload := []byte("#!/bin/sh\necho cli\n")
+	launcher := []byte("printf 'launcher <%s>\\n' \"$@\"\n")
+	asset := "mockstro_v0.1.0_" + runtime.GOOS + "_" + runtime.GOARCH
+	write := func(launcherSum []byte) {
+		os.WriteFile(filepath.Join(assets, asset), payload, 0644)
+		os.WriteFile(filepath.Join(assets, "install-ui-launcher.sh"), launcher, 0644)
+		os.WriteFile(filepath.Join(assets, "checksums.txt"), []byte(fmt.Sprintf("%x  %s\n%x  install-ui-launcher.sh\n",
+			sha256.Sum256(payload), asset, sha256.Sum256(launcherSum))), 0644)
+	}
+	installer, err := filepath.Abs("../../scripts/install-global.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("sh", append([]string{installer}, args...)...)
+		cmd.Env = append(os.Environ(), "PATH="+fakes+":"+os.Getenv("PATH"), "ASSETS="+assets, "BIN_DIR="+binDir)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	cli := filepath.Join(binDir, "mockstro")
+
+	write(launcher)
+	out, err := run("v0.1.0")
+	if err != nil {
+		t.Fatalf("install failed: %q, %v", out, err)
+	}
+	if got, _ := os.ReadFile(cli); string(got) != string(payload) {
+		t.Fatal("cli not installed")
+	}
+	if wantLauncher := runtime.GOOS == "darwin"; strings.Contains(out, "launcher <"+cli+">") != wantLauncher {
+		t.Fatalf("launcher run = %v, want %v: %q", !wantLauncher, wantLauncher, out)
+	}
+	if !strings.Contains(out, "Add "+binDir+" to your PATH") {
+		t.Fatalf("no PATH hint: %q", out)
+	}
+
+	out, err = run("v0.1.0", "--no-launcher")
+	if err != nil || strings.Contains(out, "launcher <") {
+		t.Fatalf("--no-launcher ran launcher: %q, %v", out, err)
+	}
+
+	if runtime.GOOS == "darwin" {
+		os.Remove(cli)
+		write([]byte("other"))
+		out, err = run("v0.1.0")
+		if err == nil || !strings.Contains(out, "checksum mismatch for install-ui-launcher.sh") {
+			t.Fatalf("accepted corrupt launcher: %q, %v", out, err)
+		}
+		if _, err := os.Stat(cli); !os.IsNotExist(err) {
+			t.Fatal("installed cli despite corrupt launcher")
+		}
+	}
+
+	for _, version := range []string{"latest", "v0.1.0/other"} {
+		if out, err := run(version); err == nil {
+			t.Fatalf("accepted %q: %s", version, out)
+		}
+	}
+	if entries, _ := os.ReadDir(binDir); len(entries) > 1 {
+		t.Fatalf("left temp files: %v", entries)
+	}
+}

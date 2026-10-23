@@ -20,7 +20,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Check installer and wrapper syntax
-        run: sh -n scripts/install.sh scripts/build-release.sh internal/bootstrap/mockstrow
+        run: sh -n scripts/install.sh scripts/install-global.sh scripts/install-ui-launcher.sh scripts/build-release.sh internal/bootstrap/mockstrow
       - run: go test ./...
       - run: go vet ./...
       - name: Build macOS and Linux assets
