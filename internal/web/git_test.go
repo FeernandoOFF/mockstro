@@ -2,8 +2,10 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -251,5 +253,106 @@ func TestGitWithoutARepo(t *testing.T) {
 	}
 	if rec := gitPost(s, "/api/git/pull", "{}"); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not a git checkout") {
 		t.Fatalf("pull: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestCloneDownloadsIntoStateDirAndOpensTheProject(t *testing.T) {
+	r := newRepos(t)
+	state := t.TempDir()
+	load := func(dir string) (*project.Project, engine.Options, error) {
+		if _, err := os.Stat(filepath.Join(dir, ".maestro")); err != nil {
+			return nil, engine.Options{}, project.ErrNotFound
+		}
+		if _, err := os.ReadFile(filepath.Join(dir, ".maestro", "mockstro.yaml")); err != nil {
+			return nil, engine.Options{}, fmt.Errorf("%w\n\nTo set up a new suite, see: init --help", err)
+		}
+		return &project.Project{Root: dir, MaestroRoot: filepath.Join(dir, ".maestro"), Env: map[string]string{}, Platform: "ios", Integration: "lite"}, engine.DefaultOptions(), nil
+	}
+	ws := NewWorkspace(load, filepath.Join(state, "ui.json"), execx.Real{})
+	s, err := NewServer(ws, testPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := func(url string) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(map[string]string{"url": url})
+		return gitPost(s, "/api/project/clone", string(b))
+	}
+
+	if rec := clone(filepath.Join(state, "missing.git")); rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), `"kind":"notFound"`) {
+		t.Fatalf("clone of missing repo: %d %s", rec.Code, rec.Body)
+	}
+	if rec := clone(r.origin); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `"kind":"notProject"`) {
+		t.Fatalf("clone without .maestro: %d %s", rec.Code, rec.Body)
+	}
+	commitFile(t, r.work, ".maestro/mockstro.yaml", "cliVersion: v0.1.0\n", "suite")
+	gitIn(t, r.work, "push", "-q")
+	os.RemoveAll(filepath.Join(state, "projects"))
+
+	rec := clone(r.origin)
+	want := filepath.Join(state, "projects", "origin")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("clone: %d %s", rec.Code, rec.Body)
+	}
+	if p, _ := ws.Current(); p == nil || p.Root != want {
+		t.Fatalf("opened %+v", p)
+	}
+	if rec := clone(r.origin); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"kind":"exists"`) {
+		t.Fatalf("second clone: %d %s", rec.Code, rec.Body)
+	}
+	if rec := clone("ext::sh -c touch% /tmp/pwned"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unsafe url: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestCloneWithoutSetupOffersBranchesThatHaveIt(t *testing.T) {
+	r := newRepos(t)
+	// main has plain Maestro flows but no mockstro.yaml.
+	commitFile(t, r.work, ".maestro/config.yaml", "flows: []\n", "maestro")
+	gitIn(t, r.work, "push", "-q")
+	gitIn(t, r.work, "switch", "-q", "-c", "feature/mockstro")
+	commitFile(t, r.work, ".maestro/mockstro.yaml", "cliVersion: v0.1.0\n", "suite")
+	gitIn(t, r.work, "push", "-q", "-u", "origin", "feature/mockstro")
+	gitIn(t, r.work, "switch", "-q", "-c", "other", "main")
+	gitIn(t, r.work, "push", "-q", "-u", "origin", "other")
+
+	state := t.TempDir()
+	load := func(dir string) (*project.Project, engine.Options, error) {
+		if _, err := os.Stat(filepath.Join(dir, ".maestro")); err != nil {
+			return nil, engine.Options{}, project.ErrNotFound
+		}
+		if _, err := os.ReadFile(filepath.Join(dir, ".maestro", "mockstro.yaml")); err != nil {
+			return nil, engine.Options{}, fmt.Errorf("%w\n\nTo set up a new suite, see: init --help", err)
+		}
+		return &project.Project{Root: dir, MaestroRoot: filepath.Join(dir, ".maestro"), Env: map[string]string{}, Platform: "ios", Integration: "lite"}, engine.DefaultOptions(), nil
+	}
+	ws := NewWorkspace(load, filepath.Join(state, "ui.json"), execx.Real{})
+	s, err := NewServer(ws, testPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(map[string]string{"url": "git clone " + r.origin})
+	if rec := gitPost(s, "/api/project/clone", string(b)); !strings.Contains(rec.Body.String(), `"kind":"notProject"`) {
+		t.Fatalf("clone: %d %s", rec.Code, rec.Body)
+	}
+	dest := filepath.Join(state, "projects", "origin")
+	if rec := gitPost(s, "/api/project/open", `{"path":"`+dest+`"}`); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `"kind":"notProject"`) {
+		t.Fatalf("open: %d %s", rec.Code, rec.Body)
+	}
+
+	rec := do(s, "GET", "/api/project/setup-branches?path="+url.QueryEscape(dest), goodHost, nil, "")
+	var got struct{ Branches []gitrepo.Branch }
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Branches) != 1 || got.Branches[0].Name != "feature/mockstro" {
+		t.Fatalf("setup branches: %d %s", rec.Code, rec.Body)
+	}
+
+	b, _ = json.Marshal(map[string]string{"path": dest, "branch": "feature/mockstro"})
+	if rec := gitPost(s, "/api/project/open-branch", string(b)); rec.Code != http.StatusOK {
+		t.Fatalf("open branch: %d %s", rec.Code, rec.Body)
+	}
+	if p, _ := ws.Current(); p == nil || p.Root != dest {
+		t.Fatalf("opened %+v", p)
+	}
+	if rec := gitPost(s, "/api/project/open-branch", string(b)); rec.Code == http.StatusOK {
+		t.Fatal("switched the open project behind its branch menu")
 	}
 }

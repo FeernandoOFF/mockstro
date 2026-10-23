@@ -149,7 +149,7 @@ func TestCommandArgumentsAndNoninteractiveEnvironment(t *testing.T) {
 		if c.Name != "git" || !reflect.DeepEqual(c.Args[:4], []string{"-c", "core.quotepath=false", "-C", "/checkout with spaces"}) {
 			t.Fatalf("command = %+v", c)
 		}
-		want := []string{"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes", "LC_ALL=C"}
+		want := []string{"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new", "LC_ALL=C"}
 		if !reflect.DeepEqual(c.Env, want) {
 			t.Fatalf("env = %v", c.Env)
 		}
@@ -161,5 +161,74 @@ func TestCommandArgumentsAndNoninteractiveEnvironment(t *testing.T) {
 	st, err := New("/checkout with spaces", fake).Status(context.Background())
 	if err != nil || st.Repo || st.Dirty == nil {
 		t.Fatalf("status = %+v, %v", st, err)
+	}
+}
+
+func TestAddressStripsAPastedCloneCommand(t *testing.T) {
+	for raw, want := range map[string]string{
+		"git clone git@ssh.bitbucket.org:team/app.git":                  "git@ssh.bitbucket.org:team/app.git",
+		"  git clone --recursive -q https://github.com/a/b.git mydir\n": "https://github.com/a/b.git",
+		" https://github.com/a/b.git ":                                  "https://github.com/a/b.git",
+		"git clone":                                                     "",
+		"git clone --depth":                                             "",
+	} {
+		if got := Address(raw); got != want {
+			t.Errorf("Address(%q) = %q, want %q", raw, got, want)
+		}
+	}
+	if name, err := CloneName("git clone git@ssh.bitbucket.org:team/app.git"); err != nil || name != "app" {
+		t.Fatalf("CloneName = %q, %v", name, err)
+	}
+}
+
+func TestCloneNameAcceptsOnlyRemoteAddresses(t *testing.T) {
+	for url, want := range map[string]string{
+		"https://github.com/acme/app.git":     "app",
+		"https://bitbucket.org/acme/app-ios/": "app-ios",
+		"git@github.com:acme/app.git":         "app",
+		"ssh://git@host:22/acme/app":          "app",
+	} {
+		if got, err := CloneName(url); err != nil || got != want {
+			t.Errorf("CloneName(%q) = %q, %v; want %q", url, got, err, want)
+		}
+	}
+	for _, url := range []string{"", "-u evil", "ext::sh -c touch", "file:///etc", "http://host/app", "https://host/..", "relative/app"} {
+		if _, err := CloneName(url); !errors.Is(err, ErrInvalidURL) {
+			t.Errorf("CloneName(%q) accepted: %v", url, err)
+		}
+	}
+}
+
+func TestCloneIntoParentNeverOverwrites(t *testing.T) {
+	origin := checkout(t)
+	parent := filepath.Join(t.TempDir(), "projects")
+	dest, err := Clone(context.Background(), execx.Real{}, origin, parent)
+	if err != nil || dest != filepath.Join(parent, filepath.Base(origin)) {
+		t.Fatalf("clone = %q, %v", dest, err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "tracked")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Clone(context.Background(), execx.Real{}, origin, parent); !errors.Is(err, ErrExists) {
+		t.Fatalf("second clone: %v", err)
+	}
+}
+
+func TestCloneFailuresAreClassified(t *testing.T) {
+	for stderr, want := range map[string]error{
+		"fatal: could not read Password for 'https://me@bitbucket.org': terminal prompts disabled":            ErrAuthentication,
+		"fatal: unable to access 'https://bitbucket.org/a/b.git/': The requested URL returned error: 403":     ErrAuthentication,
+		"remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found":            ErrNotFound,
+		"fatal: unable to access 'https://bitbucket.org/a/b.git/': Could not resolve host: bitbucket.org":     ErrNetwork,
+		"ERROR: Repository not found.\nfatal: Could not read from remote repository.":                         ErrNotFound,
+		"Cloning into 'app'...\nHost key verification failed.\nfatal: Could not read from remote repository.": ErrHostKey,
+		"xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools)":                   ErrNoGit,
+	} {
+		fake := &execx.Fake{Handler: func(execx.Cmd) (string, error) {
+			return "", &execx.Error{Err: errors.New("exit status 128"), Stderr: stderr}
+		}}
+		if _, err := Clone(context.Background(), fake, "https://bitbucket.org/a/b.git", t.TempDir()); !errors.Is(err, want) {
+			t.Errorf("%q: %v, want %v", stderr, err, want)
+		}
 	}
 }

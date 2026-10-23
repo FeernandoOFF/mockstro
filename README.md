@@ -61,8 +61,9 @@ sh install-global.sh "$version" && rm install-global.sh
 ```
 
 This installs `mockstro` to `~/.local/bin` (`BIN_DIR` changes it) and creates
-`~/Applications/Mockstro.app`. Clone the app repo, double-click **Mockstro** and choose the
-repo's folder; the page remembers it and lists other projects you open. **Setup check** on the
+`~/Applications/Mockstro.app`. Double-click **Mockstro**, then paste the app repo's address
+under **Clone from Git** (or choose a folder you already cloned); the page remembers it and
+lists other projects you open. **Setup check** on the
 page says what else is missing. Rerun the installer with a newer version to update.
 
 The global CLI runs every project with its own version, not the project's pin; use a
