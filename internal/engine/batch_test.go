@@ -35,10 +35,12 @@ func fakeMaestro(stopAfter int) func(c execx.Cmd) (string, error) {
 func fakeMaestroWith(stopAfter int, skipFailedComplete bool, results string) func(c execx.Cmd) (string, error) {
 	return func(c execx.Cmd) (string, error) {
 		ran := 0
+		var outputRoot string
 		var mlog *os.File
 		for i, a := range c.Args {
 			if i > 0 && c.Args[i-1] == "--debug-output" {
-				dir := filepath.Join(a, ".maestro", "tests", "ts")
+				dir := a
+				outputRoot = a
 				_ = os.MkdirAll(dir, 0o755)
 				mlog, _ = os.Create(filepath.Join(dir, "maestro.log"))
 				defer mlog.Close()
@@ -72,7 +74,7 @@ func fakeMaestroWith(stopAfter int, skipFailedComplete bool, results string) fun
 				return resp.StatusCode
 			}
 			if results != "" {
-				_ = os.MkdirAll(filepath.Join(results, "ts", fmt.Sprintf("same-name-%d", ran), "screenshots"), 0o755)
+				_ = os.MkdirAll(filepath.Join(outputRoot, fmt.Sprintf("same-name-%d", ran), "screenshots"), 0o755)
 			}
 			if call("start") == http.StatusConflict {
 				continue
@@ -365,7 +367,7 @@ func TestBatchKeepsSubflowCopiesPlainAndConfigUnfiltered(t *testing.T) {
 			t.Fatalf("batch config keeps %s:\n%s", k, cfg)
 		}
 	}
-	if !strings.Contains(cfg, "platform") || !strings.Contains(cfg, "testOutputDir") {
+	if !strings.Contains(cfg, "platform") {
 		t.Fatalf("batch config lost settings:\n%s", cfg)
 	}
 	if len(plain) == 0 || strings.Contains(string(plain), "MOCKSTRO") {

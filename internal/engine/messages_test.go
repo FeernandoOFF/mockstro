@@ -15,18 +15,26 @@ import (
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
 	"github.com/feernandooff/mockstro/internal/project"
-	"github.com/feernandooff/mockstro/internal/wiremock"
 )
 
 func TestRealWebSocketScenarioLifecycleAndVerification(t *testing.T) {
+	for _, attached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("attached=%v", attached), func(t *testing.T) {
+			testRealWebSocketScenarioLifecycle(t, attached)
+		})
+	}
+}
+
+func testRealWebSocketScenarioLifecycle(t *testing.T, attached bool) {
 	jar := os.Getenv("MOCKSTRO_TEST_WIREMOCK_JAR")
 	if jar == "" {
 		t.Skip("set MOCKSTRO_TEST_WIREMOCK_JAR to the pinned beta JAR")
 	}
 	var calls []string
-	e, _ := testEngine(t, "agent", func(c execx.Cmd) (string, error) { calls = append(calls, c.String()); return "", nil })
+	e, fake := testEngine(t, "agent", func(c execx.Cmd) (string, error) { calls = append(calls, c.String()); return "", nil })
+	fake.StartHandler = (execx.Real{}).Start
 	e.jar = jar
-	e.P.WireMockVersion, e.P.WebSocketPath = wiremock.WebSocketVersion, "/ws"
+	e.P.WebSocketPath = "/ws"
 	for _, dir := range []string{e.P.ProfilesRoot(), e.P.StubsRoot(), e.P.BodiesRoot()} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
@@ -51,7 +59,10 @@ func TestRealWebSocketScenarioLifecycleAndVerification(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r := e.newRun("run", 0)
-	r.ID, r.Device, r.Port, r.preflightDone = "test-run", "emulator-test", port, true
+	r.ID, r.Port, r.preflightDone = "test-run", port, true
+	if attached {
+		r.Device = "emulator-test"
+	}
 	if err := r.initDir(); err != nil {
 		t.Fatal(err)
 	}
@@ -66,10 +77,10 @@ func TestRealWebSocketScenarioLifecycleAndVerification(t *testing.T) {
 	if err := r.Activate(ctx, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !r.websocketActive || !strings.Contains(strings.Join(calls, "\n"), "am force-stop") {
+	if !r.websocketActive || attached && !strings.Contains(strings.Join(calls, "\n"), "am force-stop") {
 		t.Fatalf("calls: %v", calls)
 	}
-	client := exec.CommandContext(ctx, "java", "../wiremock/testdata/WebSocketClient.java", fmt.Sprintf("ws://127.0.0.1:%d/ws", port))
+	client := exec.CommandContext(ctx, "java", "../wiremock/testdata/WebSocketClient.java", fmt.Sprintf("ws://127.0.0.1:%d/ws", port), "hold")
 	stdout, err := client.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -84,14 +95,13 @@ func TestRealWebSocketScenarioLifecycleAndVerification(t *testing.T) {
 			client.Wait()
 		}
 	}()
-	ready := make(chan string, 1)
+	ready := make(chan string, 2)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
-		if scanner.Scan() {
+		for scanner.Scan() {
 			ready <- scanner.Text()
-		} else {
-			ready <- ""
 		}
+		close(ready)
 	}()
 	select {
 	case line := <-ready:
@@ -100,12 +110,6 @@ func TestRealWebSocketScenarioLifecycleAndVerification(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
-	}
-	if err := r.WM.SendMessage("/ws", "pushed-event"); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.Wait(); err != nil {
-		t.Fatal(err)
 	}
 	one := 1
 	results, err := r.Verify([]fixtures.Verification{{Stub: "connect", Exactly: &one}})
@@ -116,17 +120,58 @@ func TestRealWebSocketScenarioLifecycleAndVerification(t *testing.T) {
 	if err := r.Activate(ctx, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if r.WM == old {
-		t.Fatal("previous WebSocket server reused")
+	if r.WM != old {
+		t.Fatal("scenario switch restarted the JVM")
 	}
 	select {
 	case <-old.Done():
+		t.Fatal("server exited during scenario switch")
 	default:
-		t.Fatal("old server still running")
+	}
+	select {
+	case line := <-ready:
+		if line != "CLOSED 1000" {
+			t.Fatalf("stale client: %q", line)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := client.Wait(); err != nil {
+		t.Fatal(err)
 	}
 	events, err := r.WM.MessageJournal(true)
 	if err != nil || len(events) != 0 {
 		t.Fatalf("journal leaked: %+v %v", events, err)
+	}
+	// Reconnect to the same process and prove only the new scenario's messages count.
+	reconnected := exec.CommandContext(ctx, "java", "../wiremock/testdata/WebSocketClient.java", fmt.Sprintf("ws://127.0.0.1:%d/ws", port))
+	out, err := reconnected.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnected.Stderr = os.Stderr
+	if err := reconnected.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if reconnected.ProcessState == nil {
+			reconnected.Process.Kill()
+			reconnected.Wait()
+		}
+	}()
+	scanner := bufio.NewScanner(out)
+	if !scanner.Scan() || scanner.Text() != "CONNECTED" {
+		t.Fatal("client could not reconnect")
+	}
+	if err := r.WM.SendMessage("/ws", "pushed-event"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconnected.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	results, err = r.Verify([]fixtures.Verification{{Stub: "connect", Exactly: &one}})
+	if err != nil || len(results) != 1 || !results[0].Pass {
+		t.Fatalf("new scenario: %+v %v", results, err)
 	}
 }
 

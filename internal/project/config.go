@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/feernandooff/mockstro/internal/wiremock"
 	"gopkg.in/yaml.v3"
 )
 
@@ -169,6 +170,7 @@ func (b BuildConfig) Resolve(platform string) (BuildConfig, error) {
 }
 
 type TargetConfig struct {
+	// Deprecated: accepted for existing configuration; the CLI selects the runtime pin.
 	WireMockVersion string      `yaml:"wiremockVersion,omitempty"`
 	WebSocketPath   string      `yaml:"websocketPath,omitempty"`
 	Project         string      `yaml:"project,omitempty"`
@@ -395,7 +397,7 @@ func Load(root string) (*Project, error) {
 		}
 		maps.Copy(loc, l.Env)
 		p := &Project{Root: root, MaestroRoot: maestro, BuildRoot: filepath.Clean(buildRoot), Platform: name, AppID: t.AppID, Integration: t.Integration,
-			Build: t.Build, Catalog: cfg.Catalog, WireMockVersion: t.WireMockVersion, WebSocketPath: t.WebSocketPath,
+			Build: t.Build, Catalog: cfg.Catalog, WebSocketPath: t.WebSocketPath,
 			Variables: maps.Clone(cfg.Env), TargetVariables: maps.Clone(t.Env), LocalVariables: loc, Devices: append([]string(nil), t.Devices...),
 			ProxyBaseURL: t.ProxyBaseURL, FallbackURL: t.FallbackURL, FBRCURL: t.FBRCURL, OverrideKey: t.OverrideKey, AcceptKey: t.AcceptKey, Env: map[string]string{}}
 		// SDK discovery still uses the machine's actual environment, not test variables.
@@ -408,18 +410,15 @@ func Load(root string) (*Project, error) {
 		if err != nil {
 			return nil, fmt.Errorf("platform %s: %w", name, err)
 		}
-		if p.WireMockVersion == "" {
-			p.WireMockVersion = "3.13.2"
-		}
-		if p.WireMockVersion != "3.13.2" && p.WireMockVersion != "4.0.0-beta.40" {
-			return nil, fmt.Errorf("unsupported wiremockVersion: %s", p.WireMockVersion)
+		// Old pins are accepted for existing projects; the CLI now manages one engine.
+		switch t.WireMockVersion {
+		case "", "3.13.2", "4.0.0-beta.40", wiremock.Version:
+		default:
+			return nil, fmt.Errorf("wiremockVersion is managed by mockstro; remove the setting %q", t.WireMockVersion)
 		}
 		if p.WebSocketPath != "" {
 			if !strings.HasPrefix(p.WebSocketPath, "/") || strings.ContainsAny(p.WebSocketPath, "?#\\ \t\r\n") {
 				return nil, fmt.Errorf("platform %s: websocketPath must be an absolute URL path", name)
-			}
-			if p.WireMockVersion != "4.0.0-beta.40" {
-				return nil, fmt.Errorf("websocketPath requires wiremockVersion=4.0.0-beta.40")
 			}
 		}
 		if p.FBRCURL == "" {

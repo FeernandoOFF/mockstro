@@ -195,3 +195,61 @@ func TestBatchFlowAppendsToAnyStepListStyle(t *testing.T) {
 		}
 	}
 }
+
+func TestMetadataNamespaceAndLegacyPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, metadata string
+		legacy         bool
+	}{
+		{"namespaced", "mockstro:\n  apiProfile: smart\n  apiOverrides: [a]\n  fbrcOverrides: {flag: \"true\"}\n  apiVerifications: [{stub: a, exactly: 1}]\n", false},
+		{"legacy", "properties:\n  apiProfile: smart\n  apiOverrides: [a]\n  fbrcOverrides: {flag: \"true\"}\n  apiVerifications: [{stub: a, exactly: 1}]\n", true},
+		{"flattened", "properties.apiProfile: smart\nproperties.apiOverrides: [a]\nproperties.fbrcOverrides: {flag: \"true\"}\nproperties.apiVerifications: [{stub: a, exactly: 1}]\n", true},
+		{"mixed", "properties: {apiProfile: old, apiOverrides: [old]}\nmockstro:\n  apiProfile: smart\n  apiOverrides: [a]\n  fbrcOverrides: {flag: \"true\"}\n  apiVerifications: [{stub: a, exactly: 1}]\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "flow.yaml")
+			write(t, path, "appId: app\n"+tc.metadata+"---\n- back\n")
+			h, err := ParseHeader(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.validateProperties(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.validateVerifications(path); err != nil {
+				t.Fatal(err)
+			}
+			if h.Profile != "smart" || len(h.Overrides) != 1 || h.Overrides[0] != "a" || h.FBRC["flag"] != "true" || len(h.Verifications) != 1 || h.LegacyMetadata() != tc.legacy {
+				t.Fatalf("header %+v", h)
+			}
+		})
+	}
+	for _, metadata := range []string{"mockstro: []", "mockstro: null", "mockstro: value"} {
+		path := filepath.Join(t.TempDir(), "invalid.yaml")
+		write(t, path, "appId: app\n"+metadata+"\n---\n- back\n")
+		if _, err := ParseHeader(path); err == nil {
+			t.Fatalf("accepted %s", metadata)
+		}
+	}
+}
+
+func TestSanitizingPreservesReportingAndNamespacedMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "flow.yaml")
+	steps := "- runScript: ../relative.js\n# keep this\n"
+	write(t, path, "appId: app\nproperties:\n  apiProfile: old\n  owner: qa\nproperties.apiOverrides: [old]\nmockstro:\n  apiProfile: new\n  apiOverrides: [new]\n---\n"+steps)
+	out, err := SanitizedFlow(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, body, _ := splitDocuments(out)
+	var got struct {
+		Properties map[string]string `yaml:"properties"`
+		Mockstro   map[string]any    `yaml:"mockstro"`
+	}
+	if err := yaml.Unmarshal(header, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Properties) != 1 || got.Properties["owner"] != "qa" || got.Mockstro["apiProfile"] != "new" || string(body) != steps || strings.Contains(string(header), "properties.apiOverrides") {
+		t.Fatalf("sanitized flow %s", out)
+	}
+}

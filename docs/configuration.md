@@ -46,7 +46,7 @@ platforms:
 | `integration` | `lite` or `full`, see [integration](integration.md) |
 | `devices` | emulator/simulator names agents may use, see [devices](devices.md) |
 | `build` | Select Gradle, Xcode, Kotlin Toolchain or an explicit task command; see below |
-| `wiremockVersion` | `3.13.2` (default) or `4.0.0-beta.40` for [WebSockets](websockets.md) |
+| `wiremockVersion` | Legacy setting; omit it. The CLI pins WireMock `4.0.0-beta.41` for HTTP and [WebSockets](websockets.md). Old `3.13.2` / `4.0.0-beta.40` settings are accepted and use the CLI pin. |
 | `proxyBaseUrl`, `fallbackUrl`, `fbrcUrl`, `overrideKey`, `acceptKey` | advanced |
 
 Unknown keys print a warning and are ignored, so newer configs still load.

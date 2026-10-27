@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/feernandooff/mockstro/internal/build"
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/lock"
@@ -138,21 +136,6 @@ func (r *Run) initDir() error {
 	_ = os.WriteFile(filepath.Join(r.Dir, "platform"), []byte(e.Opts.Platform), 0644)
 	r.flowsRoot = filepath.Join(r.Dir, "maestro-flows")
 	r.configPath = e.P.ConfigPath()
-	// Maestro writes artefacts to testOutputDir; give each run a private copy. Paths are
-	// absolute because Maestro resolves them relative to the config file.
-	if b, err := os.ReadFile(e.P.ConfigPath()); err == nil {
-		cfg := map[string]any{}
-		if yaml.Unmarshal(b, &cfg) == nil {
-			cfg["testOutputDir"] = filepath.Join(r.Dir, "results")
-			cfg["flows"] = []string{filepath.Join(e.P.FlowsRoot(), "**")}
-			if out, err := yaml.Marshal(cfg); err == nil {
-				p := filepath.Join(r.Dir, "config.yaml")
-				if os.WriteFile(p, out, 0o644) == nil {
-					r.configPath = p
-				}
-			}
-		}
-	}
 	username := os.Getenv("USER")
 	if u, err := user.Current(); err == nil && username == "" {
 		username = u.Username
@@ -328,7 +311,7 @@ func (e *Engine) EnsureJar(ctx context.Context) (string, error) {
 	if e.jar != "" {
 		return e.jar, nil
 	}
-	jar, err := wiremock.EnsureJarVersion(ctx, e.P.WireMockVersion, filepath.Join(e.P.RuntimeRoot(), "wiremock", "wiremock-standalone-"+e.P.WireMockVersion+".jar"), e.Logf)
+	jar, err := wiremock.EnsureJar(ctx, filepath.Join(e.P.RuntimeRoot(), "wiremock", "wiremock-standalone-"+wiremock.Version+".jar"), e.Logf)
 	if err != nil {
 		return "", err
 	}

@@ -1,6 +1,7 @@
 # WebSocket fixtures
 
-Native WebSocket mocking is opt-in while WireMock 4 is in beta. Configure the target in
+HTTP and native WebSocket mocking use the same checksum-pinned WireMock
+`4.0.0-beta.41`. Configure the target in
 `.maestro/mockstro.yaml`:
 
 ```yaml
@@ -8,12 +9,10 @@ platforms:
   android:
     appId: dev.example.android
     integration: full
-    wiremockVersion: 4.0.0-beta.40
     websocketPath: /ws
 ```
 
-Both supported WireMock releases are checksum-pinned. HTTP-only projects continue to use
-3.13.2. Java 17 or newer is required for the beta. `websocketPath` is optional for
+Java 17 or newer is required. `websocketPath` is optional for
 server-only mocking; it controls the endpoint passed to apps in full integration.
 
 ## Fixtures and profiles
@@ -82,10 +81,10 @@ to `wiremock/__files/`; binary bodies use native WireMock `encoding`.
 
 ## Verification and isolation
 
-Existing `properties.apiVerifications` work for either fixture kind:
+`mockstro.apiVerifications` work for either fixture kind:
 
 ```yaml
-properties:
+mockstro:
   apiProfile: chat
   apiVerifications:
     - stub: ws/connect
@@ -100,10 +99,10 @@ traffic journal shows HTTP requests and incoming/outgoing WebSocket messages; th
 panel shows native message actions.
 
 Before a WebSocket scenario, mockstro stops its attached app, loads both fixture kinds and
-resets both journals, then writes the override. When switching from a WebSocket scenario,
-it also restarts that worker's WireMock process to close old channels and cancel pending
-actions. The next Maestro flow must launch the app. Each worker keeps its own port and
-server. Server-only clients must reconnect when their scenario is switched.
+resets both journals, then writes the override. On every scenario switch, it closes the
+previous message channels and resets HTTP and message mappings and journals without
+restarting the JVM. The next Maestro flow must launch the app. Each worker keeps its own
+port and server. Server-only clients must reconnect when their scenario is switched.
 
 ## Controlled server pushes
 
@@ -141,7 +140,7 @@ credentials separate from ordinary app storage.
 ## Real transport regression
 
 ```sh
-MOCKSTRO_TEST_WIREMOCK_JAR=/path/to/wiremock-4.0.0-beta.40.jar go test ./internal/wiremock -v
+MOCKSTRO_TEST_WIREMOCK_JAR=/path/to/wiremock-standalone-4.0.0-beta.41.jar go test ./internal/wiremock -v
 ```
 
 This test validates the checksum, starts an isolated loopback server, and uses Java's

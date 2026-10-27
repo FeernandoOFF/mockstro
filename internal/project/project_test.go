@@ -243,7 +243,7 @@ platforms:
 			if a.AppID != "example.local" || a.Lite() || a.SourceRoot() != filepath.Clean(filepath.Join(root, "../other-app")) || a.FlowsRoot() != p.FlowsRoot() || len(a.Devices) != 1 || a.Devices[0] != "Local_device" {
 				t.Fatal("local platform configuration lost", a)
 			}
-			if a.Build.Project != "App.xcodeproj" || a.Build.Scheme != "App" || a.Build.Task != "assembleLocal" || a.Build.Artifact != "local/build/*" || a.ProxyBaseURL != "https://api.example.test" || a.FallbackURL != "https://fallback.example.test" || a.FBRCURL != "https://config.example.test" || a.OverrideKey != "local_override" || a.AcceptKey != "local_accept" || a.WireMockVersion != "4.0.0-beta.40" || a.WebSocketPath != "/ws" {
+			if a.Build.Project != "App.xcodeproj" || a.Build.Scheme != "App" || a.Build.Task != "assembleLocal" || a.Build.Artifact != "local/build/*" || a.ProxyBaseURL != "https://api.example.test" || a.FallbackURL != "https://fallback.example.test" || a.FBRCURL != "https://config.example.test" || a.OverrideKey != "local_override" || a.AcceptKey != "local_accept" || a.WebSocketPath != "/ws" {
 				t.Fatal("full local platform settings were not loaded", a)
 			}
 			if a.Variables["USER"] != "shared" || a.LocalVariables["USER"] != "platform-local" || a.LocalVariables["KEEP"] != "root" || p.Targets[shared].LocalVariables["USER"] != "local" || p.Targets[shared].Devices[0] != "Shared_device_override" {
@@ -344,10 +344,10 @@ func TestKotlinAndWebSocketConfiguration(t *testing.T) {
 		t.Fatalf("config: %+v", p)
 	}
 	ios := p.Targets["ios"]
-	if ios.Build.Module != "mobileIos" || ios.Build.Variant != "release" || ios.Build.Artifact != "custom/*.app" || ios.WireMockVersion != "3.13.2" {
+	if ios.Build.Module != "mobileIos" || ios.Build.Variant != "release" || ios.Build.Artifact != "custom/*.app" {
 		t.Fatalf("iOS config: %+v", ios)
 	}
-	for _, bad := range []string{"build: {system: unknown}", "build: {system: kotlin-toolchain, variant: custom}", "wiremockVersion: arbitrary", "websocketPath: /ws", "wiremockVersion: 4.0.0-beta.40, websocketPath: 'ws://host/ws'"} {
+	for _, bad := range []string{"build: {system: unknown}", "build: {system: kotlin-toolchain, variant: custom}", "wiremockVersion: arbitrary", "wiremockVersion: 4.0.0-beta.40, websocketPath: 'ws://host/ws'"} {
 		writeConfig(t, root, "mockstro.yaml", "platforms: {android: {appId: x, "+bad+"}}\n")
 		if _, err := Load(root); err == nil {
 			t.Fatalf("accepted %q", bad)

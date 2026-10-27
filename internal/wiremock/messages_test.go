@@ -34,7 +34,7 @@ func fakeServer(t *testing.T, h http.HandlerFunc) *Server {
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
 	port, _ := strconv.Atoi(strings.Split(server.URL, ":")[2])
-	return &Server{Port: port, RunID: "test-run", MessageSupport: true, http: server.Client()}
+	return &Server{Port: port, RunID: "test-run", http: server.Client()}
 }
 func TestMessageTrafficDirectionsAndOwnership(t *testing.T) {
 	s := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +69,10 @@ func TestReplaceMessagesResetsSeparateJournals(t *testing.T) {
 			return
 		}
 		calls = append(calls, r.Method+" "+r.URL.Path)
-		if r.Method == "POST" {
+		if r.URL.Path == "/__admin/channels" {
+			fmt.Fprint(w, `{"channels":[]}`)
+		}
+		if r.Method == "POST" && r.URL.Path != "/__admin/reset" {
 			var v any
 			if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
 				t.Error(err)
@@ -79,15 +82,11 @@ func TestReplaceMessagesResetsSeparateJournals(t *testing.T) {
 	if _, err := s.Replace([]any{NonceMapping("test-run")}, []any{mapping(t, `{"trigger":{"type":"message"},"actions":[]}`)}); err != nil {
 		t.Fatal(err)
 	}
-	want := "DELETE /__admin/mappings,DELETE /__admin/message-mappings,POST /__admin/message-mappings,POST /__admin/mappings/import,DELETE /__admin/requests,DELETE /__admin/messages"
+	want := "GET /__admin/channels,POST /__admin/reset,POST /__admin/message-mappings,POST /__admin/mappings/import,DELETE /__admin/requests"
 	if strings.Join(calls, ",") != want {
 		t.Fatalf("calls: %v", calls)
 	}
-	s.MessageSupport = false
-	before := len(calls)
-	if _, err := s.Replace(nil, []any{map[string]any{}}); err == nil || len(calls) != before {
-		t.Fatal("v3 mutated before message support check")
-	}
+
 }
 
 func TestReplaceReportsWhetherFailureClearedPreviousMappings(t *testing.T) {
@@ -96,8 +95,8 @@ func TestReplaceReportsWhetherFailureClearedPreviousMappings(t *testing.T) {
 		reset   bool
 	}{
 		{"GET " + NoncePath, false},
-		{"DELETE /__admin/mappings", false},
-		{"DELETE /__admin/message-mappings", true},
+		{"GET /__admin/channels", false},
+		{"POST /__admin/reset", false},
 		{"POST /__admin/mappings/import", true},
 		{"DELETE /__admin/requests", true},
 		{"", true},
@@ -122,6 +121,34 @@ func TestReplaceReportsWhetherFailureClearedPreviousMappings(t *testing.T) {
 	}
 }
 
+func TestReplaceClosesChannelsBeforeResetAndStopsOnClosureFailure(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			var calls []string
+			s := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == NoncePath {
+					fmt.Fprint(w, "test-run")
+					return
+				}
+				calls = append(calls, r.Method+" "+r.URL.Path)
+				if r.URL.Path == "/__admin/channels" {
+					fmt.Fprint(w, `{"channels":[{"id":"old-session"}]}`)
+				} else if fail && r.Method == http.MethodDelete {
+					http.Error(w, "close failed", http.StatusInternalServerError)
+				}
+			})
+			reset, err := s.Replace([]any{NonceMapping("test-run")})
+			if fail {
+				if reset || err == nil || len(calls) != 2 {
+					t.Fatalf("closure failure: reset=%v err=%v calls=%v", reset, err, calls)
+				}
+			} else if err != nil || !reset || strings.Join(calls[:3], ",") != "GET /__admin/channels,DELETE /__admin/channels/old-session,POST /__admin/reset" {
+				t.Fatalf("reset=%v err=%v calls=%v", reset, err, calls)
+			}
+		})
+	}
+}
+
 // Opt in with the checksum-pinned standalone JAR. No Go WebSocket dependency is needed.
 func TestRealWebSocketRoundTripAndReset(t *testing.T) {
 	jar := os.Getenv("MOCKSTRO_TEST_WIREMOCK_JAR")
@@ -129,7 +156,7 @@ func TestRealWebSocketRoundTripAndReset(t *testing.T) {
 		t.Skip("set MOCKSTRO_TEST_WIREMOCK_JAR to the pinned beta JAR")
 	}
 	sum, err := fsx.SHA256(jar)
-	if err != nil || sum != WebSocketSHA256 {
+	if err != nil || sum != SHA256 {
 		t.Fatalf("beta checksum: %s %v", sum, err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

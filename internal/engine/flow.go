@@ -95,21 +95,10 @@ func (r *Run) activate(ctx context.Context, profile string, fbrc map[string]stri
 		}
 	}
 	websocket := len(messageMappings) > 0 || e.P.WebSocketPath != ""
-	if websocket && !r.WM.MessageSupport {
-		return reset, fmt.Errorf("WebSocket fixtures require wiremockVersion: %s", wiremock.WebSocketVersion)
-	}
 	if websocket || r.websocketActive {
 		if r.Device != "" {
 			if err := e.Plat.StopApp(ctx, r.Device); err != nil {
 				return reset, fmt.Errorf("stop app before WebSocket scenario: %w", err)
-			}
-		}
-		if r.websocketActive {
-			reset = true
-			r.WM.Stop()
-			r.WM = nil
-			if err := r.startWiremock(ctx); err != nil {
-				return reset, err
 			}
 		}
 	}
@@ -340,12 +329,9 @@ func (r *Run) Verify(vs []fixtures.Verification) ([]VerificationResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	var messages []wiremock.LoggedMessage
-	if r.WM.MessageSupport {
-		messages, err = r.WM.MessageJournal(true)
-		if err != nil {
-			return nil, err
-		}
+	messages, err := r.WM.MessageJournal(true)
+	if err != nil {
+		return nil, err
 	}
 	var out []VerificationResult
 	r.logf("API verifications:")
@@ -395,15 +381,13 @@ func (r *Run) reportFallback() []string {
 		}
 		unmatched = append(unmatched, req.Request.Method+" "+req.Request.URL)
 	}
-	if r.WM.MessageSupport {
-		messages, err := r.WM.MessageJournal(true)
-		if err != nil {
-			r.warnf("%v", err)
-		} else {
-			for _, m := range messages {
-				if m.EventType == "received" && !m.WasMatched {
-					unmatched = append(unmatched, "WS "+m.Channel.InitiatingRequest.URL+" "+m.Message.Body)
-				}
+	messages, err := r.WM.MessageJournal(true)
+	if err != nil {
+		r.warnf("%v", err)
+	} else {
+		for _, m := range messages {
+			if m.EventType == "received" && !m.WasMatched {
+				unmatched = append(unmatched, "WS "+m.Channel.InitiatingRequest.URL+" "+m.Message.Body)
 			}
 		}
 	}

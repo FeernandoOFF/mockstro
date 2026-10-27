@@ -478,23 +478,9 @@ func TestDeadRunDirIsDeletable(t *testing.T) {
 	}
 }
 
-func TestNewArtifactsFindsThisFlowsScreenshots(t *testing.T) {
-	e, _ := testEngine(t, "agent", func(c execx.Cmd) (string, error) { return "", nil })
-	r := e.newRun("run", 0)
-	r.Dir = t.TempDir()
-	old := filepath.Join(r.Dir, "results", "2026-09-23_100000", "Earlier flow")
-	os.MkdirAll(filepath.Join(old, "screenshots"), 0o755)
-	before := r.maestro().Workspace.ResultDirs()
-	cur := filepath.Join(r.Dir, "results", "2026-09-23_100100", "Account home")
-	os.MkdirAll(filepath.Join(cur, "screenshots"), 0o755)
-	for _, n := range []string{"step-009-assert.png", "step-003-runFlow.png"} {
-		os.WriteFile(filepath.Join(cur, "screenshots", n), []byte("png"), 0o644)
-	}
-	artifacts := r.maestro().Workspace.NewArtifacts(before)
-	dir, shots := artifacts.Dir, artifacts.Shots
-	if dir != cur || len(shots) != 2 || !strings.HasSuffix(shots[1], "step-009-assert.png") {
-		t.Fatalf("artifacts %q %v", dir, shots)
-	}
+func TestJUnitAttachesScreenshots(t *testing.T) {
+	dir := t.TempDir()
+	shots := []string{filepath.Join(dir, "explicit.png"), filepath.Join(dir, "failure.png")}
 	s := NewSummary([]*Result{{Feature: "a", File: "x.yaml", Stage: "TEST", Exit: 1, Artifacts: dir, Shots: shots}}, 0, "")
 	if out := string(JUnit(s, "/")); !strings.Contains(out, "[[ATTACHMENT|"+shots[1]+"]]") {
 		t.Fatalf("junit lacks attachment:\n%s", out)

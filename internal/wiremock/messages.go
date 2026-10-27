@@ -4,9 +4,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"time"
 )
+
+// closeChannels ends the previous scenario's sessions without restarting the JVM.
+// Replace checks ownership before calling this; ordinary HTTP keep-alives are unaffected.
+func (s *Server) closeChannels() error {
+	data, err := s.do(http.MethodGet, "/__admin/channels", nil)
+	if err != nil {
+		return fmt.Errorf("list message channels: %w", err)
+	}
+	var result struct {
+		Channels []struct{ ID string } `json:"channels"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return fmt.Errorf("read message channels: %w", err)
+	}
+	for _, channel := range result.Channels {
+		if channel.ID == "" {
+			return fmt.Errorf("message channel has no id")
+		}
+		if _, err := s.do(http.MethodDelete, "/__admin/channels/"+url.PathEscape(channel.ID), nil); err != nil {
+			return fmt.Errorf("close message channel: %w", err)
+		}
+	}
+	return nil
+}
 
 type LoggedMessage struct {
 	EventType  string    `json:"eventType"`
@@ -33,9 +58,6 @@ func (m LoggedMessage) StubName() string {
 }
 
 func (s *Server) MessageJournal(own bool) ([]LoggedMessage, error) {
-	if !s.MessageSupport {
-		return nil, fmt.Errorf("message journal requires WireMock %s", WebSocketVersion)
-	}
 	if own {
 		if err := s.AssertOwn(); err != nil {
 			return nil, err
@@ -60,9 +82,6 @@ func (s *Server) Traffic(own bool) ([]LoggedRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !s.MessageSupport {
-		return requests, nil
-	}
 	messages, err := s.MessageJournal(own)
 	if err != nil {
 		return nil, err
@@ -85,9 +104,6 @@ func (s *Server) Traffic(own bool) ([]LoggedRequest, error) {
 }
 
 func (s *Server) SendMessage(path, body string) error {
-	if !s.MessageSupport {
-		return fmt.Errorf("sending messages requires WireMock %s", WebSocketVersion)
-	}
 	if err := s.AssertOwn(); err != nil {
 		return err
 	}
