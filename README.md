@@ -17,6 +17,10 @@ the result. There's a CLI for scripts, agents and CI, and a TUI for people.
 
 ## Quickstart
 
+Current release candidate: [v0.1.0-rc.5](https://github.com/FeernandoOFF/mockstro/releases/tag/v0.1.0-rc.5).
+Prebuilt binaries support macOS and Linux on Apple Silicon/ARM64 and Intel/AMD64;
+Go is not required.
+
 There are two ways in. Developers and CI add mockstro to the app repo and run its
 `./mockstrow` wrapper, which follows the version the project pins. QA and others who mostly
 use the [browser UI](docs/web-ui.md) install one global CLI and a desktop shortcut.
@@ -26,7 +30,7 @@ use the [browser UI](docs/web-ui.md) install one global CLI and a desktop shortc
 From your app repo:
 
 ```bash
-version=v0.1.0-rc.3
+version=v0.1.0-rc.5
 curl -fsSLo install.sh "https://github.com/FeernandoOFF/mockstro/releases/download/$version/install.sh"
 sh install.sh "$version" && rm install.sh
 ```
@@ -39,23 +43,33 @@ doesn't exist yet, it asks for your app IDs and creates a starter suite; existin
 Commit `mockstrow` and `.maestro/`. Then anyone who clones the repo runs:
 
 ```bash
+./mockstrow --version
 ./mockstrow check   # validates fixtures; checks Java 17+, Maestro and WireMock (offers to install Maestro)
 ./mockstrow run     # runs flows tagged smoke
 ./mockstrow         # opens the TUI
 ```
 
 You also need `adb` (Android) or Xcode (iOS), and an emulator or simulator. Java is
-installed manually, e.g. `brew install --cask temurin@17`.
+installed manually, e.g. `brew install --cask temurin@17`. Maestro 2.11+ is recommended.
 
-To change versions, edit `cliVersion` in `mockstro.yaml`. Optional: `./mockstrow skill install --claude`
-adds an agent skill.
+To upgrade an existing project, set the top-level pin in `.maestro/mockstro.yaml`:
+
+```yaml
+cliVersion: v0.1.0-rc.5
+```
+
+Then run `./mockstrow --version` and `./mockstrow check`; the wrapper downloads and
+checksum-verifies the pinned binary automatically. Commit the updated pin. The project
+installer is for adding a wrapper and refuses to overwrite an existing one.
+
+Optional: `./mockstrow skill install --claude` adds an agent skill.
 
 ### Install the app (QA)
 
 Once, on a Mac with Java 17+ (`brew install --cask temurin@17`):
 
 ```bash
-version=v0.1.0-rc.3
+version=v0.1.0-rc.5
 curl -fsSLo install-global.sh "https://github.com/FeernandoOFF/mockstro/releases/download/$version/install-global.sh"
 sh install-global.sh "$version" && rm install-global.sh
 ```
@@ -64,7 +78,10 @@ This installs `mockstro` to `~/.local/bin` (`BIN_DIR` changes it) and creates
 `~/Applications/Mockstro.app`. Double-click **Mockstro**, then paste the app repo's address
 under **Clone from Git** (or choose a folder you already cloned); the page remembers it and
 lists other projects you open. **Setup check** on the
-page says what else is missing. Rerun the installer with a newer version to update.
+page says what else is missing. Rerun these commands to update an existing global
+installation. To check its version, run `~/.local/bin/mockstro --version` (or use your
+custom `BIN_DIR`). On Linux, or for a CLI-only macOS install, use
+`sh install-global.sh "$version" --no-launcher` before removing the installer.
 
 The global CLI runs every project with its own version, not the project's pin; use a
 version at least as new as the projects' `cliVersion`.
