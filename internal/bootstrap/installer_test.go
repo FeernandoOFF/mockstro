@@ -96,6 +96,7 @@ cp "$ASSETS/${3##*/}" "$2"
 }
 
 func TestGlobalInstaller(t *testing.T) {
+	t.Setenv("JAVA_SETUP_FAIL", "")
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX installer")
 	}
@@ -103,7 +104,8 @@ func TestGlobalInstaller(t *testing.T) {
 	assets := filepath.Join(root, "assets")
 	fakes := filepath.Join(root, "fakes")
 	binDir := filepath.Join(root, "global bin")
-	for _, path := range []string{assets, fakes} {
+	// BIN_DIR can live inside a project; the global Java check must not find it.
+	for _, path := range []string{assets, fakes, filepath.Join(root, ".maestro")} {
 		if err := os.MkdirAll(path, 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -113,7 +115,16 @@ set -eu
 while [ "$1" != --output ]; do shift; done
 cp "$ASSETS/${3##*/}" "$2"
 `), 0755)
-	payload := []byte("#!/bin/sh\necho cli\n")
+	payload := []byte(`#!/bin/sh
+printf 'cli <%s>\n' "$@"
+dir=$PWD
+while :; do
+    if [ -d "$dir/.maestro" ]; then echo unexpected-project-check >&2; exit 24; fi
+    [ "$dir" != / ] || break
+    dir=$(dirname "$dir")
+done
+if [ "${JAVA_SETUP_FAIL:-}" = yes ]; then exit 23; fi
+`)
 	launcher := []byte("printf 'launcher <%s>\\n' \"$@\"\n")
 	asset := "mockstro_v0.1.0_" + runtime.GOOS + "_" + runtime.GOARCH
 	write := func(launcherSum []byte) {
@@ -145,6 +156,9 @@ cp "$ASSETS/${3##*/}" "$2"
 	if wantLauncher := runtime.GOOS == "darwin"; strings.Contains(out, "launcher <"+cli+">") != wantLauncher {
 		t.Fatalf("launcher run = %v, want %v: %q", !wantLauncher, wantLauncher, out)
 	}
+	if !strings.Contains(out, "cli <check>\ncli <--install>") {
+		t.Fatalf("Java setup was not invoked: %q", out)
+	}
 	if !strings.Contains(out, "Add "+binDir+" to your PATH") {
 		t.Fatalf("no PATH hint: %q", out)
 	}
@@ -166,6 +180,12 @@ cp "$ASSETS/${3##*/}" "$2"
 		}
 	}
 
+	t.Setenv("JAVA_SETUP_FAIL", "yes")
+	out, err = run("v0.1.0", "--no-launcher")
+	if err == nil || strings.Contains(out, "Installed mockstro") {
+		t.Fatalf("ignored Java setup failure: %q, %v", out, err)
+	}
+	t.Setenv("JAVA_SETUP_FAIL", "")
 	for _, version := range []string{"latest", "v0.1.0/other"} {
 		if out, err := run(version); err == nil {
 			t.Fatalf("accepted %q: %s", version, out)

@@ -44,13 +44,15 @@ Commit `mockstrow` and `.maestro/`. Then anyone who clones the repo runs:
 
 ```bash
 ./mockstrow --version
-./mockstrow check   # validates fixtures; checks Java 17+, Maestro and WireMock (offers to install Maestro)
+./mockstrow check   # validates fixtures; finds/installs Java 17+; checks Maestro and WireMock
 ./mockstrow run     # runs flows tagged smoke
 ./mockstrow         # opens the TUI
 ```
 
-You also need `adb` (Android) or Xcode (iOS), and an emulator or simulator. Java is
-installed manually, e.g. `brew install --cask temurin@17`. Maestro 2.11+ is recommended.
+You also need `adb` (Android) or Xcode (iOS), and an emulator or simulator. Java 17+
+is found or installed automatically during installation and `check`.
+`check` offers to install Maestro; use `check --install` to accept that in CI.
+Maestro 2.11+ is recommended.
 
 To upgrade an existing project, set the top-level pin in `.maestro/mockstro.yaml`:
 
@@ -66,7 +68,7 @@ Optional: `./mockstrow skill install --claude` adds an agent skill.
 
 ### Install the app (QA)
 
-Once, on a Mac with Java 17+ (`brew install --cask temurin@17`):
+Once, on a Mac:
 
 ```bash
 version=v0.1.0-rc.5
@@ -82,6 +84,14 @@ page says what else is missing. Rerun these commands to update an existing globa
 installation. To check its version, run `~/.local/bin/mockstro --version` (or use your
 custom `BIN_DIR`). On Linux, or for a CLI-only macOS install, use
 `sh install-global.sh "$version" --no-launcher` before removing the installer.
+
+Both installers look for a working Java 17+ on `PATH`, in `JAVA_HOME`, and in common
+JDK locations (macOS JavaVirtualMachines, Homebrew, Linux JVM directories, Android
+Studio, SDKMAN and jenv). If none works, setup runs `brew install openjdk@17`.
+If Homebrew is unavailable or installation fails, setup stops with an error.
+Mockstro finds the installed Java on future launches, including the QA desktop
+shortcut, without editing shell profiles. Outside a project, `mockstro check`
+checks Java and skips project checks.
 
 The global CLI runs every project with its own version, not the project's pin; use a
 version at least as new as the projects' `cliVersion`.

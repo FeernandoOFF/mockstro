@@ -13,27 +13,6 @@ import (
 	maestroexec "github.com/feernandooff/mockstro/internal/maestro"
 )
 
-func TestMaestroSetupRequiresWorkingJava17(t *testing.T) {
-	for _, output := range []string{"missing", `java version "1.8.0_432"`, `openjdk version "16.0.2"`, "unknown version"} {
-		t.Run(output, func(t *testing.T) {
-			e, fake := testEngine(t, "human", func(c execx.Cmd) (string, error) {
-				if c.String() != "java -version" {
-					t.Fatalf("attempted installation without Java: %s", c)
-				}
-				if output == "missing" {
-					return "", errors.New("unable to locate a Java runtime")
-				}
-				return output, nil
-			})
-			fake.Paths["brew"] = "/bin/brew"
-			err := e.EnsureMaestro(context.Background(), yes)
-			if err == nil || !strings.Contains(err.Error(), "brew install --cask temurin@17") || len(fake.Calls) != 1 {
-				t.Fatalf("Java guidance: %v, calls=%v", err, fake.Calls)
-			}
-		})
-	}
-}
-
 func TestMaestroSetupReusesExistingInstall(t *testing.T) {
 	for _, onPath := range []bool{true, false} {
 		t.Run(map[bool]string{true: "PATH", false: "official-install-dir"}[onPath], func(t *testing.T) {
@@ -221,7 +200,7 @@ func TestDeclinedMaestroInstallDoesNothing(t *testing.T) {
 func TestMissingJavaAndMaestroGiveSetupGuidance(t *testing.T) {
 	e, fake := testEngine(t, "human", nil)
 	err := e.CheckEnvironment("check")
-	if err == nil || !strings.Contains(err.Error(), "brew install --cask temurin@17") {
+	if err == nil || !strings.Contains(err.Error(), "Homebrew") {
 		t.Fatalf("missing Java: %v", err)
 	}
 	fake.Paths["java"], fake.Paths["adb"] = "/bin/java", "/bin/adb"

@@ -1,42 +1,21 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/javaruntime"
 	"github.com/feernandooff/mockstro/internal/maestro"
 )
 
-const javaInstallHint = "install Java 17+ with `brew install --cask temurin@17` on macOS (Linux/Homebrew: `brew install openjdk@17`), then check JAVA_HOME and rerun check"
-
-var javaVersion = regexp.MustCompile(`(?:openjdk|java)\s+(?:version\s+)?"?(\d+)(?:\.(\d+))?`)
+const javaInstallHint = javaruntime.Hint
 
 // EnsureMaestro installs Maestro only when confirm agrees; existing installs are left alone.
 func (e *Engine) EnsureMaestro(ctx context.Context, confirm func() bool) error {
-	// macOS supplies a java launcher even when no JDK is installed.
-	var version bytes.Buffer
-	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	err := e.Exec.Run(checkCtx, execx.Cmd{Name: "java", Args: []string{"-version"}, Stdout: &version, Stderr: &version})
-	cancel()
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if err != nil {
-		return fmt.Errorf("Java is unavailable: %w; %s", err, javaInstallHint)
-	}
-	match := javaVersion.FindStringSubmatch(version.String())
-	major := 0
-	if len(match) > 1 {
-		major, _ = strconv.Atoi(match[1])
-	}
-	if major < 17 {
-		return fmt.Errorf("Java 17+ is required (java -version: %s); %s", strings.TrimSpace(version.String()), javaInstallHint)
+	if err := javaruntime.Ensure(ctx, e.Exec, e.Logf); err != nil {
+		return err
 	}
 	if command, err := maestro.Command(e.Exec); err == nil {
 		e.Logf("Maestro is ready at %s (existing installation).", command)

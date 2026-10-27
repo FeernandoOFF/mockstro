@@ -25,11 +25,9 @@ as_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"; }
 {
   echo "set bin to $(as_string "$bin")"
   echo "set logFile to $(as_string "$log")"
-  # A login shell gives the app a PATH without loading ~/.zshrc. Homebrew's JDKs are keg-only,
-  # so add them, and prefer any registered JDK 17+ (e.g. Temurin) that java_home finds.
+  # Java discovery in the CLI also works with the desktop launcher PATH.
   cat <<'APPLESCRIPT'
-set jdks to "/opt/homebrew/opt/openjdk/bin:/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/opt/openjdk@17/bin:/usr/local/opt/openjdk/bin:/usr/local/opt/openjdk@21/bin:/usr/local/opt/openjdk@17/bin"
-set startUI to "export PATH=" & jdks & ":/opt/homebrew/bin:/usr/local/bin:$PATH; if jh=$(/usr/libexec/java_home -v 17+ 2>/dev/null); then export PATH=$jh/bin:$PATH; fi; exec \"$1\" ui"
+set startUI to "export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; exec \"$1\" ui"
 do shell script "/bin/zsh -lc " & quoted form of startUI & " mockstro-ui " & quoted form of bin & " >> " & quoted form of logFile & " 2>&1 &"
 APPLESCRIPT
 } > "$script"
