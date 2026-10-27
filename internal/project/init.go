@@ -44,7 +44,7 @@ func Init(root string, cfg Config) ([]string, error) {
 	files := map[string][]byte{
 		"mockstro.yaml":                  data,
 		"config.yaml":                    []byte("flows:\n  - flows/**\n"),
-		"flows/smoke/launch.yaml":        []byte("appId: ${APP_ID}\nname: Launch app\ntags: [smoke]\nproperties:\n  apiProfile: default\n---\n- launchApp\n# Add assertions and native runFlow.when.platform conditions as needed.\n"),
+		"flows/smoke/launch.yaml":        []byte("appId: ${APP_ID}\nname: Launch app\ntags: [smoke]\nmockstro:\n  apiProfile: default\n---\n- launchApp\n# Add assertions and native runFlow.when.platform conditions as needed.\n"),
 		"shared/.gitkeep":                nil,
 		"wiremock/stubs/health.json":     []byte("{\"name\":\"health\",\"request\":{\"method\":\"GET\",\"url\":\"/api/health\"},\"response\":{\"status\":200,\"jsonBody\":{\"status\":\"ok\"}}}\n"),
 		"wiremock/__files/.gitkeep":      nil,

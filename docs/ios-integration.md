@@ -254,7 +254,7 @@ arguments, permissions, selectors or navigation that differ by platform:
 ```yaml
 appId: ${APP_ID}
 tags: [smoke]
-properties:
+mockstro:
   apiProfile: default
 ---
 - runFlow:

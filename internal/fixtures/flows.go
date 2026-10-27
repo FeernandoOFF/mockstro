@@ -101,6 +101,11 @@ func ParseHeader(path string) (*Header, error) {
 	if raw == nil {
 		raw = map[string]any{}
 	}
+	if value, exists := raw["mockstro"]; exists {
+		if _, ok := value.(map[string]any); !ok {
+			return nil, fmt.Errorf("mockstro must be a YAML map in %s", path)
+		}
+	}
 	h := &Header{Path: path, raw: raw}
 	if len(bytes.TrimSpace(body)) > 0 {
 		var steps any
@@ -173,8 +178,30 @@ func intPtr(m map[string]any, k string) *int {
 	return nil
 }
 
-// prop reads properties.<key>, also accepting the flattened "properties.<key>" spelling.
+var runnerProperties = []string{"apiProfile", "apiOverrides", "apiVerifications", "fbrcOverrides"}
+
+// LegacyMetadata reports whether the flow needs a copy with runner-only reporting
+// properties removed before Maestro can parse it.
+func (h *Header) LegacyMetadata() bool {
+	props, _ := h.raw["properties"].(map[string]any)
+	for _, key := range runnerProperties {
+		if _, ok := props[key]; ok {
+			return true
+		}
+		if _, ok := h.raw["properties."+key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// prop prefers mockstro.<key>, accepting both historical properties spellings.
 func (h *Header) prop(key string) any {
+	if props, ok := h.raw["mockstro"].(map[string]any); ok {
+		if v, exists := props[key]; exists {
+			return v
+		}
+	}
 	if props, ok := h.raw["properties"].(map[string]any); ok {
 		if v, ok := props[key]; ok && v != nil {
 			return v
@@ -183,34 +210,46 @@ func (h *Header) prop(key string) any {
 	return h.raw["properties."+key]
 }
 
+func (h *Header) propertyName(key string) string {
+	if props, ok := h.raw["mockstro"].(map[string]any); ok {
+		if _, exists := props[key]; exists {
+			return "mockstro." + key
+		}
+	}
+	if h.LegacyMetadata() {
+		return "properties." + key
+	}
+	return "mockstro." + key
+}
+
 // validateProperties checks a flow or scenario header's properties.
 func (h *Header) validateProperties(rel string) error {
 	if h.Profile == "" {
-		return fmt.Errorf("missing properties.apiProfile in %s", rel)
+		return fmt.Errorf("missing %s in %s", h.propertyName("apiProfile"), rel)
 	}
 	if v := h.prop("apiOverrides"); v != nil {
 		list, ok := v.([]any)
 		if !ok {
-			return fmt.Errorf("properties.apiOverrides must be a string array in %s", rel)
+			return fmt.Errorf("%s must be a string array in %s", h.propertyName("apiOverrides"), rel)
 		}
 		for _, item := range list {
 			if s, ok := item.(string); !ok || s == "" {
-				return fmt.Errorf("properties.apiOverrides must be a string array in %s", rel)
+				return fmt.Errorf("%s must be a string array in %s", h.propertyName("apiOverrides"), rel)
 			}
 		}
 	}
 	if v := h.prop("fbrcOverrides"); v != nil {
 		m, ok := v.(map[string]any)
 		if !ok {
-			return fmt.Errorf("properties.fbrcOverrides must contain non-empty keys and string values in %s", rel)
+			return fmt.Errorf("%s must contain non-empty keys and string values in %s", h.propertyName("fbrcOverrides"), rel)
 		}
 		for k, val := range m {
 			if _, ok := val.(string); !ok || k == "" {
-				return fmt.Errorf("properties.fbrcOverrides must contain non-empty keys and string values in %s (values are always strings; quote %q)", rel, k)
+				return fmt.Errorf("%s must contain non-empty keys and string values in %s (values are always strings; quote %q)", h.propertyName("fbrcOverrides"), rel, k)
 			}
 		}
 		if _, err := remoteconfig.Validate(h.FBRC); err != nil {
-			return fmt.Errorf("properties.fbrcOverrides in %s: %w", rel, err)
+			return fmt.Errorf("%s in %s: %w", h.propertyName("fbrcOverrides"), rel, err)
 		}
 	}
 	return nil
@@ -222,7 +261,7 @@ func (h *Header) validateVerifications(rel string) error {
 		return nil
 	}
 	list, ok := v.([]any)
-	bad := fmt.Errorf("properties.apiVerifications has invalid entries in %s", rel)
+	bad := fmt.Errorf("%s has invalid entries in %s", h.propertyName("apiVerifications"), rel)
 	if !ok {
 		return bad
 	}
@@ -376,8 +415,20 @@ func sanitizedHeader(path string) (*yaml.Node, []byte, error) {
 		m := node.Content[0]
 		kept := m.Content[:0:0]
 		for i := 0; i+1 < len(m.Content); i += 2 {
-			switch m.Content[i].Value {
-			case "properties", "properties.apiProfile", "properties.apiOverrides", "properties.apiVerifications", "properties.fbrcOverrides":
+			key, value := m.Content[i], m.Content[i+1]
+			if key.Value == "properties" && value.Kind == yaml.MappingNode {
+				var reporting []*yaml.Node
+				for j := 0; j+1 < len(value.Content); j += 2 {
+					if !slices.Contains(runnerProperties, value.Content[j].Value) {
+						reporting = append(reporting, value.Content[j], value.Content[j+1])
+					}
+				}
+				value.Content = reporting
+				if len(reporting) == 0 {
+					continue
+				}
+			}
+			if strings.HasPrefix(key.Value, "properties.") && slices.Contains(runnerProperties, strings.TrimPrefix(key.Value, "properties.")) {
 				continue
 			}
 			kept = append(kept, m.Content[i], m.Content[i+1])

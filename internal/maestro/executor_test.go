@@ -49,7 +49,7 @@ func TestRunBuildsCommandStreamsOutputAndCollectsNewArtifacts(t *testing.T) {
 			x, f, fake := executor(t)
 			old := filepath.Join(x.Workspace.Dir, "results", "old", "flow")
 			writeFile(t, filepath.Join(old, "screenshots", "old.png"), "")
-			fresh := filepath.Join(x.Workspace.Dir, "results", "new", "flow")
+			var fresh string
 			var output []string
 			x.Output = func(flow, line string) {
 				if flow != f.Source.Rel {
@@ -62,7 +62,18 @@ func TestRunBuildsCommandStreamsOutputAndCollectsNewArtifacts(t *testing.T) {
 				if recording != "" {
 					args = []string{"--device", "device-1", "record", "--local"}
 				}
-				args = append(args, "--config", x.Workspace.ConfigPath, "--debug-output", filepath.Join(x.Workspace.Dir, "maestro-debug", "flow"), "-e", "APP_ID=app", "-e", "Z=last", filepath.Join(x.Workspace.FlowsRoot, "flows", "feature", "test.yaml"))
+				debug := c.Args[len(args)+3]
+				if !strings.HasPrefix(debug, filepath.Join(x.Workspace.Dir, "results", "flow-")) {
+					t.Fatalf("output directory %s", debug)
+				}
+				fresh = filepath.Join(debug, "flow")
+				args = append(args, "--config", x.Workspace.ConfigPath, "--debug-output", debug)
+				if recording == "" {
+					args = append(args, "--flatten-debug-output")
+				} else {
+					fresh = filepath.Join(debug, ".maestro", "tests", "ts", "flow")
+				}
+				args = append(args, "-e", "APP_ID=app", "-e", "Z=last", f.Source.Path)
 				if recording != "" {
 					args = append(args, recording)
 				}
@@ -78,6 +89,7 @@ func TestRunBuildsCommandStreamsOutputAndCollectsNewArtifacts(t *testing.T) {
 				}
 				io.WriteString(c.Stdout, "hello\r\nprogress\rfinished\n")
 				io.WriteString(c.Stderr, "trailing")
+				writeFile(t, filepath.Join(fresh, "manifest.json"), `{"entries":[{"kind":"SCREENSHOT","relativePath":"screenshots","count":2}]}`)
 				writeFile(t, filepath.Join(fresh, "screenshots", "b.png"), "")
 				writeFile(t, filepath.Join(fresh, "screenshots", "a.png"), "")
 				return "", nil
@@ -158,5 +170,34 @@ func TestCommandFallsBackToConfiguredInstallation(t *testing.T) {
 	fake := &execx.Fake{Paths: map[string]string{path: path}}
 	if got, err := maestro.Command(fake); err != nil || got != path {
 		t.Fatalf("Command = %q, %v", got, err)
+	}
+}
+
+func TestFlowPathUsesOriginalNamespaceAndCopiesOnlyLegacyMetadata(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprint(legacy), func(t *testing.T) {
+			x, f, _ := executor(t)
+			metadata := "mockstro:\n  apiProfile: default\nproperties:\n  owner: qa\n"
+			if legacy {
+				metadata = "properties:\n  owner: qa\n  apiProfile: default\n"
+			}
+			source := "appId: app\n" + metadata + "---\n- runScript: ./relative.js\n"
+			writeFile(t, f.Source.Path, source)
+			path, err := x.Workspace.FlowPath(f.Source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (path == f.Source.Path) == legacy {
+				t.Fatalf("flow path %q, legacy=%v", path, legacy)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || !strings.Contains(string(data), "owner: qa") {
+				t.Fatalf("reporting properties lost: %s %v", data, err)
+			}
+			original, _ := os.ReadFile(f.Source.Path)
+			if string(original) != source {
+				t.Fatal("source changed")
+			}
+		})
 	}
 }

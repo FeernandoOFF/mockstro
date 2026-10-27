@@ -117,13 +117,12 @@ func Plan(p *project.Project, o Options) ([]TargetRun, bool, error) {
 // Preparation and test failures belong to their target; cancellation belongs to the suite.
 func RunSuite(ctx context.Context, p *project.Project, o Options, ex execx.Runner, sink Sink) *Summary {
 	var jarMu sync.Mutex
-	jars := map[string]string{}
+	var jar string
 	return runSuite(ctx, p, o, ex, sink, func(e *Engine, flows []*fixtures.Flow) *Summary {
 		if err := e.CheckEnvironment("run"); err != nil {
 			return &Summary{Err: err}
 		}
 		jarMu.Lock()
-		jar := jars[e.P.WireMockVersion]
 		if jar == "" {
 			var err error
 			jar, err = e.EnsureJar(ctx)
@@ -131,7 +130,6 @@ func RunSuite(ctx context.Context, p *project.Project, o Options, ex execx.Runne
 				jarMu.Unlock()
 				return &Summary{Err: err}
 			}
-			jars[e.P.WireMockVersion] = jar
 		}
 		jarMu.Unlock()
 		e.jar = jar

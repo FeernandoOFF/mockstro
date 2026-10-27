@@ -39,6 +39,7 @@ type batch struct {
 	started    []bool
 	halted     bool
 	seen       map[string]bool
+	outputRoot string
 	curDir     string
 	pending    int
 	pendingDir string
@@ -54,7 +55,7 @@ func (x *Executor) Batch(ctx context.Context, flows []Flow, hooks Hooks, failFas
 	bctx, stop := context.WithCancel(ctx)
 	defer stop()
 	b := &batch{x: x, ctx: ctx, stop: stop, flows: flows, hooks: hooks, failFast: failFast, index: map[string]int{},
-		cur: -1, pending: -1, started: make([]bool, len(flows)), seen: x.Workspace.ResultDirs()}
+		cur: -1, pending: -1, started: make([]bool, len(flows)), seen: map[string]bool{}}
 	fail := func(err error) bool {
 		for i := range flows {
 			hooks.Initialize(i)
@@ -113,8 +114,9 @@ func (x *Executor) Batch(ctx context.Context, flows []Flow, hooks Hooks, failFas
 	if x.Device != "" {
 		args = append(args, "--device", x.Device)
 	}
-	debug := filepath.Join(x.Workspace.Dir, "maestro-debug", strings.TrimSuffix(filepath.Base(log.Name()), ".log"))
-	args = append(args, "test", "--config", config, "--debug-output", debug)
+	debug := filepath.Join(x.Workspace.Dir, "results", strings.TrimSuffix(filepath.Base(log.Name()), ".log"))
+	b.outputRoot = debug
+	args = append(args, "test", "--config", config, "--debug-output", debug, "--flatten-debug-output")
 	args = append(args, paths...)
 	x.log(fmt.Sprintf("Running %d flow(s) in one Maestro session", len(flows)))
 	b.tail = &logTail{dir: debug, w: execx.NewLines(nil, b.step)}
@@ -255,7 +257,7 @@ func (b *batch) flush() {
 
 func (b *batch) fresh() []string {
 	var dirs []string
-	for d := range b.x.Workspace.ResultDirs() {
+	for d := range flowDirs(b.outputRoot) {
 		if !b.seen[d] {
 			b.seen[d] = true
 			dirs = append(dirs, d)
@@ -289,11 +291,7 @@ func (t *logTail) drain() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.f == nil {
-		logs, _ := filepath.Glob(filepath.Join(t.dir, ".maestro", "tests", "*", "maestro.log"))
-		if len(logs) == 0 {
-			return
-		}
-		t.f, _ = os.Open(logs[0])
+		t.f, _ = os.Open(filepath.Join(t.dir, "maestro.log"))
 	}
 	if t.f != nil {
 		_, _ = io.Copy(t.w, t.f)

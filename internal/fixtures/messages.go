@@ -10,9 +10,6 @@ import (
 )
 
 func (s *Store) validateMessage(stub *ojson.Object, name, file string) error {
-	if s.P.WireMockVersion != "4.0.0-beta.40" {
-		return fmt.Errorf("message fixtures require wiremockVersion: 4.0.0-beta.40 in %s", file)
-	}
 	if stub.Has("request") || stub.Has("response") || stub.Has("extends") {
 		return fmt.Errorf("message fixture cannot contain request, response, or extends in %s", file)
 	}

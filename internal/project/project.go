@@ -32,9 +32,8 @@ type Project struct {
 	Warnings        []string // unknown config keys, ignored
 	Catalog         CatalogConfig
 
-	Build           BuildConfig
-	WireMockVersion string
-	WebSocketPath   string
+	Build         BuildConfig
+	WebSocketPath string
 
 	Platform    string
 	AppID       string

@@ -18,7 +18,6 @@ func message(t *testing.T, body string) *ojson.Object {
 }
 func TestMessageIdentityAndValidation(t *testing.T) {
 	s := newStore(t)
-	s.P.WireMockVersion = "4.0.0-beta.40"
 	a := `{"name":"a","trigger":{"type":"message","channel":{"type":"websocket","initiatingRequestPattern":{"url":"/ws"}},"message":{"body":{"equalTo":"connect"}}},"actions":[{"type":"send","channelTarget":{"type":"originating"},"message":{"body":{"data":"connected"}}}]}`
 	b := strings.ReplaceAll(strings.ReplaceAll(a, `"name":"a"`, `"name":"b"`), `"equalTo":"connect"`, `"equalTo":"chat.send"`)
 	write(t, s.StubPath("a"), a)
@@ -33,11 +32,6 @@ func TestMessageIdentityAndValidation(t *testing.T) {
 	if Identity(c) != Identity(message(t, a)) {
 		t.Fatal("JSON key order changes identity")
 	}
-	s.P.WireMockVersion = "3.13.2"
-	if err := s.ValidateStub(message(t, a), "a", "a.json"); err == nil {
-		t.Fatal("accepted message on v3")
-	}
-	s.P.WireMockVersion = "4.0.0-beta.40"
 	for _, bad := range []string{strings.Replace(a, `"data":"connected"`, `"filePath":"../outside"`, 1), strings.Replace(a, `"data":"connected"`, `"filePath":"missing.json"`, 1), strings.Replace(a, `"actions":[`, `"actions":null,"ignored":[`, 1), strings.Replace(a, `"type":"message"`, `"type":"bogus"`, 1), strings.Replace(a, `"name":"a"`, `"name":"a","request":{}`, 1)} {
 		if err := s.ValidateStub(message(t, bad), "a", "a.json"); err == nil {
 			t.Fatalf("accepted %s", bad)

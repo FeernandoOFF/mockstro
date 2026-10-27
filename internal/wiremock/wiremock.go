@@ -22,13 +22,11 @@ import (
 )
 
 const (
-	WebSocketVersion = "4.0.0-beta.40"
-	WebSocketSHA256  = "3a53dec6c814ff73da4abb0bc51624215ea2b913beec8d19aa6d54e4c62161d3"
-	Version          = "3.13.2"
-	SHA256           = "d097b19bd483c5038479b13a5c71e9faf8f2f5106584f0c120a7770ab0bdb367"
-	jarURL           = "https://repo1.maven.org/maven2/org/wiremock/wiremock-standalone/" + Version + "/wiremock-standalone-" + Version + ".jar"
-	NoncePath        = "/__maestro/nonce"
-	Fallback         = "maestro-fallback"
+	Version   = "4.0.0-beta.41"
+	SHA256    = "88e2403bffbbded87994e4beca3c0ef677cc1af8d7a1925b18ff64c64b0e071c"
+	jarURL    = "https://repo1.maven.org/maven2/org/wiremock/wiremock-standalone/" + Version + "/wiremock-standalone-" + Version + ".jar"
+	NoncePath = "/__maestro/nonce"
+	Fallback  = "maestro-fallback"
 )
 
 func JarPath() string {
@@ -37,23 +35,8 @@ func JarPath() string {
 
 // EnsureJar returns a SHA-verified jar, reusing a project's copy before downloading.
 func EnsureJar(ctx context.Context, projectCopy string, logf func(string, ...any)) (string, error) {
-	return EnsureJarVersion(ctx, Version, projectCopy, logf)
-}
-
-func EnsureJarVersion(ctx context.Context, version, projectCopy string, logf func(string, ...any)) (string, error) {
-	if version == "" {
-		version = Version
-	}
 	checksum := SHA256
-	switch version {
-	case Version:
-	case WebSocketVersion:
-		checksum = WebSocketSHA256
-	default:
-		return "", fmt.Errorf("unsupported WireMock version: %s", version)
-	}
-	jarURL := "https://repo1.maven.org/maven2/org/wiremock/wiremock-standalone/" + version + "/wiremock-standalone-" + version + ".jar"
-	jar := filepath.Join(paths.CacheRoot(), "wiremock", "wiremock-standalone-"+version+".jar")
+	jar := JarPath()
 	if sum, err := fsx.SHA256(jar); err == nil {
 		if sum == checksum {
 			return jar, nil
@@ -73,7 +56,7 @@ func EnsureJarVersion(ctx context.Context, version, projectCopy string, logf fun
 			}
 		}
 	}
-	logf("Downloading WireMock standalone %s...", version)
+	logf("Downloading WireMock standalone %s...", Version)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, jarURL, nil)
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -132,13 +115,12 @@ func PortListener(ctx context.Context, ex execx.Runner, port int) string {
 
 // Server is one run's WireMock.
 type Server struct {
-	MessageSupport bool
-	Port           int
-	RunID          string
-	Log            string
-	cmd            execx.Process
-	exit           chan struct{}
-	http           *http.Client
+	Port  int
+	RunID string
+	Log   string
+	cmd   execx.Process
+	exit  chan struct{}
+	http  *http.Client
 }
 
 func (s *Server) base() string { return "http://127.0.0.1:" + strconv.Itoa(s.Port) }
@@ -164,7 +146,7 @@ func Start(ctx context.Context, ex execx.Runner, jar, root string, port int, run
 		logf.Close()
 		return nil, fmt.Errorf("start WireMock: %w", err)
 	}
-	s := &Server{Port: port, RunID: runID, Log: logPath, MessageSupport: strings.Contains(filepath.Base(jar), WebSocketVersion), cmd: cmd, exit: make(chan struct{}), http: &http.Client{Timeout: 10 * time.Second}}
+	s := &Server{Port: port, RunID: runID, Log: logPath, cmd: cmd, exit: make(chan struct{}), http: &http.Client{Timeout: 10 * time.Second}}
 	go func() { _ = cmd.Wait(); logf.Close(); close(s.exit) }()
 
 	deadline := time.Now().Add(30 * time.Second)
@@ -313,24 +295,19 @@ func (s *Server) Replace(mappings []any, messageSets ...[]any) (reset bool, err 
 	for _, set := range messageSets {
 		messages = append(messages, set...)
 	}
-	if len(messages) > 0 && !s.MessageSupport {
-		return reset, fmt.Errorf("message fixtures require WireMock %s", WebSocketVersion)
-	}
 	if err := s.AssertOwn(); err != nil {
 		return reset, err
 	}
-	if _, err := s.do(http.MethodDelete, "/__admin/mappings", nil); err != nil {
+	if err := s.closeChannels(); err != nil {
+		return reset, err
+	}
+	if err := s.post("/__admin/reset", nil); err != nil {
 		return reset, fmt.Errorf("failed to clear WireMock mappings: %w", err)
 	}
 	reset = true
-	if s.MessageSupport {
-		if _, err := s.do(http.MethodDelete, "/__admin/message-mappings", nil); err != nil {
-			return reset, fmt.Errorf("clear message mappings: %w", err)
-		}
-		for _, mapping := range messages {
-			if err := s.post("/__admin/message-mappings", mapping); err != nil {
-				return reset, fmt.Errorf("load message mapping: %w", err)
-			}
+	for _, mapping := range messages {
+		if err := s.post("/__admin/message-mappings", mapping); err != nil {
+			return reset, fmt.Errorf("load message mapping: %w", err)
 		}
 	}
 	payload := map[string]any{"mappings": mappings}
@@ -342,11 +319,6 @@ func (s *Server) Replace(mappings []any, messageSets ...[]any) (reset bool, err 
 	}
 	if _, err := s.do(http.MethodDelete, "/__admin/requests", nil); err != nil {
 		return reset, fmt.Errorf("failed to reset WireMock request journal: %w", err)
-	}
-	if s.MessageSupport {
-		if _, err := s.do(http.MethodDelete, "/__admin/messages", nil); err != nil {
-			return reset, fmt.Errorf("clear message journal: %w", err)
-		}
 	}
 	return reset, nil
 }

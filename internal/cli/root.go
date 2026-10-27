@@ -440,24 +440,17 @@ func checkCmd(ctx context.Context, g *globals, install bool) error {
 	if err := e.EnsureMaestro(ctx, confirm); err != nil {
 		return err
 	}
-	seen := map[string]bool{}
-	for _, target := range targets {
+	for _, target := range targets[1:] {
 		child := newEngine(target, engine.DefaultOptions(), printer)
-		if target != targets[0] {
-			if _, err := child.Store.ValidateAll(true); err != nil {
-				return err
-			}
-		}
-		if seen[target.WireMockVersion] {
-			continue
-		}
-		jar, err := child.EnsureJar(ctx)
-		if err != nil {
+		if _, err := child.Store.ValidateAll(true); err != nil {
 			return err
 		}
-		seen[target.WireMockVersion] = true
-		fmt.Printf("WireMock is ready at %s (SHA-256 verified).\n", jar)
 	}
+	jar, err := e.EnsureJar(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("WireMock is ready at %s (SHA-256 verified).\n", jar)
 	return nil
 }
 

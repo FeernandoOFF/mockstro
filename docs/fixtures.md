@@ -22,7 +22,7 @@
 ```yaml
 appId: ${APP_ID}
 tags: [smoke, account]
-properties:
+mockstro:
   apiProfile: signed-in          # profiles/signed-in.json, on top of shared.json
   apiOverrides: [account-empty]  # extra stubs; replace same-route stubs from the profile
   fbrcOverrides:                 # Remote Config values (strings)
@@ -34,6 +34,15 @@ properties:
 - launchApp
 - assertVisible: "No accounts yet"
 ```
+
+Use `mockstro:` for runner metadata. Legacy `properties:` and flattened
+`properties.apiProfile`-style keys remain readable; a namespaced value takes precedence
+when the same key appears in both. Maestro's `properties:` is reserved for string-valued
+reporting fields, which mockstro preserves.
+
+Isolated runs execute namespaced flows at their original paths. Batched runs still use
+generated copies to add fixture lifecycle hooks and resolve per-flow variables. Legacy
+flows use copies with only the runner's four reporting properties removed.
 
 Remote Config uses the same validation for fixture files, CLI overrides and live edits:
 at most 500 values, keys of 1–200 ASCII letters, digits, `_`, `.` or `-`, and values

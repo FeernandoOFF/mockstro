@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/feernandooff/mockstro/internal/execx"
@@ -112,6 +111,19 @@ func (w Workspace) Sanitize(f *fixtures.Flow) (string, error) {
 	return out, os.WriteFile(out, data, 0644)
 }
 
+// FlowPath keeps original relative paths for namespaced flows. Legacy reporting
+// properties still need the generated copy used before metadata was namespaced.
+func (w Workspace) FlowPath(f *fixtures.Flow) (string, error) {
+	header, err := fixtures.ParseHeader(f.Path)
+	if err != nil {
+		return "", err
+	}
+	if !header.LegacyMetadata() {
+		return f.Path, nil
+	}
+	return w.Sanitize(f)
+}
+
 func (w Workspace) BatchConfig() (string, error) {
 	cfg := map[string]any{}
 	if data, err := os.ReadFile(w.ConfigPath); err == nil {
@@ -121,11 +133,8 @@ func (w Workspace) BatchConfig() (string, error) {
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}
-	for _, key := range []string{"flows", "includeTags", "excludeTags", "executionOrder"} {
+	for _, key := range []string{"flows", "includeTags", "excludeTags", "executionOrder", "testOutputDir"} {
 		delete(cfg, key)
-	}
-	if _, ok := cfg["testOutputDir"]; !ok {
-		cfg["testOutputDir"] = filepath.Join(w.Dir, "results")
 	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -137,7 +146,7 @@ func (w Workspace) BatchConfig() (string, error) {
 
 // Run executes one flow, optionally recording to the supplied path.
 func (x *Executor) Run(ctx context.Context, f Flow, recording string) Outcome {
-	path, err := x.Workspace.Sanitize(f.Source)
+	path, err := x.Workspace.FlowPath(f.Source)
 	if err != nil {
 		return Outcome{Exit: 1, Err: err, Setup: true}
 	}
@@ -167,8 +176,18 @@ func (x *Executor) Run(ctx context.Context, f Flow, recording string) Outcome {
 	if recording != "" {
 		args = append(args, "--local")
 	}
-	debug := filepath.Join(x.Workspace.Dir, "maestro-debug", strings.TrimSuffix(filepath.Base(f.LogPath), ".log"))
+	root := filepath.Join(x.Workspace.Dir, "results")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return Outcome{Exit: 1, Err: err, Setup: true}
+	}
+	debug, err := os.MkdirTemp(root, strings.TrimSuffix(filepath.Base(f.LogPath), ".log")+"-")
+	if err != nil {
+		return Outcome{Exit: 1, Err: err, Setup: true}
+	}
 	args = append(args, "--config", x.Workspace.ConfigPath, "--debug-output", debug)
+	if recording == "" {
+		args = append(args, "--flatten-debug-output")
+	}
 	for _, key := range slices.Sorted(maps.Keys(f.Variables)) {
 		args = append(args, "-e", key+"="+f.Variables[key])
 	}
@@ -176,10 +195,9 @@ func (x *Executor) Run(ctx context.Context, f Flow, recording string) Outcome {
 	if recording != "" {
 		args = append(args, recording)
 	}
-	before := x.Workspace.ResultDirs()
 	err = x.Exec.Run(ctx, execx.Cmd{Name: command, Args: args, Stdout: lw, Stderr: lw})
 	out := outcome(ctx, err)
-	out.Artifacts = x.Workspace.NewArtifacts(before)
+	out.Artifacts = findArtifacts(debug)
 	return out
 }
 
@@ -193,31 +211,4 @@ func outcome(ctx context.Context, err error) Outcome {
 		exit = 1
 	}
 	return Outcome{Exit: exit, Err: err, Cancelled: cancelled}
-}
-
-func (w Workspace) ResultDirs() map[string]bool {
-	out := map[string]bool{}
-	matches, _ := filepath.Glob(filepath.Join(w.Dir, "results", "*", "*"))
-	for _, path := range matches {
-		if st, err := os.Stat(path); err == nil && st.IsDir() {
-			out[path] = true
-		}
-	}
-	return out
-}
-
-func (w Workspace) NewArtifacts(before map[string]bool) Artifacts {
-	dirs := w.ResultDirs()
-	for _, path := range slices.Sorted(maps.Keys(dirs)) {
-		if !before[path] {
-			return artifacts(path)
-		}
-	}
-	return Artifacts{}
-}
-
-func artifacts(dir string) Artifacts {
-	shots, _ := filepath.Glob(filepath.Join(dir, "screenshots", "*.png"))
-	sort.Strings(shots)
-	return Artifacts{dir, shots}
 }

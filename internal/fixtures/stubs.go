@@ -247,9 +247,6 @@ func (s *Store) ValidateStub(stub *ojson.Object, expectedName, sourceFile string
 	if stub.Has("actions") {
 		return fmt.Errorf("message stub requires trigger in %s", rel)
 	}
-	if resp := stub.Object("response"); resp != nil && resp.Has("openWebsocketChannel") && s.P.WireMockVersion != "4.0.0-beta.40" {
-		return fmt.Errorf("WebSocket upgrades require wiremockVersion: 4.0.0-beta.40 in %s", rel)
-	}
 	req := stub.Object("request")
 	if req == nil {
 		return fmt.Errorf("missing request object in %s", rel)

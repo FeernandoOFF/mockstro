@@ -73,7 +73,7 @@ func TestInjectedStartupProvesOwnershipAndStopWaits(t *testing.T) {
 	p := newProcess()
 	t.Cleanup(p.finish)
 	fake := &execx.Fake{Handler: func(execx.Cmd) (string, error) { return "", errors.New("no listener") }, StartHandler: func(c execx.Cmd, detach bool) (execx.Process, error) {
-		if c.Name != "java" || detach || !strings.Contains(c.String(), "-Xmx128m -jar wiremock-"+wiremock.WebSocketVersion+".jar --port ") || !strings.HasSuffix(c.String(), "--bind-address 127.0.0.1 --root-dir "+dir) {
+		if c.Name != "java" || detach || !strings.Contains(c.String(), "-Xmx128m -jar wiremock-"+wiremock.Version+".jar --port ") || !strings.HasSuffix(c.String(), "--bind-address 127.0.0.1 --root-dir "+dir) {
 			t.Errorf("command %+v detach %v", c, detach)
 		}
 		io.WriteString(c.Stdout, "server output\n")
@@ -81,12 +81,9 @@ func TestInjectedStartupProvesOwnershipAndStopWaits(t *testing.T) {
 		return p, nil
 	}}
 	log := filepath.Join(dir, "wiremock.log")
-	s, err := wiremock.Start(context.Background(), fake, "wiremock-"+wiremock.WebSocketVersion+".jar", dir, port, runID, log, "-Xmx128m")
+	s, err := wiremock.Start(context.Background(), fake, "wiremock-"+wiremock.Version+".jar", dir, port, runID, log, "-Xmx128m")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !s.MessageSupport {
-		t.Error("WebSocket JAR not recognized")
 	}
 	mu.Lock()
 	got := append([]string(nil), calls...)
