@@ -101,6 +101,10 @@ func NewServer(ws *Workspace, port int) (*Server, error) {
 	s.mux.HandleFunc("GET /api/project/icon", s.projectIcon)
 	s.mux.HandleFunc("POST /api/project/open", s.openProject)
 	s.mux.HandleFunc("POST /api/project/pick", s.pickProject)
+	s.mux.HandleFunc("POST /api/project/clone", s.cloneProject)
+	s.mux.HandleFunc("GET /api/project/setup-branches", s.setupBranches)
+	s.mux.HandleFunc("POST /api/project/open-branch", s.openBranch)
+	s.mux.HandleFunc("POST /api/project/remove", s.removeProject)
 	s.mux.HandleFunc("GET /api/git", s.gitInfo)
 	s.mux.HandleFunc("GET /api/git/branches", s.gitBranches)
 	s.mux.HandleFunc("POST /api/git/fetch", s.gitFetch)
@@ -200,11 +204,12 @@ type ProjectView struct {
 	Icon     bool            `json:"icon,omitempty"`
 	Platform string          `json:"platform,omitempty"`
 	CanPick  bool            `json:"canPick"`
+	CloneDir string          `json:"cloneDir,omitempty"`
 	Recent   []RecentProject `json:"recent"`
 }
 
 func (s *Server) projectInfo(w http.ResponseWriter, r *http.Request) {
-	v := ProjectView{CanPick: runtime.GOOS == "darwin", Recent: s.ws.Recent()}
+	v := ProjectView{CanPick: runtime.GOOS == "darwin", CloneDir: s.ws.ClonesDir(), Recent: s.ws.Recent()}
 	if p, m := s.ws.Current(); p != nil && m != nil {
 		v.Open, v.Path, v.Name, v.Platform = true, p.Root, filepath.Base(p.Root), m.platform()
 		v.Icon = projectIconFile(p.Root, false) != ""
@@ -280,7 +285,36 @@ func (s *Server) openProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.ws.Open(path); err != nil {
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error(), "kind": "notProject", "path": path})
+			return
+		}
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// removeProject forgets a project and, for clones MockStro made, deletes the folder.
+func (s *Server) removeProject(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path   string `json:"path"`
+		Delete bool   `json:"delete"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !filepath.IsAbs(req.Path) {
+		writeError(w, http.StatusBadRequest, errors.New("path must be absolute"))
+		return
+	}
+	if err := s.ws.Remove(req.Path, req.Delete); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errOpenProject) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

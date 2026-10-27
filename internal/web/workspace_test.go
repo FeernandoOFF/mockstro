@@ -27,6 +27,9 @@ func fakeProject(t *testing.T, name string) *project.Project {
 	if err := os.MkdirAll(filepath.Join(root, ".maestro"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(setupFile(root), []byte("cliVersion: v0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return &project.Project{Root: root, MaestroRoot: filepath.Join(root, ".maestro"), Env: map[string]string{}, Platform: "ios", Integration: "lite"}
 }
 
@@ -88,7 +91,7 @@ func TestRecentsAreCappedAndMissingFoldersAreSkippedOnLaunch(t *testing.T) {
 func TestOpenExplainsAFolderWithoutMaestro(t *testing.T) {
 	ws := NewWorkspace(loaderFor(nil), "", &execx.Fake{})
 	err := ws.Open("/Users/qa/Documents")
-	if err == nil || !strings.Contains(err.Error(), "has no .maestro folder") || strings.Contains(err.Error(), "init --help") {
+	if err == nil || !strings.Contains(err.Error(), "has no .maestro/mockstro.yaml") || strings.Contains(err.Error(), "init --help") {
 		t.Fatalf("err = %v", err)
 	}
 	if p, m := ws.Current(); p != nil || m != nil {
@@ -165,10 +168,14 @@ func TestOpenProjectEndpoint(t *testing.T) {
 	s := emptyServer(t, &execx.Fake{}, map[string]*project.Project{p.Root: p})
 	h := map[string]string{tokenHeader: s.token, "Content-Type": "application/json"}
 
-	for name, body := range map[string]string{"relative": `{"path":"project"}`, "empty": `{"path":"  "}`, "unknown": `{"path":"/nowhere/at/all"}`} {
+	for name, body := range map[string]string{"relative": `{"path":"project"}`, "empty": `{"path":"  "}`} {
 		if rec := do(s, "POST", "/api/project/open", goodHost, h, body); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d, want 400", name, rec.Code)
 		}
+	}
+	// A folder without .maestro is described so the page can offer branches that have one.
+	if rec := do(s, "POST", "/api/project/open", goodHost, h, `{"path":"/nowhere/at/all"}`); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `"kind":"notProject"`) {
+		t.Errorf("unknown: %d %s", rec.Code, rec.Body)
 	}
 	if rec := do(s, "POST", "/api/project/open", goodHost, h, `{"path":"`+p.Root+`"}`); rec.Code != http.StatusOK {
 		t.Fatalf("open: %d %s", rec.Code, rec.Body)
@@ -386,6 +393,66 @@ func TestWorkspaceMockStartupUsesInjectedRunnerAcrossProjects(t *testing.T) {
 		got := manager.State()
 		if got.State != StateIdle || !strings.Contains(got.Error, "missing required command(s): java") || strings.Contains(got.Error, "lsof") {
 			t.Fatalf("startup did not use injected prerequisites: %+v", got)
+		}
+	}
+}
+
+func TestRemoveDeletesOnlyClonesAndNeverTheOpenProject(t *testing.T) {
+	state := t.TempDir()
+	clones := filepath.Join(state, "projects")
+	clone, bare, mine, open := filepath.Join(clones, "app"), filepath.Join(clones, "no-setup"), fakeProject(t, "mine"), fakeProject(t, "open")
+	for _, d := range []string{filepath.Join(clone, ".maestro", "stubs", "local"), bare} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cloned := &project.Project{Root: clone, MaestroRoot: filepath.Join(clone, ".maestro")}
+	ws := NewWorkspace(loaderFor(map[string]*project.Project{clone: cloned, mine.Root: mine, open.Root: open}), filepath.Join(state, "ui.json"), &execx.Fake{})
+	for _, p := range []string{clone, mine.Root, open.Root} {
+		if err := ws.Open(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed := map[string]RecentProject{}
+	for _, r := range ws.Recent() {
+		listed[r.Path] = r
+	}
+	if r := listed[bare]; !r.Folder || r.Exists || !r.Managed {
+		t.Fatalf("unopened clone listed as %+v", r)
+	}
+	if listed[mine.Root].Managed || !listed[clone].Managed {
+		t.Fatalf("managed flags: %+v", listed)
+	}
+
+	if err := ws.Remove(open.Root, false); !errors.Is(err, errOpenProject) {
+		t.Fatalf("removed the open project: %v", err)
+	}
+	if err := ws.Remove(mine.Root, true); err == nil {
+		t.Fatal("deleted a folder MockStro did not clone")
+	}
+	if err := ws.Remove(filepath.Join(clones, "..", "ui.json"), true); err == nil {
+		t.Fatal("deleted outside the clones folder")
+	}
+	link := filepath.Join(clones, "link")
+	os.Symlink(mine.Root, link)
+	if err := ws.Remove(link, true); err == nil {
+		t.Fatal("followed a symlink out of the clones folder")
+	}
+	if err := ws.Remove(mine.Root, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(mine.Root); err != nil {
+		t.Fatal("removing from the list deleted the folder")
+	}
+	if err := ws.Remove(clone, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(clone); !os.IsNotExist(err) {
+		t.Fatal("clone folder still there")
+	}
+	for _, r := range ws.Recent() {
+		if r.Path == clone || r.Path == mine.Root {
+			t.Fatalf("still listed: %+v", r)
 		}
 	}
 }

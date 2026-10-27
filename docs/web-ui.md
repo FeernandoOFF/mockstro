@@ -24,6 +24,25 @@ mock.
 Recent projects are remembered in `ui.json` under `MOCKSTRO_STATE_DIR`, or under
 `~/Library/Application Support/mockstro/` when that is unset.
 
+The project chooser can also **clone from Git**: paste an `https://`, `ssh://` or `git@` address
+and the page runs `git clone` into `projects/<name>` beside `ui.json`, then opens it. It never
+overwrites a folder that exists, refuses while a mock is running, and, like pull, never prompts
+for a sign-in: a private repository needs Git credentials set up once (e.g. a clone in a terminal).
+When the checked-out branch of a clone, or of a folder being opened, has no `.maestro` folder,
+the page fetches and lists the branches that do; **Switch and open** switches to one and opens it.
+If none has one, the clone is kept and the page says so.
+
+The project list shows recent projects and every clone in `projects/`, including ones not set up
+yet. A clone's trash button deletes its folder after a confirmation, saved responses included; a
+folder the tester chose only has **Remove from list**, which never touches the disk. The open
+project can't be removed.
+
+When a clone fails the page says why: sign-in, repository not found, no network, Git missing, or
+already cloned (with **Open it**). For sign-in problems it shows the one-time fix: create a token
+or SSH key (linked guides for GitHub and Bitbucket, Git's credential docs for other hosts), then
+run the shown `git ls-remote <address>` in Terminal so the Mac's keychain remembers the sign-in.
+**What Git said** has the raw output.
+
 ## The page
 
 A sidebar on the left, a top bar with breadcrumbs, and one view at a time. The page follows the
@@ -141,4 +160,6 @@ Pull and switch run `git` in the project's folder with these rules:
   files, such as saved stubs under `stubs/local/`, never block them.
 - Both refuse while a mock is running, because the files under it would change.
 - Git never prompts. Anything that needs a sign-in fails with a plain message instead of hanging.
+- SSH trusts a host the first time it sees it (`StrictHostKeyChecking=accept-new`), as typing "yes"
+  would, and still refuses a host whose key has changed.
 - Branch names are validated and passed as arguments, never through a shell.

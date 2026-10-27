@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
@@ -28,8 +29,11 @@ type Loader func(dir string) (*project.Project, engine.Options, error)
 type RecentProject struct {
 	Path   string `json:"path"`
 	Name   string `json:"name"`
-	Exists bool   `json:"exists"`
-	Icon   bool   `json:"icon,omitempty"`
+	Exists bool   `json:"exists"` // has a .maestro folder
+	Folder bool   `json:"folder"` // the folder itself is there
+	// Managed projects were cloned into ClonesDir, so the UI may delete their folder.
+	Managed bool `json:"managed,omitempty"`
+	Icon    bool `json:"icon,omitempty"`
 }
 
 // recents remembers opened projects in a small JSON file; failures to read or write it are
@@ -60,7 +64,17 @@ func (r *recents) add(dir string) {
 		return
 	}
 	list := slices.DeleteFunc(r.load(), func(p string) bool { return p == dir })
-	list = append([]string{dir}, list...)
+	r.save(append([]string{dir}, list...))
+}
+
+func (r *recents) remove(dir string) {
+	if r == nil || r.path == "" {
+		return
+	}
+	r.save(slices.DeleteFunc(r.load(), func(p string) bool { return p == dir }))
+}
+
+func (r *recents) save(list []string) {
 	if len(list) > maxRecents {
 		list = list[:maxRecents]
 	}
@@ -142,6 +156,11 @@ func (w *Workspace) Open(dir string) error {
 		return err
 	}
 	defer release()
+	return w.openReserved(dir)
+}
+
+// openReserved is Open for a caller that already holds the operation reservation.
+func (w *Workspace) openReserved(dir string) error {
 	// Reserve before loading: the loader reads files a Git mutation could change.
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -153,8 +172,9 @@ func (w *Workspace) Open(dir string) error {
 	}
 	p, o, err := w.load(dir)
 	if err != nil {
-		if errors.Is(err, project.ErrNotFound) {
-			return fmt.Errorf("%s has no .maestro folder. Choose the project folder that contains one", dir)
+		// A .maestro folder of plain Maestro flows, without mockstro.yaml, is not set up either.
+		if errors.Is(err, project.ErrNotFound) || errors.Is(err, os.ErrNotExist) && !isFile(setupFile(dir)) {
+			return noMaestroError(dir)
 		}
 		return err
 	}
@@ -162,17 +182,152 @@ func (w *Workspace) Open(dir string) error {
 	return nil
 }
 
-// Recent lists remembered projects, newest first.
-func (w *Workspace) Recent() []RecentProject {
-	var out []RecentProject
-	for _, path := range w.recents.load() {
-		st, err := os.Stat(filepath.Join(path, ".maestro"))
-		out = append(out, RecentProject{Path: path, Name: filepath.Base(path), Exists: err == nil && st.IsDir()})
+// ClonesDir is where Clone puts checkouts: a projects folder beside the recents file.
+func (w *Workspace) ClonesDir() string {
+	if w.recents == nil || w.recents.path == "" {
+		return ""
 	}
-	if out == nil {
-		out = []RecentProject{}
+	return filepath.Join(filepath.Dir(w.recents.path), "projects")
+}
+
+// Clone checks out url into ClonesDir and opens it. The clone stays when opening fails, so a
+// repository without a .maestro folder is not downloaded twice.
+func (w *Workspace) Clone(ctx context.Context, url string) (string, error) {
+	dir := w.ClonesDir()
+	if dir == "" {
+		return "", errors.New("cloning is not available: mockstro has no folder to keep projects in")
+	}
+	if _, m := w.Current(); m != nil && !m.Idle() {
+		return "", errWorkspaceRunning
+	}
+	dest, err := gitrepo.Clone(ctx, w.runner, url, dir)
+	if err != nil {
+		return dest, err
+	}
+	return dest, w.Open(dest)
+}
+
+// SetupBranches lists the branches of the checkout at dir that contain a .maestro folder, after a
+// best-effort fetch, for a repository whose current branch has none.
+func (w *Workspace) SetupBranches(ctx context.Context, dir string) ([]gitrepo.Branch, error) {
+	repo := gitrepo.New(dir, w.runner)
+	st, err := repo.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Repo {
+		return nil, &gitrepo.Error{Kind: gitrepo.ErrNotRepository, Message: dir + " is not a git checkout, so there are no other branches to try"}
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	_, _ = repo.Fetch(fetchCtx)
+	cancel()
+	all, err := repo.Branches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	with, err := repo.BranchesWithPath(ctx, ".maestro/mockstro.yaml")
+	if err != nil {
+		return nil, err
+	}
+	out := []gitrepo.Branch{}
+	for _, b := range all {
+		if with[b.Name] {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
+// OpenBranch switches the checkout at dir, which is not the open project, to branch and opens it.
+func (w *Workspace) OpenBranch(ctx context.Context, dir, branch string) error {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return err
+	}
+	defer release()
+	if p, m := w.Current(); p != nil && p.Root == dir {
+		return errors.New("this project is already open; change its branch from the branch menu")
+	} else if m != nil && !m.Idle() {
+		return errWorkspaceRunning
+	}
+	if _, err := gitrepo.New(dir, w.runner).SwitchBranch(ctx, branch); err != nil {
+		return err
+	}
+	return w.openReserved(dir)
+}
+
+// setupFile is the file that makes a folder a mockstro project.
+func setupFile(dir string) string { return filepath.Join(dir, ".maestro", "mockstro.yaml") }
+
+func isFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular()
+}
+
+type noMaestroError string
+
+func (e noMaestroError) Error() string {
+	return string(e) + " is not set up for MockStro: it has no .maestro/mockstro.yaml. Choose the project folder that contains one"
+}
+func (noMaestroError) Unwrap() error { return project.ErrNotFound }
+
+// Recent lists remembered projects, newest first, then clones never opened, such as one whose
+// branch has no .maestro folder yet.
+func (w *Workspace) Recent() []RecentProject {
+	paths := w.recents.load()
+	if dir := w.ClonesDir(); dir != "" {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if p := filepath.Join(dir, e.Name()); e.IsDir() && !slices.Contains(paths, p) {
+				paths = append(paths, p)
+			}
+		}
+	}
+	out := []RecentProject{}
+	for _, path := range paths {
+		folder, err := os.Stat(path)
+		out = append(out, RecentProject{Path: path, Name: filepath.Base(path), Exists: isFile(setupFile(path)),
+			Folder: err == nil && folder.IsDir(), Managed: w.managed(path)})
 	}
 	return out
+}
+
+// managed reports whether path is a folder directly inside ClonesDir.
+func (w *Workspace) managed(path string) bool {
+	dir := w.ClonesDir()
+	return dir != "" && filepath.IsAbs(path) && filepath.Dir(filepath.Clean(path)) == dir && filepath.Base(path) != "."
+}
+
+var errOpenProject = errors.New("this project is open; open another one before removing it")
+
+// Remove forgets a project. With deleteFiles it also deletes the folder, which is allowed only
+// for clones in ClonesDir, never for a folder the tester chose.
+func (w *Workspace) Remove(path string, deleteFiles bool) error {
+	release, err := w.operations.Reserve()
+	if err != nil {
+		return err
+	}
+	defer release()
+	path = filepath.Clean(path)
+	if p, _ := w.Current(); p != nil && p.Root == path {
+		return errOpenProject
+	}
+	if deleteFiles {
+		if !w.managed(path) {
+			return errors.New("MockStro only deletes projects it cloned; remove this one from the list instead")
+		}
+		st, err := os.Lstat(path)
+		if err == nil && !st.IsDir() {
+			return fmt.Errorf("%s is not a folder", path)
+		}
+		if err == nil {
+			if err := os.RemoveAll(path); err != nil {
+				return err
+			}
+		}
+	}
+	w.recents.remove(path)
+	return nil
 }
 
 // LastRecent is the most recent project that still exists, for opening on launch.

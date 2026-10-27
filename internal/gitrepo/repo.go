@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -57,7 +58,11 @@ type Branch struct {
 var (
 	branchName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/@+-]*$`)
 
-	signIn    = regexp.MustCompile(`(?i)could not read from remote|permission denied|authentication failed|could not read username|terminal prompts disabled|host key verification`)
+	signIn    = regexp.MustCompile(`(?i)could not read from remote|permission denied|authentication failed|could not read username|could not read password|terminal prompts disabled|returned error: 40[13]|invalid username or (password|token)`)
+	notFound  = regexp.MustCompile(`(?i)repository not found|does not appear to be a git repository|returned error: 404|repository .* does not exist`)
+	offline   = regexp.MustCompile(`(?i)could not resolve host|failed to connect|could not connect|connection timed out|operation timed out|network is unreachable|connection refused`)
+	hostKey   = regexp.MustCompile(`(?i)host key verification failed|remote host identification has changed`)
+	noGit     = regexp.MustCompile(`(?i)xcrun: error|xcode-select|no developer tools`)
 	noFF      = regexp.MustCompile(`(?i)not possible to fast-forward|diverging branches|divergent branches|need to specify how to reconcile`)
 	noTracked = regexp.MustCompile(`(?i)no tracking information|no upstream|not currently on a branch`)
 )
@@ -78,11 +83,15 @@ func friendlyError(stderr string) string {
 	return strings.Join(lines, " ")
 }
 
+// sshCommand trusts a host the first time it is seen, as answering "yes" would, but still
+// refuses a host whose key has changed.
+const sshCommand = "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+
 // command never invokes a shell or allows interactive authentication.
 func (r *Repository) command(ctx context.Context, args ...string) (string, error) {
 	full := append([]string{"-c", "core.quotepath=false", "-C", r.root}, args...)
 	out, err := r.ex.Output(ctx, execx.Cmd{Name: "git", Args: full,
-		Env: []string{"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes", "LC_ALL=C"}})
+		Env: []string{"GIT_TERMINAL_PROMPT=0", sshCommand, "LC_ALL=C"}})
 	if err == nil {
 		return out, nil
 	}
@@ -93,6 +102,11 @@ func (r *Repository) command(ctx context.Context, args ...string) (string, error
 	if errors.As(err, &ee) && ee.Stderr != "" {
 		kind := ErrCommand
 		switch {
+		// ssh says "could not read from remote" for an untrusted host or a missing repository too.
+		case hostKey.MatchString(ee.Stderr):
+			kind = ErrHostKey
+		case notFound.MatchString(ee.Stderr):
+			kind = ErrNotFound
 		case signIn.MatchString(ee.Stderr):
 			kind = ErrAuthentication
 		case noFF.MatchString(ee.Stderr):
@@ -101,8 +115,15 @@ func (r *Repository) command(ctx context.Context, args ...string) (string, error
 			kind = ErrNoUpstream
 		case strings.Contains(strings.ToLower(ee.Stderr), "not a git repository"):
 			kind = ErrNotRepository
+		case offline.MatchString(ee.Stderr):
+			kind = ErrNetwork
+		case noGit.MatchString(ee.Stderr):
+			kind = ErrNoGit
 		}
 		return out, &Error{Kind: kind, Message: friendlyError(ee.Stderr), Cause: err}
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return out, &Error{Kind: ErrNoGit, Message: "Git is not installed", Cause: err}
 	}
 	return out, &Error{Kind: ErrCommand, Message: err.Error(), Cause: err}
 }
@@ -229,6 +250,36 @@ func (r *Repository) Branches(ctx context.Context) ([]Branch, error) {
 		rows = []Branch{}
 	}
 	return rows, nil
+}
+
+// BranchesWithPath names the branches, as Branches names them, whose tip contains path.
+func (r *Repository) BranchesWithPath(ctx context.Context, path string) (map[string]bool, error) {
+	out, err := r.command(ctx, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes")
+	if err != nil {
+		return nil, err
+	}
+	found := map[string]bool{}
+	for _, ref := range strings.Split(out, "\n") {
+		name, ok := strings.CutPrefix(ref, "refs/heads/")
+		if !ok {
+			rest, remote := strings.CutPrefix(ref, "refs/remotes/")
+			if !remote {
+				continue
+			}
+			if _, name, ok = strings.Cut(rest, "/"); !ok || name == "HEAD" {
+				continue
+			}
+		}
+		if found[name] {
+			continue
+		}
+		if tree, err := r.command(ctx, "ls-tree", "--name-only", ref, "--", path); err == nil && tree != "" {
+			found[name] = true
+		} else if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	return found, nil
 }
 
 func (r *Repository) SwitchBranch(ctx context.Context, name string) (Status, error) {
