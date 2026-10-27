@@ -41,4 +41,4 @@ codesign --force --sign - "$app" 2>/dev/null # editing Info.plist breaks osacomp
 touch "$app"
 
 echo "Created $app"
-echo "Double-click it to open MockStro. Output goes to $log"
+echo "Double-click it to open Mockstro. Output goes to $log"

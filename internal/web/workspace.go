@@ -221,21 +221,7 @@ func (w *Workspace) SetupBranches(ctx context.Context, dir string) ([]gitrepo.Br
 	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	_, _ = repo.Fetch(fetchCtx)
 	cancel()
-	all, err := repo.Branches(ctx)
-	if err != nil {
-		return nil, err
-	}
-	with, err := repo.BranchesWithPath(ctx, ".maestro/mockstro.yaml")
-	if err != nil {
-		return nil, err
-	}
-	out := []gitrepo.Branch{}
-	for _, b := range all {
-		if with[b.Name] {
-			out = append(out, b)
-		}
-	}
-	return out, nil
+	return integrationBranches(ctx, repo)
 }
 
 // OpenBranch switches the checkout at dir, which is not the open project, to branch and opens it.
@@ -267,7 +253,7 @@ func isFile(path string) bool {
 type noMaestroError string
 
 func (e noMaestroError) Error() string {
-	return string(e) + " is not set up for MockStro: it has no .maestro/mockstro.yaml. Choose the project folder that contains one"
+	return string(e) + " is not set up for Mockstro: it has no .maestro/mockstro.yaml. Choose the project folder that contains one"
 }
 func (noMaestroError) Unwrap() error { return project.ErrNotFound }
 
@@ -314,7 +300,7 @@ func (w *Workspace) Remove(path string, deleteFiles bool) error {
 	}
 	if deleteFiles {
 		if !w.managed(path) {
-			return errors.New("MockStro only deletes projects it cloned; remove this one from the list instead")
+			return errors.New("Mockstro only deletes projects it cloned; remove this one from the list instead")
 		}
 		st, err := os.Lstat(path)
 		if err == nil && !st.IsDir() {
@@ -419,7 +405,26 @@ func (w *Workspace) Branches(ctx context.Context) ([]gitrepo.Branch, error) {
 	if err != nil {
 		return nil, err
 	}
-	return repo.Branches(ctx)
+	return integrationBranches(ctx, repo)
+}
+
+// Both project setup and the version switcher offer only integrated branches.
+func integrationBranches(ctx context.Context, repo *gitrepo.Repository) ([]gitrepo.Branch, error) {
+	all, err := repo.Branches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	with, err := repo.BranchesWithPath(ctx, ".maestro/mockstro.yaml")
+	if err != nil {
+		return nil, err
+	}
+	out := []gitrepo.Branch{}
+	for _, b := range all {
+		if with[b.Name] {
+			out = append(out, b)
+		}
+	}
+	return out, nil
 }
 
 func (w *Workspace) Fetch(ctx context.Context) (gitrepo.Status, error) {

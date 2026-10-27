@@ -1,8 +1,10 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
@@ -591,5 +594,51 @@ func TestProjectIconServesOnlyKnownProjects(t *testing.T) {
 	var v ProjectView
 	if err := json.Unmarshal(do(s, "GET", "/api/project", host, nil, "").Body.Bytes(), &v); err != nil || !v.Icon {
 		t.Fatalf("project view: %+v %v", v, err)
+	}
+}
+
+func TestRunReusesExistingUIWithoutLoadingAnotherWorkspace(t *testing.T) {
+	s, _ := testServer(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	s.port = port
+	hs := &http.Server{Handler: s.Handler()}
+	go hs.Serve(ln)
+	t.Cleanup(func() { hs.Close() })
+	var out bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err = Run(ctx, Config{Port: port, Out: &out, Initial: "unused", Load: func(string) (*project.Project, engine.Options, error) {
+		t.Error("second instance loaded a workspace")
+		return nil, engine.Options{}, nil
+	}})
+	if err != nil || !strings.Contains(out.String(), "already running") {
+		t.Fatalf("reuse: %v, %s", err, &out)
+	}
+}
+
+func TestOnlyWorkspaceAdmissionRefusalsAreRetryable(t *testing.T) {
+	s, _ := testServer(t)
+	release, err := s.ws.operations.Reserve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := do(s, "GET", "/api/git", goodHost, nil, "")
+	release()
+	var busy struct {
+		Retryable bool `json:"retryable"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &busy); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusConflict || !busy.Retryable {
+		t.Fatalf("busy: %d %s", rec.Code, rec.Body)
+	}
+	rec = gitPost(s, "/api/git/switch", `{"branch":"--invalid"}`)
+	if strings.Contains(rec.Body.String(), `"retryable":true`) {
+		t.Fatalf("unsafe retry: %s", rec.Body)
 	}
 }

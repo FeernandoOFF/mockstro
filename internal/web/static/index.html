@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="mockstro-token" content="__TOKEN__">
-<title>MockStro</title>
+<title>Mockstro</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <style>
 :root {
@@ -65,8 +65,7 @@ button.chip { cursor: pointer; } button.chip:hover { color: var(--text); }
 .shell { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: 100vh; }
 .sidebar { background: var(--bg-side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; padding: 14px 10px 10px; }
 .brand { display: flex; gap: 10px; align-items: center; padding: 4px 8px 16px; font-weight: 650; font-size: 15px; letter-spacing: -.01em; }
-.mark { width: 26px; height: 26px; border-radius: 7px; background: var(--primary); display: grid; place-items: center; flex: none; }
-.mark i { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--primary-text); }
+.mark { width: 26px; height: 26px; object-fit: contain; flex: none; }
 .nav { overflow: auto; flex: 1; min-height: 0; }
 .nav a, .navbtn { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border-radius: 6px; text-decoration: none; cursor: pointer; border: 0; background: none; width: 100%; text-align: left; }
 .nav a:hover, .navbtn:hover { background: var(--bg-hover); }
@@ -101,14 +100,19 @@ button.chip { cursor: pointer; } button.chip:hover { color: var(--text); }
 .head .top { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; }
 .head .titleline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .head h1 { font-size: 22px; line-height: 1.25; margin: 0; font-weight: 650; letter-spacing: -.015em; word-break: break-word; }
+.session-path { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); min-width: 0; }
+.session-path code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--mono); }
+.session-path .btn { opacity: 0; padding: 0 5px; flex: none; }
+.session-path:hover .btn, .session-path:focus-within .btn { opacity: 1; }
+@media (hover: none) { .session-path .btn { opacity: 1; } }
 .head .lede { color: var(--muted); margin: 6px 0 0; }
 .actions { display: flex; gap: 8px; flex: none; align-items: center; }
 .banner { margin: 16px 28px 0; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 6px; background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--warn-text); }
 .banner.bad { background: var(--bad-bg); border-color: transparent; color: var(--bad); }
 .banner svg { width: 16px; height: 16px; flex: none; }
 .banner button { background: none; border: 0; font-weight: 650; color: inherit; cursor: pointer; padding: 0; }
-.tabs { display: flex; gap: 24px; padding: 0 28px; margin-top: 2px; border-bottom: 1px solid var(--line); }
-.tab { background: none; border: 0; padding: 10px 0; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs { display: flex; overflow-x: auto; gap: 24px; padding: 0 28px; margin-top: 2px; border-bottom: 1px solid var(--line); }
+.tab { flex: none; background: none; border: 0; padding: 10px 0; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .tab[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--text); }
 .tab small { color: var(--faint); margin-left: 5px; font-weight: 400; font-size: 12px; }
 
@@ -198,8 +202,8 @@ table.rules { width: 100%; border-collapse: collapse; } table.rules td, table.ru
 .btn.danger-solid { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 550; } .btn.danger-solid:hover { opacity: .88; }
 .recent .what { flex: 1; min-width: 0; } .recent small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .recent .go { color: var(--faint); width: 15px; height: 15px; flex: none; } .recent:hover:not(:disabled) .go { color: var(--text); }
-.tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--bg-hover); margin-bottom: 14px; }
-.tabs .seg { padding: 5px 12px; } .tabs .seg[aria-pressed="true"] { background: var(--bg); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.chooser-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--bg-hover); margin-bottom: 14px; }
+.chooser-tabs .seg { padding: 5px 12px; } .chooser-tabs .seg[aria-pressed="true"] { background: var(--bg); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 .clonerow .input { font-family: var(--mono); font-size: 12.5px; }
 .dest { margin-top: 6px; color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .dest b { color: var(--muted); font-weight: 600; }
 .spin { width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; flex: none; }
@@ -327,7 +331,7 @@ pre.code { background: var(--bg-side); border: 1px solid var(--line); border-rad
 <body>
 <div class="welcome" id="welcome" hidden>
   <div class="card">
-    <div class="brand" style="padding:0"><div class="mark"><i></i></div><span>MockStro</span></div>
+    <div class="brand" style="padding:0"><img class="mark" src="/favicon.png" alt=""><span>Mockstro</span></div>
     <h1>Choose your project</h1>
     <p>Clone a project from Git, or open a folder that contains a <span class="mono">.maestro</span> folder.</p>
     <div id="welcome-chooser"></div>
@@ -383,6 +387,7 @@ const ICONS = {
   stop: '<rect x="4" y="4" width="8" height="8" rx="1.5"/>',
   trash: '<path d="M2.8 4.4h10.4M6.4 4.4V3h3.2v1.4M4.2 4.4l.6 8.6h6.4l.6-8.6M6.8 7v3.8M9.2 7v3.8"/>',
   x: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3A1.5 1.5 0 0 0 9 1.5H3A1.5 1.5 0 0 0 1.5 3v6A1.5 1.5 0 0 0 3 10.5h2.5"/>',
   folder: '<path d="M2 4.6C2 3.8 2.6 3.2 3.4 3.2H6l1.4 1.5h5.2c.8 0 1.4.6 1.4 1.4v5.5c0 .8-.6 1.4-1.4 1.4H3.4c-.8 0-1.4-.6-1.4-1.4z"/>',
 };
 function icon(name) {
@@ -402,15 +407,31 @@ function reloadOnce() {
   } catch {}
   location.reload();
 }
-async function api(path, body) {
+// Keep checkout operations in order, including background Git refreshes. Journal and state
+// polling stay independent so the session remains live during a slow fetch.
+let workspaceRequests = Promise.resolve();
+function api(path, body) {
+  const workspace = /^\/api\/(git(?:\/|$)|project\/(?:open|clone|open-branch|remove)(?:\?|$)|serve$|stop$)/.test(path);
+  if (!workspace) return request(path, body);
+  const result = workspaceRequests.then(() => request(path, body));
+  workspaceRequests = result.catch(() => {});
+  return result;
+}
+async function request(path, body, deadline = Date.now() + 65000) {
   const opts = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Mockstro-Token': TOKEN }, body: JSON.stringify(body) };
   let res;
   try { res = await fetch(path, opts); }
-  catch { throw Object.assign(new Error("MockStro isn't running. Open the Mockstro app again, then reload this page."), { offline: true }); }
+  catch { throw Object.assign(new Error("Mockstro isn't running. Open the Mockstro app again, then reload this page."), { offline: true }); }
   const instance = res.headers.get('X-Mockstro-Instance');
   if (instance) { if (seenInstance && instance !== seenInstance) reloadOnce(); seenInstance = seenInstance || instance; }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    // Another browser tab may own the workspace. Only retry an explicit admission
+    // refusal: that operation has not started, so repeating it cannot duplicate work.
+    if (res.status === 409 && data.retryable && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return request(path, body, deadline);
+    }
     if (res.status === 403 && data.reload) reloadOnce();
     throw Object.assign(new Error(data.error || res.statusText), { data });
   }
@@ -433,7 +454,7 @@ function tint(name) {
 
 // ---------- state
 let proj = { open: false, recent: [] }, items = [], saved = [], savedDir = '', git = null, health = null, rows = [];
-let state = { state: 'idle', custom: [], log: [] }, notice = '', dismissedErr = '', current = null, stateSig = '', rowsSig = '', gitBusy = false;
+let state = { state: 'idle', custom: [], log: [] }, notice = '', dismissedErr = '', current = null, stateSig = '', rowsSig = '', gitBusy = false, actionPending = false;
 
 const KIND = { scenario: 'Scenario', profile: 'Profile', flow: 'Test flow' };
 const VIEWS = ['session', 'tests', 'profiles', 'preview', 'saved', 'setup'];
@@ -449,7 +470,7 @@ const viewName = () => {
 };
 const go = (v) => { location.hash = '#/' + v; };
 const serving = () => state.state === 'serving' && state.serving;
-const busy = () => state.state === 'starting' || state.state === 'stopping';
+const busy = () => actionPending || state.state === 'starting' || state.state === 'stopping';
 
 function isActive(it) {
   const s = state.serving;
@@ -481,7 +502,7 @@ function renderSidebar() {
   tree.push(h('button', { class: 'navbtn sub', onclick: reloadCatalog, title: 'Read the scenarios from disk again' }, icon('refresh'), h('span', { class: 'label' }, 'Reload from disk')));
   for (const r of others) tree.push(h('button', { class: 'navbtn proj', ...(r.exists ? {} : { disabled: '' }), onclick: () => openRecent(r.path), title: r.path }, projIcon(r), h('span', { class: 'label' }, r.name)));
   fill($('sidebar'), 
-    h('div', { class: 'brand' }, h('div', { class: 'mark' }, h('i')), h('span', {}, 'MockStro')),
+    h('div', { class: 'brand' }, h('img', { class: 'mark', src: '/favicon.png', alt: '' }), h('span', {}, 'Mockstro')),
     h('nav', { class: 'nav' },
       link('session', 'play', 'Session', serving() ? rows.length : '', serving() ? h('span', { class: 'dot ok', style: 'margin-left:-2px' }) : null),
       h('div', { class: 'glabel' }, 'Library'),
@@ -494,7 +515,7 @@ function renderSidebar() {
     h('div', { class: 'sidefoot' },
       h('span', { class: 'dot ' + (serving() ? 'ok' : '') }),
       h('span', { class: 'txt' }, serving() ? 'Serving on :' + state.serving.port : state.state === 'idle' ? 'Mock is off' : state.state === 'starting' ? 'Starting…' : 'Stopping…'),
-      h('button', { class: 'btn sm ghost', onclick: quit, title: 'Stop the mock and close MockStro', 'aria-label': 'Quit MockStro' }, icon('power'))));
+      h('button', { class: 'btn sm ghost', onclick: quit, title: 'Stop the mock and close Mockstro', 'aria-label': 'Quit Mockstro' }, icon('power'))));
 }
 
 function renderTopbar() {
@@ -1030,9 +1051,16 @@ function mountSession() {
 
   function live() {
     const s = state.serving, custom = state.custom || [], fbrc = Object.entries(s.fbrc || {});
-    fill(headSlot, head(s.name, badge('ok', 'Serving'), [KIND[s.kind], s.profile ? 'Profile ' + s.profile : null, 'port ' + s.port].filter(Boolean).join(' · ') + (s.description ? '. ' + s.description : ''),
+    fill(headSlot, head(s.title || s.name, badge('ok', 'Serving'), [KIND[s.kind], s.profile ? 'Profile ' + s.profile : null, 'port ' + s.port].filter(Boolean).join(' · ') + (s.description ? '. ' + s.description : ''),
       [h('button', { class: 'btn', onclick: () => go(pageOf(s.kind)) }, 'Choose another'),
        h('button', { class: 'btn danger', ...(busy() ? { disabled: '' } : {}), onclick: stopMock }, icon('stop'), 'Stop mock')]));
+    if (s.path) {
+      const copy = h('button', { class: 'btn sm ghost', title: 'Copy file path', 'aria-label': 'Copy file path', onclick: async () => {
+        try { await navigator.clipboard.writeText(s.path); fill(copy, icon('check')); copy.title = 'Copied'; }
+        catch { notice = 'Could not copy the file path.'; renderAll(); }
+      } }, icon('copy'));
+      headSlot.querySelector('.head').append(h('div', { class: 'session-path' }, h('code', { title: s.path }, s.path), copy));
+    }
     const unmatched = rows.filter((r) => r.unmatched).length;
     const guide = (s.steps && s.steps.length) || (s.checks && s.checks.length);
     updateFetchStatus(s);
@@ -1145,7 +1173,7 @@ function mountSetup() {
     update() {
       const o = health ? health.overall : '';
       fill(headSlot, head('Setup check', health ? badge(o === 'ok' ? 'ok' : o === 'warn' ? 'warn' : 'bad', o === 'ok' ? 'All good' : o === 'warn' ? 'Check these' : 'Needs fixing') : null,
-        'Everything MockStro needs, and how to fix what is missing.', h('button', { class: 'btn', onclick: checkHealth }, icon('refresh'), 'Check again')));
+        'Everything Mockstro needs, and how to fix what is missing.', h('button', { class: 'btn', onclick: checkHealth }, icon('refresh'), 'Check again')));
       fill(list, ...(health ? health.checks.map((c) => h('div', { class: 'check' }, h('span', { class: 'ic ' + c.status, role: 'img', 'aria-label': WORD[c.status] }, ICON[c.status]),
         h('div', {}, h('div', { class: 'ct' }, c.title), h('div', { class: 'cd' }, c.detail), c.fix ? h('div', { class: 'cf' }, 'Fix: ' + c.fix) : null))) : [h('div', { class: 'note' }, 'Checking…')]));
       drawRules();
@@ -1167,10 +1195,17 @@ function remember(it, fbrc, custom) {
 }
 // fbrc and custom are what the tester set up in the preview: Remote Config values and edited responses. Leave them out to serve the mock as it is.
 async function start(it, fbrc, custom) {
+  if (busy()) return;
+  actionPending = true; renderAll();
   try { await api('/api/serve', { kind: it.kind, ref: it.ref, ...(fbrc ? { fbrc } : {}), ...(custom ? { custom } : {}) }); remember(it, fbrc, custom); notice = ''; go('session'); } catch (e) { flash(e.message); }
-  refresh();
+  await refresh(); actionPending = false; renderAll();
 }
-async function stopMock() { try { await api('/api/stop', {}); } catch (e) { flash(e.message); } refresh(); }
+async function stopMock() {
+  if (busy()) return;
+  actionPending = true; renderAll();
+  try { await api('/api/stop', {}); } catch (e) { flash(e.message); }
+  await refresh(); actionPending = false; renderAll();
+}
 async function removeCustom(id) { try { await api('/api/custom/remove', { id }); } catch (e) { flash(e.message); } refresh(); }
 async function applySaved(name) { try { await api('/api/saved/apply', { name }); } catch (e) { flash(e.message); } refresh(); }
 async function deleteSaved(c) {
@@ -1184,10 +1219,10 @@ async function openRecent(path) {
   try { await api('/api/project/open', { path }); await loadProject(true); } catch (e) { flash(e.message); }
 }
 async function quit() {
-  if (serving() && !confirm('This stops the running mock and closes MockStro. Quit?')) return;
+  if (serving() && !confirm('This stops the running mock and closes Mockstro. Quit?')) return;
   try { await api('/api/quit', {}); } catch {}
-  fill(document.body, h('div', { class: 'welcome' }, h('div', { class: 'card' }, h('div', { class: 'brand', style: 'padding:0' }, h('div', { class: 'mark' }, h('i')), h('span', {}, 'MockStro')),
-    h('h1', {}, 'MockStro has stopped'), h('p', {}, 'The mock server is off. You can close this tab. To start again, open MockStro.'))));
+  fill(document.body, h('div', { class: 'welcome' }, h('div', { class: 'card' }, h('div', { class: 'brand', style: 'padding:0' }, h('img', { class: 'mark', src: '/favicon.png', alt: '' }), h('span', {}, 'Mockstro')),
+    h('h1', {}, 'Mockstro has stopped'), h('p', {}, 'The mock server is off. You can close this tab. To start again, open Mockstro.'))));
 }
 
 // ---------- data loading
@@ -1360,12 +1395,12 @@ function setupPicker(path, title, opened) {
   }
   load();
   return callout('warn', title,
-    h('p', {}, 'MockStro needs a .maestro/mockstro.yaml file, and the branch this copy is on doesn\'t have one. Some projects only add it on certain branches.'),
+    h('p', {}, 'Mockstro needs a .maestro/mockstro.yaml file, and the branch this copy is on doesn\'t have one. Some projects only add it on certain branches.'),
     slot, h('p', { class: 'mono', style: 'color:var(--muted)' }, path));
 }
 
 function cloneHelp(e, url, openPath, opened) {
-  if (e.offline) return callout('bad', "MockStro isn't running", h('p', {}, 'Open the Mockstro app again, then reload this page.'));
+  if (e.offline) return callout('bad', "Mockstro isn't running", h('p', {}, 'Open the Mockstro app again, then reload this page.'));
   const d = e.data || {}, host = d.host || 'the server', who = PROVIDERS[d.provider] || host;
   const guides = d.guides || [], detail = d.detail ? h('details', {}, h('summary', {}, 'What Git said'), h('pre', {}, d.detail)) : null;
   const signIn = () => {
@@ -1382,7 +1417,7 @@ function cloneHelp(e, url, openPath, opened) {
   };
   switch (d.kind) {
     case 'auth': return callout('bad', "Couldn't sign in to " + who,
-      h('p', {}, 'Git needs your ' + who + ' sign-in once. MockStro can\'t ask for passwords, so do this one time:'), ...signIn(), detail);
+      h('p', {}, 'Git needs your ' + who + ' sign-in once. Mockstro can\'t ask for passwords, so do this one time:'), ...signIn(), detail);
     case 'hostKey': return callout('bad', "Can't verify " + host,
       h('p', {}, host + ' showed a different key from the one this Mac saved before. It may have changed its key, or something may be intercepting the connection, so Git stopped.'),
       h('p', {}, 'Ask a developer before going further.', guides[0] ? [' ', who, ' lists its real keys in ', link(guides[0]), '.'] : null), detail);
@@ -1392,7 +1427,7 @@ function cloneHelp(e, url, openPath, opened) {
     case 'noGit': return callout('bad', "Git isn't installed", h('p', {}, 'Run this in Terminal, follow the installer, then try again:'), cmdBox(d.command));
     case 'exists': return callout('warn', 'Already cloned', h('p', {}, d.path + ' is already there.'),
       h('button', { class: 'btn sm', onclick: () => openPath(d.path) }, 'Open it'));
-    case 'notProject': return setupPicker(d.path, 'Cloned, but this branch isn\'t set up for MockStro', opened);
+    case 'notProject': return setupPicker(d.path, 'Cloned, but this branch isn\'t set up for Mockstro', opened);
     case 'openFailed': return callout('warn', "Cloned, but it couldn't be opened", h('p', {}, e.message), h('p', { class: 'mono' }, d.path));
     case 'running': return callout('warn', 'Stop the running mock first', h('p', {}, 'You cannot change project while a mock is running.'));
     case 'timeout': return callout('bad', 'The clone took too long', h('p', {}, 'It was stopped after 15 minutes. Check your connection and try again.'));
@@ -1410,7 +1445,7 @@ function projectChooser(done) {
     try { await api('/api/project/open', { path: p }); await loadProject(true); opened(); }
     catch (e) {
       if (e.data && e.data.kind === 'notProject') {
-        msg.textContent = ''; fill(slot, setupPicker(e.data.path, 'This branch isn\'t set up for MockStro', opened));
+        msg.textContent = ''; fill(slot, setupPicker(e.data.path, 'This branch isn\'t set up for Mockstro', opened));
         slot.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       }
       else { msg.className = 'hint bad'; msg.textContent = e.message; }
@@ -1455,7 +1490,7 @@ function projectChooser(done) {
   const modes = proj.cloneDir ? [['clone', 'Clone from Git', clonePane], ['folder', 'Folder on this Mac', folderPane]] : [['folder', '', folderPane]];
   let mode = store.get('chooser', (proj.recent || []).some((r) => r.exists) ? 'folder' : 'clone');
   if (!modes.some(([k]) => k === mode)) mode = modes[0][0];
-  const tabs = h('div', { class: 'tabs', role: 'group', 'aria-label': 'How to add a project' }), pane = h('div', {});
+  const tabs = h('div', { class: 'chooser-tabs', role: 'group', 'aria-label': 'How to add a project' }), pane = h('div', {});
   const show = () => {
     fill(tabs, modes.map(([k, label]) => h('button', { class: 'seg', 'aria-pressed': String(k === mode), onclick: () => { mode = k; store.set('chooser', k); msg.textContent = ''; fill(note); show(); } }, label)));
     fill(pane, modes.find(([k]) => k === mode)[2]);
@@ -1468,7 +1503,7 @@ function projectChooser(done) {
     fill(recentBox, rows.length ? [h('label', { class: 'lab' }, 'Projects'), h('div', { class: 'recents' }, ...rows)] : null);
     recentBox.hidden = addLabel.hidden = !rows.length;
   }
-  // recentRow opens a project; its side button deletes a clone MockStro made, or only forgets a
+  // recentRow opens a project; its side button deletes a clone Mockstro made, or only forgets a
   // folder the tester chose.
   function recentRow(r) {
     const current = proj.open && r.path === proj.path;
@@ -1552,7 +1587,7 @@ async function openGitDialog() {
         h('div', { class: 'branches' }, shown.length ? shown.map((b) => h('div', { class: 'branch' },
           h('span', { class: 'n' }, b.name, b.remote ? h('small', {}, '  (not on this Mac yet)') : null, b.current ? h('small', {}, '  (current)') : null),
           h('small', {}, b.when),
-          h('button', { class: 'btn sm', ...(b.current || locked() || dirty() ? { disabled: '' } : {}), onclick: () => act('Switching to ' + b.name, () => api('/api/git/switch', { branch: b.name })) }, 'Switch'))) : h('div', { class: 'branch' }, 'No branches match.'))),
+          h('button', { class: 'btn sm', ...(b.current || locked() || dirty() ? { disabled: '' } : {}), onclick: () => act('Switching to ' + b.name, () => api('/api/git/switch', { branch: b.name })) }, 'Switch'))) : h('div', { class: 'branch' }, 'No branches with the Mockstro integration match.'))),
       h('p', { class: msgClass, role: 'status', 'aria-live': 'polite' }, msg),
       h('div', { class: 'row2' }, h('button', { class: 'btn', onclick: closeDialog }, 'Close')));
   }
