@@ -57,6 +57,15 @@ asset=mockstro_${version}_${os}_${arch}
 fetch "$asset"
 [ "$launcher" = no ] || fetch install-ui-launcher.sh
 chmod 755 "$tmp/$asset"
+# Keep project discovery away from BIN_DIR, which may be inside an app checkout.
+(
+    check_dir=$(mktemp -d "${TMPDIR:-/tmp}/mockstro-check.XXXXXX")
+    trap 'rm -rf "$check_dir"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    cd "$check_dir"
+    "$tmp/$asset" check --install
+)
 # Same-filesystem rename: a running mockstro keeps its old file.
 mv -f "$tmp/$asset" "$bin_dir/mockstro"
 echo "Installed mockstro $version to $bin_dir/mockstro"

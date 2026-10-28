@@ -20,6 +20,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/engine"
 	"github.com/feernandooff/mockstro/internal/execx"
+	"github.com/feernandooff/mockstro/internal/javaruntime"
 	"github.com/feernandooff/mockstro/internal/project"
 )
 
@@ -87,7 +88,16 @@ func Execute(version string) int {
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Args:          cobra.ArbitraryArgs,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Name() == "init" {
+				return javaruntime.Ensure(cmd.Context(), execx.Real{}, func(format string, args ...any) { fmt.Fprintf(cmd.OutOrStdout(), format+"\n", args...) })
+			}
+			if home, err := javaruntime.Find(cmd.Context(), execx.Real{}); err == nil {
+				return javaruntime.Activate(home)
+			}
+			return nil
+		},
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 && !cmd.Flags().Changed("tags") && engine.ResolveOwner(g.owner) == "human" && TUIFunc != nil {
 				return runTUI(g, f)
@@ -121,7 +131,7 @@ func Execute(version string) int {
 	mock.Flags().BoolVar(&f.clearProxy, "clear-proxy", false, "with --attach: remove a device-wide HTTP proxy first")
 
 	var installMaestro bool
-	check := &cobra.Command{Use: "check", Short: "Validate fixtures and check this machine: Java, Maestro and WireMock",
+	check := &cobra.Command{Use: "check", Short: "Check Java and, inside a project, validate fixtures, Maestro and WireMock",
 		RunE: func(cmd *cobra.Command, args []string) error { return checkCmd(cmd.Context(), g, installMaestro) }}
 	check.Flags().BoolVar(&installMaestro, "install", false, "install Maestro if missing without asking")
 
@@ -409,6 +419,15 @@ func runCmd(ctx context.Context, g *globals, f *runFlags, args []string) error {
 }
 
 func checkCmd(ctx context.Context, g *globals, install bool) error {
+	if err := javaruntime.Ensure(ctx, execx.Real{}, func(format string, args ...any) { fmt.Printf(format+"\n", args...) }); err != nil {
+		return err
+	}
+	if g.projectDir == "" {
+		if _, err := project.Find("."); errors.Is(err, project.ErrNotFound) {
+			fmt.Println("No project found; project checks skipped.")
+			return nil
+		}
+	}
 	p, err := loadProject(g)
 	if err != nil {
 		return err

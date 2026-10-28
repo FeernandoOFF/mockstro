@@ -12,6 +12,7 @@ import (
 
 	"github.com/feernandooff/mockstro/internal/execx"
 	"github.com/feernandooff/mockstro/internal/fixtures"
+	"github.com/feernandooff/mockstro/internal/javaruntime"
 	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/internal/wiremock"
 )
@@ -86,7 +87,7 @@ func parseJavaMajor(out string) (int, bool) {
 }
 
 func (s *Server) checkJava(ctx context.Context) Check {
-	c := Check{ID: "java", Title: "Java", Fix: "Install it with: brew install openjdk@17"}
+	c := Check{ID: "java", Title: "Java", Fix: javaruntime.Hint}
 	path, err := s.ex.LookPath("java")
 	if err != nil {
 		c.Status, c.Detail = "fail", "Java is not installed."

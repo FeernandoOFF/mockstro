@@ -177,7 +177,7 @@ func TestHealthAllGood(t *testing.T) {
 
 func TestHealthJava(t *testing.T) {
 	c, overall := checks(t, healthServer(t, tools{noJava: true, pgrep: "1", scutil: goodTools.scutil}, goodCharles()))
-	if c["java"].Status != "fail" || !strings.Contains(c["java"].Fix, "brew install openjdk@17") || overall != "fail" {
+	if c["java"].Status != "fail" || !strings.Contains(c["java"].Fix, "Homebrew") || overall != "fail" {
 		t.Errorf("missing java: %+v overall %s", c["java"], overall)
 	}
 	stub := goodTools
