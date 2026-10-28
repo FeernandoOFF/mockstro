@@ -41,6 +41,8 @@ type LogLine struct {
 
 // Serving describes the target currently answering requests.
 type Serving struct {
+	Title       string            `json:"title,omitempty"`
+	Path        string            `json:"path,omitempty"`
 	Kind        string            `json:"kind"`
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
@@ -85,6 +87,8 @@ type Manager struct {
 	// The guide is read once when a target is served, never on state polls.
 	guideSession *mockruntime.Session
 	guideName    string
+	guideTitle   string
+	guidePath    string
 	guideSteps   []Step
 	guideChecks  []LiveCheck
 }
@@ -138,6 +142,7 @@ func (m *Manager) State() StateView {
 		m.mu.Lock()
 		if m.guideSession == sess && m.guideName == snap.Name {
 			v.Serving.Steps, v.Serving.Checks = m.guideSteps, m.guideChecks
+			v.Serving.Title, v.Serving.Path = m.guideTitle, m.guidePath
 		}
 		m.mu.Unlock()
 	}
@@ -150,13 +155,19 @@ func (m *Manager) Serve(ref string, fbrc map[string]string, custom []mockruntime
 		target := sess.Target()
 		var steps []Step
 		var checks []LiveCheck
+		title, path := "", ""
 		if target.Kind == "flow" {
 			if flow, err := fixtures.New(m.selectedProject()).Flow(target.Name); err == nil {
 				steps, checks = FlowSteps(flow.Path), ChecksFor(flow.Header.Verifications)
+				title, path = flow.Header.Name, m.selectedProject().Rel(flow.Path)
+				if title == "" {
+					title = flow.Rel
+				}
 			}
 		}
 		m.mu.Lock()
 		m.guideSession, m.guideName, m.guideSteps, m.guideChecks = sess, target.Name, steps, checks
+		m.guideTitle, m.guidePath = title, path
 		m.mu.Unlock()
 		return applyPreview(ctx, sess, fbrc, custom)
 	})

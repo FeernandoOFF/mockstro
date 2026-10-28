@@ -31,6 +31,7 @@ import (
 	"github.com/feernandooff/mockstro/internal/mockruntime"
 	"github.com/feernandooff/mockstro/internal/project"
 	"github.com/feernandooff/mockstro/internal/remoteconfig"
+	"github.com/feernandooff/mockstro/internal/workspacecoord"
 )
 
 //go:embed static/index.html
@@ -145,7 +146,7 @@ func (s *Server) guard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get(tokenHeader)), []byte(s.token)) != 1 {
 			// The usual cause is a page left open across a restart; the page reloads itself on this.
-			writeJSON(w, http.StatusForbidden, map[string]any{"error": "MockStro was restarted since this page loaded. Reload the page.", "reload": true})
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "Mockstro was restarted since this page loaded. Reload the page.", "reload": true})
 			return
 		}
 		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
@@ -177,7 +178,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]string{"error": err.Error()})
+	writeJSON(w, status, struct {
+		Error     string `json:"error"`
+		Retryable bool   `json:"retryable,omitempty"`
+	}{Error: err.Error(), Retryable: errors.Is(err, workspacecoord.ErrBusy)})
 }
 
 var errNoProject = errors.New("no project is open; choose a project folder first")
@@ -295,7 +299,7 @@ func (s *Server) openProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// removeProject forgets a project and, for clones MockStro made, deletes the folder.
+// removeProject forgets a project and, for clones Mockstro made, deletes the folder.
 func (s *Server) removeProject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path   string `json:"path"`

@@ -258,6 +258,13 @@ func (r *Repository) BranchesWithPath(ctx context.Context, path string) (map[str
 	if err != nil {
 		return nil, err
 	}
+	// A local branch wins over its remote copy, just as it does in Branches.
+	local := map[string]bool{}
+	for _, ref := range strings.Split(out, "\n") {
+		if name, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+			local[name] = true
+		}
+	}
 	found := map[string]bool{}
 	for _, ref := range strings.Split(out, "\n") {
 		name, ok := strings.CutPrefix(ref, "refs/heads/")
@@ -266,7 +273,7 @@ func (r *Repository) BranchesWithPath(ctx context.Context, path string) (map[str
 			if !remote {
 				continue
 			}
-			if _, name, ok = strings.Cut(rest, "/"); !ok || name == "HEAD" {
+			if _, name, ok = strings.Cut(rest, "/"); !ok || name == "HEAD" || local[name] {
 				continue
 			}
 		}

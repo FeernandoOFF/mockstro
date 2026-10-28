@@ -123,7 +123,7 @@ func (s *Server) checkPort(ctx context.Context, port int, serving bool) Check {
 	}
 	if who := wiremock.PortListener(ctx, s.ex, port); who != "" {
 		c.Status, c.Detail = "fail", fmt.Sprintf("%s is already using it.", who)
-		c.Fix = "Close the other MockStro or Maestro run. If nothing is open, run: mockstro sweep"
+		c.Fix = "Close the other Mockstro or Maestro run. If nothing is open, run: mockstro sweep"
 		return c
 	}
 	c.Status, c.Detail = "ok", "Free."

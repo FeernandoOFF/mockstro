@@ -175,10 +175,25 @@ func TestPullNeverMergesDivergedHistory(t *testing.T) {
 
 func TestBranchListAndSwitch(t *testing.T) {
 	r := newRepos(t)
+	commitFile(t, r.work, ".maestro/mockstro.yaml", "integration: lite\n", "enable mockstro")
+	gitIn(t, r.work, "push", "-q")
+	gitIn(t, r.other, "pull", "-q", "--ff-only")
 	s := gitServer(t, r)
 	gitIn(t, r.other, "switch", "-q", "-c", "feature/survey")
 	commitFile(t, r.other, "s.txt", "survey\n", "survey work")
 	gitIn(t, r.other, "push", "-q", "-u", "origin", "feature/survey")
+	gitPost(s, "/api/git/fetch", "{}")
+
+	// A branch without the integration must not appear in the switcher.
+	gitIn(t, r.other, "switch", "-q", "-c", "feature/no-integration")
+	gitIn(t, r.other, "rm", ".maestro/mockstro.yaml")
+	gitIn(t, r.other, "commit", "-qm", "remove integration")
+	gitIn(t, r.other, "push", "-q", "-u", "origin", "feature/no-integration")
+	gitPost(s, "/api/git/fetch", "{}")
+
+	// The selected local tip must contain the integration even if its remote copy does.
+	gitIn(t, r.work, "branch", "shadow", "origin/feature/no-integration")
+	gitIn(t, r.other, "push", "-q", "origin", "feature/survey:shadow")
 	gitPost(s, "/api/git/fetch", "{}")
 
 	var branches []gitrepo.Branch

@@ -428,7 +428,7 @@ func TestRemoveDeletesOnlyClonesAndNeverTheOpenProject(t *testing.T) {
 		t.Fatalf("removed the open project: %v", err)
 	}
 	if err := ws.Remove(mine.Root, true); err == nil {
-		t.Fatal("deleted a folder MockStro did not clone")
+		t.Fatal("deleted a folder Mockstro did not clone")
 	}
 	if err := ws.Remove(filepath.Join(clones, "..", "ui.json"), true); err == nil {
 		t.Fatal("deleted outside the clones folder")

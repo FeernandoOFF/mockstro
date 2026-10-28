@@ -143,3 +143,20 @@ func TestServeAppliesPreviewDraftsThroughWorkspace(t *testing.T) {
 		t.Fatalf("expected one switch on the same runtime, got %d", activations)
 	}
 }
+
+func TestServingFlowPublishesItsNameAndProjectRelativePath(t *testing.T) {
+	s, p := testServer(t)
+	m := mgr(s)
+	r := &managerRuntime{done: make(chan struct{}), event: func() {}}
+	m.life = mockapp.New(func(context.Context) (mockapp.Backend, error) { return &managerBackend{runtime: r, kind: "flow"}, nil })
+	t.Cleanup(s.ws.Shutdown)
+	ref := p.MaestroRoot + "/flows/survey/shown.yaml"
+	if err := s.ws.Serve(ref, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	m.life.Wait()
+	v := m.State()
+	if v.Serving == nil || v.Serving.Title != "Survey shown" || v.Serving.Path != ".maestro/flows/survey/shown.yaml" || v.Serving.Name != ref {
+		t.Fatalf("flow metadata: %+v", v)
+	}
+}
