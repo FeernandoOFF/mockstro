@@ -354,3 +354,35 @@ func TestKotlinAndWebSocketConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadLiteServesASuiteWithoutConfig(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, "wiremock/stubs/health.json", "{}")
+	writeConfig(t, root, "mockstro.local.yaml", "platforms:\n  ios:\n    proxyBaseUrl: https://api.example.test\n")
+	if !HasSuite(root) || HasConfig(root) {
+		t.Fatalf("HasSuite=%v HasConfig=%v", HasSuite(root), HasConfig(root))
+	}
+	if _, err := Load(root); err == nil {
+		t.Fatal("Load must still require mockstro.yaml")
+	}
+	p, err := LoadLite(root, "ios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Implicit || !p.Lite() || p.Platform != "ios" || p.AppID != "" || p.FBRCURL != DefaultFBRCURL || p.ProxyBaseURL != "https://api.example.test" {
+		t.Fatalf("project = %+v", p)
+	}
+}
+
+func TestGuessPlatform(t *testing.T) {
+	root := t.TempDir()
+	if got := GuessPlatform(root); got != "ios" {
+		t.Fatalf("empty = %s", got)
+	}
+	if err := os.WriteFile(filepath.Join(root, "settings.gradle.kts"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := GuessPlatform(root); got != "android" {
+		t.Fatalf("gradle = %s", got)
+	}
+}

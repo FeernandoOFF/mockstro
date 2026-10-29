@@ -207,6 +207,7 @@ type ProjectView struct {
 	Name     string          `json:"name,omitempty"`
 	Icon     bool            `json:"icon,omitempty"`
 	Platform string          `json:"platform,omitempty"`
+	Implicit bool            `json:"implicit,omitempty"` // no mockstro.yaml, served as lite
 	CanPick  bool            `json:"canPick"`
 	CloneDir string          `json:"cloneDir,omitempty"`
 	Recent   []RecentProject `json:"recent"`
@@ -217,6 +218,7 @@ func (s *Server) projectInfo(w http.ResponseWriter, r *http.Request) {
 	if p, m := s.ws.Current(); p != nil && m != nil {
 		v.Open, v.Path, v.Name, v.Platform = true, p.Root, filepath.Base(p.Root), m.platform()
 		v.Icon = projectIconFile(p.Root, false) != ""
+		v.Implicit = p.Implicit
 	}
 	for i := range v.Recent {
 		v.Recent[i].Icon = projectIconFile(v.Recent[i].Path, false) != ""

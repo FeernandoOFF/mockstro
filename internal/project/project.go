@@ -47,6 +47,8 @@ type Project struct {
 
 	// Integration is explicitly configured per platform: lite or full.
 	Integration string
+	// Implicit projects have no mockstro.yaml; see LoadLite.
+	Implicit bool
 }
 
 // Lite: the app is not modified and traffic reaches WireMock via the user's Map Remote.
@@ -107,6 +109,28 @@ func Find(dir string) (string, error) {
 			return "", ErrNotFound
 		}
 	}
+}
+
+// HasSuite reports whether root has a .maestro folder of flows or mocks.
+func HasSuite(root string) bool {
+	st, err := os.Stat(filepath.Join(root, ".maestro"))
+	return err == nil && st.IsDir() && isMaestroRoot(filepath.Join(root, ".maestro"))
+}
+
+// HasConfig reports whether root has a .maestro/mockstro.yaml.
+func HasConfig(root string) bool {
+	st, err := os.Stat(filepath.Join(root, ".maestro", "mockstro.yaml"))
+	return err == nil && st.Mode().IsRegular()
+}
+
+// GuessPlatform names the platform of the app at root: android for a Gradle build, else ios.
+func GuessPlatform(root string) string {
+	for _, f := range []string{"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"} {
+		if _, err := os.Stat(filepath.Join(root, f)); err == nil {
+			return "android"
+		}
+	}
+	return "ios"
 }
 
 func isMaestroRoot(m string) bool {

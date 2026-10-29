@@ -252,8 +252,8 @@ func (r *Repository) Branches(ctx context.Context) ([]Branch, error) {
 	return rows, nil
 }
 
-// BranchesWithPath names the branches, as Branches names them, whose tip contains path.
-func (r *Repository) BranchesWithPath(ctx context.Context, path string) (map[string]bool, error) {
+// BranchesWithPath names the branches, as Branches names them, whose tip contains any of paths.
+func (r *Repository) BranchesWithPath(ctx context.Context, paths ...string) (map[string]bool, error) {
 	out, err := r.command(ctx, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes")
 	if err != nil {
 		return nil, err
@@ -280,7 +280,7 @@ func (r *Repository) BranchesWithPath(ctx context.Context, path string) (map[str
 		if found[name] {
 			continue
 		}
-		if tree, err := r.command(ctx, "ls-tree", "--name-only", ref, "--", path); err == nil && tree != "" {
+		if tree, err := r.command(ctx, append([]string{"ls-tree", "--name-only", ref, "--"}, paths...)...); err == nil && tree != "" {
 			found[name] = true
 		} else if ctx.Err() != nil {
 			return nil, ctx.Err()
