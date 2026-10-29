@@ -17,7 +17,7 @@ the result. There's a CLI for scripts, agents and CI, and a TUI for people.
 
 ## Quickstart
 
-Current release candidate: [v0.1.0-rc.5](https://github.com/FeernandoOFF/mockstro/releases/tag/v0.1.0-rc.5).
+Current release candidate: [v0.1.0-rc.6](https://github.com/FeernandoOFF/mockstro/releases/tag/v0.1.0-rc.6).
 Prebuilt binaries support macOS and Linux on Apple Silicon/ARM64 and Intel/AMD64;
 Go is not required.
 
@@ -30,7 +30,7 @@ use the [browser UI](docs/web-ui.md) install one global CLI and a desktop shortc
 From your app repo:
 
 ```bash
-version=v0.1.0-rc.5
+version=v0.1.0-rc.6
 curl -fsSLo install.sh "https://github.com/FeernandoOFF/mockstro/releases/download/$version/install.sh"
 sh install.sh "$version" && rm install.sh
 ```
@@ -57,7 +57,7 @@ Maestro 2.11+ is recommended.
 To upgrade an existing project, set the top-level pin in `.maestro/mockstro.yaml`:
 
 ```yaml
-cliVersion: v0.1.0-rc.5
+cliVersion: v0.1.0-rc.6
 ```
 
 Then run `./mockstrow --version` and `./mockstrow check`; the wrapper downloads and
@@ -71,7 +71,7 @@ Optional: `./mockstrow skill install --claude` adds an agent skill.
 Once, on a Mac:
 
 ```bash
-version=v0.1.0-rc.5
+version=v0.1.0-rc.6
 curl -fsSLo install-global.sh "https://github.com/FeernandoOFF/mockstro/releases/download/$version/install-global.sh"
 sh install-global.sh "$version" && rm install-global.sh
 ```
@@ -79,7 +79,9 @@ sh install-global.sh "$version" && rm install-global.sh
 This installs `mockstro` to `~/.local/bin` (`BIN_DIR` changes it) and creates
 `~/Applications/Mockstro.app`. Double-click **Mockstro**, then paste the app repo's address
 under **Clone from Git** (or choose a folder you already cloned); the page remembers it and
-lists other projects you open. **Setup check** on the
+lists other projects you open. A project without `.maestro/mockstro.yaml` still opens if its
+`.maestro` folder has flows or mocks; the page serves it as a [lite](#lite-or-full) project.
+**Setup check** on the
 page says what else is missing. Rerun these commands to update an existing global
 installation. To check its version, run `~/.local/bin/mockstro --version` (or use your
 custom `BIN_DIR`). On Linux, or for a CLI-only macOS install, use
