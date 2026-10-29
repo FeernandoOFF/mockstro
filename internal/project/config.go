@@ -259,17 +259,21 @@ func resolveAliases(n *yaml.Node) *yaml.Node {
 }
 
 // Load requires the new typed config; legacy project.env is intentionally not read.
-func Load(root string) (*Project, error) {
+func Load(root string) (*Project, error) { return load(root, nil) }
+
+// LoadLite loads a suite without mockstro.yaml as a lite project on platform, so its mocks can be
+// served. It has no appId or build, so it cannot run flows.
+func LoadLite(root, platform string) (*Project, error) {
+	return load(root, &Config{Platforms: map[string]TargetConfig{platform: {Integration: "lite"}}})
+}
+
+func load(root string, implicit *Config) (*Project, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
 	maestro := filepath.Join(root, ".maestro")
 	path := filepath.Join(maestro, "mockstro.yaml")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
 	var warnings []string
 	warn := func(path string, msgs []string) {
 		for _, msg := range msgs {
@@ -277,11 +281,19 @@ func Load(root string) (*Project, error) {
 		}
 	}
 	var cfg Config
-	msgs, err := decode(b, &cfg)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	if implicit != nil {
+		cfg = *implicit
+	} else {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		msgs, err := decode(b, &cfg)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		warn(path, msgs)
 	}
-	warn(path, msgs)
 	if cfg.CLIVersion != "" {
 		if err := ValidateCLIVersion(cfg.CLIVersion); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
@@ -292,7 +304,7 @@ func Load(root string) (*Project, error) {
 	}
 	var local LocalConfig
 	path = filepath.Join(maestro, "mockstro.local.yaml")
-	if b, err = os.ReadFile(path); err == nil {
+	if b, err := os.ReadFile(path); err == nil {
 		msgs, err := decode(b, &local)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
@@ -300,6 +312,10 @@ func Load(root string) (*Project, error) {
 		warn(path, msgs)
 	} else if !os.IsNotExist(err) {
 		return nil, err
+	}
+	if implicit != nil && len(local.Platforms) > 0 {
+		// Without mockstro.yaml the local file defines the platforms in full.
+		cfg.Platforms = map[string]TargetConfig{}
 	}
 	overrides := map[string]LocalTarget{}
 	for name, node := range local.Platforms {
@@ -332,7 +348,7 @@ func Load(root string) (*Project, error) {
 		if name != "android" && name != "ios" {
 			return nil, fmt.Errorf("unknown platform %q", name)
 		}
-		if t.AppID == "" || strings.Contains(t.AppID, "${") {
+		if implicit == nil && t.AppID == "" || strings.Contains(t.AppID, "${") {
 			return nil, fmt.Errorf("platform %s needs a literal appId", name)
 		}
 		if t.Integration == "" {
@@ -396,7 +412,7 @@ func Load(root string) (*Project, error) {
 			loc = Variables{}
 		}
 		maps.Copy(loc, l.Env)
-		p := &Project{Root: root, MaestroRoot: maestro, BuildRoot: filepath.Clean(buildRoot), Platform: name, AppID: t.AppID, Integration: t.Integration,
+		p := &Project{Root: root, MaestroRoot: maestro, Implicit: implicit != nil, BuildRoot: filepath.Clean(buildRoot), Platform: name, AppID: t.AppID, Integration: t.Integration,
 			Build: t.Build, Catalog: cfg.Catalog, WebSocketPath: t.WebSocketPath,
 			Variables: maps.Clone(cfg.Env), TargetVariables: maps.Clone(t.Env), LocalVariables: loc, Devices: append([]string(nil), t.Devices...),
 			ProxyBaseURL: t.ProxyBaseURL, FallbackURL: t.FallbackURL, FBRCURL: t.FBRCURL, OverrideKey: t.OverrideKey, AcceptKey: t.AcceptKey, Env: map[string]string{}}

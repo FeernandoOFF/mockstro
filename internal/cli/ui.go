@@ -33,7 +33,18 @@ func uiCmd(ctx context.Context, g *globals, f *runFlags, port int, open bool) er
 		g2, f2 := *g, *f
 		g2.projectDir = dir
 		f2.serverPort = project.ReservedMockPort
-		p, err := loadProject(&g2)
+		var p *project.Project
+		var err error
+		// The UI only serves mocks, so a suite without mockstro.yaml opens as lite.
+		if root, findErr := project.Find(dir); findErr == nil && !project.HasConfig(root) {
+			platform := g.platform
+			if platform == "" {
+				platform = project.GuessPlatform(root)
+			}
+			p, err = project.LoadLite(root, platform)
+		} else {
+			p, err = loadProject(&g2)
+		}
 		if err != nil {
 			return nil, engine.Options{}, err
 		}

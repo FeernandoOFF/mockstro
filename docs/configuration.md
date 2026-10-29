@@ -160,6 +160,7 @@ platforms:
 ```
 
 - For platforms already in `mockstro.yaml`, only `project`, `devices`, `build` and `env` can be overridden.
+- When the UI opens a suite without `mockstro.yaml`, platforms here are defined in full (see [Browser UI](web-ui.md#starting-it)).
 - `devices` replaces the shared list; `build` fields and `env` values merge.
 - A local `build.command` replaces the entire argv list and selects command builds. Setting
   a local `build.system` to a native system clears an inherited command. Shared artifact

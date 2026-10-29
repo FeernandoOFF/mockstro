@@ -522,6 +522,7 @@ function renderTopbar() {
   const bits = [];
   if (git && git.repo) bits.push(h('button', { class: 'chip dashed', onclick: openGitDialog, title: git.behind > 0 ? 'Updates are available' : 'The project\'s git branch' }, icon('branch'), git.branch + (git.behind > 0 ? ' · ' + git.behind + ' new' : '') + (git.dirty && git.dirty.length ? ' · changed' : '')));
   if (proj.platform) bits.push(h('span', { class: 'chip' }, proj.platform));
+  if (proj.implicit) bits.push(h('span', { class: 'chip', title: 'This project has no .maestro/mockstro.yaml, so Mockstro serves its mocks as a lite project. Add proxyBaseUrl in .maestro/mockstro.local.yaml to fill in the Charles rules.' }, 'lite · no mockstro.yaml'));
   fill($('topbar'), 
     h('div', { class: 'crumbs' }, h('span', {}, 'Projects'), h('span', { class: 'sep' }, '/'), h('span', {}, proj.name), h('span', { class: 'sep' }, '/'), h('b', {}, TITLES[viewName()])),
     ...bits);
@@ -572,6 +573,8 @@ function fold(id, defaultOpen, forceOpen, cls, summary, children) {
   return wrap;
 }
 
+// fileName is the YAML file behind a flow or scenario, so testers can search by it.
+const fileName = (it) => it.kind === 'flow' ? it.ref.split('/').pop() : it.kind === 'scenario' ? it.ref.split('/').pop() + '.yaml' : '';
 // The search and chip filter outlive the view, so coming back from the Session does not mean searching again.
 const libs = { tests: { query: '', feature: '' }, profiles: { query: '', feature: '' } };
 function mountLibrary(page) {
@@ -584,7 +587,7 @@ function mountLibrary(page) {
 
   const matches = (it) => {
     const q = lib.query.trim().toLowerCase();
-    if (q && ![it.title, it.description, it.profileGroup, it.profile, it.group, ...(it.tags || [])].join(' ').toLowerCase().includes(q)) return false;
+    if (q && ![it.title, it.description, it.profileGroup, it.profile, it.group, fileName(it), ...(it.tags || [])].join(' ').toLowerCase().includes(q)) return false;
     return !lib.feature || (it.tags || []).includes(lib.feature);
   };
 
@@ -1367,7 +1370,7 @@ function callout(tone, title, ...body) {
 const link = (g) => h('a', { href: g.url, target: '_blank', rel: 'noopener' }, g.label);
 
 // cloneHelp turns a failed clone into what happened and the steps that fix it.
-// setupPicker explains that the checkout at path has no .maestro/mockstro.yaml on its current branch and
+// setupPicker explains that the checkout at path has no mockstro suite on its current branch and
 // offers the branches that do, so a project set up on one branch can still be opened.
 function setupPicker(path, title, opened) {
   const slot = h('div', {});
@@ -1377,7 +1380,7 @@ function setupPicker(path, title, opened) {
     try { branches = (await api('/api/project/setup-branches?path=' + encodeURIComponent(path))).branches; }
     catch (e) { fill(slot, h('p', { class: 'hint bad' }, e.message)); return; }
     if (!branches.length) {
-      fill(slot, h('p', {}, 'No branch has a .maestro/mockstro.yaml yet. Ask a developer to add mockstro to this repository.'),
+      fill(slot, h('p', {}, 'No branch has a .maestro folder with flows or mocks yet. Ask a developer to add mockstro to this repository.'),
         h('p', {}, h('button', { class: 'btn sm', onclick: load }, icon('refresh'), 'Check again')));
       return;
     }
@@ -1395,7 +1398,7 @@ function setupPicker(path, title, opened) {
   }
   load();
   return callout('warn', title,
-    h('p', {}, 'Mockstro needs a .maestro/mockstro.yaml file, and the branch this copy is on doesn\'t have one. Some projects only add it on certain branches.'),
+    h('p', {}, 'Mockstro needs a .maestro folder with flows or mocks, and the branch this copy is on doesn\'t have one. Some projects only add it on certain branches.'),
     slot, h('p', { class: 'mono', style: 'color:var(--muted)' }, path));
 }
 

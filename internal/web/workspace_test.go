@@ -27,7 +27,7 @@ func fakeProject(t *testing.T, name string) *project.Project {
 	if err := os.MkdirAll(filepath.Join(root, ".maestro"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(setupFile(root), []byte("cliVersion: v0.1.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".maestro", "mockstro.yaml"), []byte("cliVersion: v0.1.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return &project.Project{Root: root, MaestroRoot: filepath.Join(root, ".maestro"), Env: map[string]string{}, Platform: "ios", Integration: "lite"}
@@ -91,7 +91,7 @@ func TestRecentsAreCappedAndMissingFoldersAreSkippedOnLaunch(t *testing.T) {
 func TestOpenExplainsAFolderWithoutMaestro(t *testing.T) {
 	ws := NewWorkspace(loaderFor(nil), "", &execx.Fake{})
 	err := ws.Open("/Users/qa/Documents")
-	if err == nil || !strings.Contains(err.Error(), "has no .maestro/mockstro.yaml") || strings.Contains(err.Error(), "init --help") {
+	if err == nil || !strings.Contains(err.Error(), "has no .maestro folder") || strings.Contains(err.Error(), "init --help") {
 		t.Fatalf("err = %v", err)
 	}
 	if p, m := ws.Current(); p != nil || m != nil {

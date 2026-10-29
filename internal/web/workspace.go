@@ -172,8 +172,7 @@ func (w *Workspace) openReserved(dir string) error {
 	}
 	p, o, err := w.load(dir)
 	if err != nil {
-		// A .maestro folder of plain Maestro flows, without mockstro.yaml, is not set up either.
-		if errors.Is(err, project.ErrNotFound) || errors.Is(err, os.ErrNotExist) && !isFile(setupFile(dir)) {
+		if errors.Is(err, project.ErrNotFound) || errors.Is(err, os.ErrNotExist) && !project.HasSuite(dir) {
 			return noMaestroError(dir)
 		}
 		return err
@@ -207,7 +206,7 @@ func (w *Workspace) Clone(ctx context.Context, url string) (string, error) {
 	return dest, w.Open(dest)
 }
 
-// SetupBranches lists the branches of the checkout at dir that contain a .maestro folder, after a
+// SetupBranches lists the branches of the checkout at dir that contain a mockstro suite, after a
 // best-effort fetch, for a repository whose current branch has none.
 func (w *Workspace) SetupBranches(ctx context.Context, dir string) ([]gitrepo.Branch, error) {
 	repo := gitrepo.New(dir, w.runner)
@@ -242,18 +241,10 @@ func (w *Workspace) OpenBranch(ctx context.Context, dir, branch string) error {
 	return w.openReserved(dir)
 }
 
-// setupFile is the file that makes a folder a mockstro project.
-func setupFile(dir string) string { return filepath.Join(dir, ".maestro", "mockstro.yaml") }
-
-func isFile(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && st.Mode().IsRegular()
-}
-
 type noMaestroError string
 
 func (e noMaestroError) Error() string {
-	return string(e) + " is not set up for Mockstro: it has no .maestro/mockstro.yaml. Choose the project folder that contains one"
+	return string(e) + " is not set up for Mockstro: it has no .maestro folder with flows, mocks or mockstro.yaml. Choose the project folder that contains one"
 }
 func (noMaestroError) Unwrap() error { return project.ErrNotFound }
 
@@ -272,7 +263,7 @@ func (w *Workspace) Recent() []RecentProject {
 	out := []RecentProject{}
 	for _, path := range paths {
 		folder, err := os.Stat(path)
-		out = append(out, RecentProject{Path: path, Name: filepath.Base(path), Exists: isFile(setupFile(path)),
+		out = append(out, RecentProject{Path: path, Name: filepath.Base(path), Exists: project.HasSuite(path),
 			Folder: err == nil && folder.IsDir(), Managed: w.managed(path)})
 	}
 	return out
@@ -414,7 +405,7 @@ func integrationBranches(ctx context.Context, repo *gitrepo.Repository) ([]gitre
 	if err != nil {
 		return nil, err
 	}
-	with, err := repo.BranchesWithPath(ctx, ".maestro/mockstro.yaml")
+	with, err := repo.BranchesWithPath(ctx, ".maestro/mockstro.yaml", ".maestro/flows", ".maestro/wiremock")
 	if err != nil {
 		return nil, err
 	}

@@ -21,6 +21,14 @@ mock.
   release asset, creates it for any other binary. It starts the UI with no terminal window and
   writes its output to `~/Library/Logs/mockstro-ui.log`. The page's **Quit** button stops the mock and the UI.
 
+A project only needs a `.maestro` folder with `flows/`, `wiremock/` or `mockstro.yaml`. Without
+`mockstro.yaml` the page serves its mocks as a **lite** project on the platform it guesses (Android
+when the folder has a Gradle build, else iOS; `--platform` overrides) and the top bar says
+**lite · no mockstro.yaml**. With no `proxyBaseUrl` the Charles setup shows a placeholder; a tester
+can define the platform in full in `.maestro/mockstro.local.yaml`, e.g.
+`platforms: { ios: { proxyBaseUrl: https://api.example.com } }`. Flows still need `mockstro.yaml`
+to run.
+
 Recent projects are remembered in `ui.json` under `MOCKSTRO_STATE_DIR`, or under
 `~/Library/Application Support/mockstro/` when that is unset.
 
