@@ -37,6 +37,7 @@ func testProject(t *testing.T) *project.Project {
 }
 
 func testEngine(t *testing.T, owner string, h func(c execx.Cmd) (string, error)) (*Engine, *execx.Fake) {
+	t.Setenv("JAVA_HOME", "") // Java discovery would otherwise run the machine's own JDK
 	p := testProject(t)
 	fake := &execx.Fake{Paths: map[string]string{"lsof": "/usr/sbin/lsof"}, Handler: func(c execx.Cmd) (string, error) {
 		if c.Name == "ps" {
